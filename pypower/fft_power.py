@@ -598,10 +598,15 @@ class WedgePowerSpectrum(BasePowerStatistic):
 
     name = 'wedge'
 
+    @property
+    def mu(self):
+        """Cosine angle to line-of-sight of shape :attr:`shape` = (nk, nmu)."""
+        return self.modes[1]
+
     def __call__(self, mu=None):
         r"""Return :attr:`power`, restricted to the bin(s) corresponding to input :math:`\mu` if not ``None``."""
         if mu is not None:
-            mu_indices = np.digitize(mu, self.modes[1], right=False) + 1
+            mu_indices = np.digitize(mu, self.edges[1], right=False) - 1
         else:
             mu_indices = Ellipsis
         return self.power[:,mu_indices]
@@ -638,9 +643,8 @@ class MultipolePowerSpectrum(BasePowerStatistic):
         kwargs : dict
             Other arguments for :attr:`BasePowerStatistic`.
         """
-        self.edges = (np.asarray(edges),)
         self.ells = tuple(ells)
-        super(MultipolePowerSpectrum, self).__init__(self.edges, modes, power_nonorm, nmodes, **kwargs)
+        super(MultipolePowerSpectrum, self).__init__((edges,), (modes,), power_nonorm, nmodes, **kwargs)
 
     @property
     def power(self):
@@ -690,6 +694,7 @@ def _format_positions(positions, position_type='xyz'):
             raise FFTPowerError('For position type = {}, please provide a (N, 3) array for positions'.format(position_type))
         return positions
     # Array of shape (3, N)
+    positions = list(positions)
     for ip, p in enumerate(positions):
         # cast to the input dtype if exists (may be set by previous weights)
         positions[ip] = np.asarray(p)
@@ -1369,11 +1374,13 @@ class MeshFFTPower(BaseClass):
         # Set :attr:`los`
         if los is None:
             self.los = None
-        elif isinstance(los, str):
-            ilos = 'xyz'.index(los)
-            self.los = np.zeros(3, dtype='f8')
-            self.los['xyz'.index(ilos)] = 1.
         else:
+            if isinstance(los, str):
+                los = 'xyz'.index(los)
+            if np.ndim(los) == 0:
+                ilos = los
+                los = np.zeros(3, dtype='f8')
+                los[ilos] = 1.
             los = np.array(los, dtype='f8')
             self.los = los/utils.distance(los)
 
@@ -1417,7 +1424,7 @@ class MeshFFTPower(BaseClass):
     def __getstate__(self):
         """Return this class state dictionary."""
         state = self._get_attrs()
-        for name in ['power', 'poles']:
+        for name in ['wedges', 'poles']:
             if hasattr(self, name):
                 state[name] = getattr(self, name).__getstate__()
         return state
@@ -1432,10 +1439,13 @@ class MeshFFTPower(BaseClass):
     def save(self, filename):
         """Save power spectrum to ``filename``."""
         if self.mpicomm.rank == 0:
-            super(BasePowerStatistic, self).save(filename)
+            super(MeshFFTPower, self).save(filename)
         self.mpicomm.Barrier()
 
     def _run_global_los(self):
+
+        rank = self.mpicomm.rank
+        start = time.time()
         # Calculate the 3d power spectrum, slab-by-slab to save memory
         # FFT 1st density field and apply the resampler transfer kernel
         cfield1 = self.mesh1.r2c()
@@ -1462,12 +1472,16 @@ class MeshFFTPower(BaseClass):
         result, result_poles = project_to_basis(cfield1, self.edges, ells=self.ells, los=self.los)
         norm = self.nmesh.prod()**2
 
+        stop = time.time()
+        if rank == 0:
+            self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
+
         # Format the power results into :class:`WedgePowerSpectrum` instance
         attrs = self._get_attrs()
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':attrs}
         k, mu, power, nmodes = (np.squeeze(result[ii]) for ii in [0,1,2,3])
         power *= norm
-        self.wedges = WedgePowerSpectrum(modes=(k,mu), edges=self.edges[0], power_nonorm=power, nmodes=nmodes, **kwargs)
+        self.wedges = WedgePowerSpectrum(modes=(k,mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PolePowerSpectrum` instance
@@ -1495,7 +1509,7 @@ class MeshFFTPower(BaseClass):
         compensations = [compensation for compensation in compensations if compensation is not None]
 
         result = []
-        # loop over the higher order multipoles (ell > 0)
+        # Loop over the higher order multipoles (ell > 0)
         start = time.time()
 
         if self.autocorr:
@@ -1598,7 +1612,7 @@ class MeshFFTPower(BaseClass):
 
         stop = time.time()
         if rank == 0:
-            self.log_info('Multipoles computed in elapsed time {:.2f} s.'.format(stop - start))
+            self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
         # Factor of 4*pi from spherical harmonic addition theorem + volume factor
         norm = self.nmesh.prod()**2
         poles = np.array([result[ells.index(ell)] for ell in self.ells]) * norm
@@ -1708,7 +1722,7 @@ class CatalogFFTPower(MeshFFTPower):
             result on ``mesh1`` by power spectrum normalization.
 
         mpicomm : MPI communicator, default=None
-            The MPI communicator, if input positions and weights are MPI-scattered.
+            The MPI communicator, defaults to MPI.COMM_WORLD.
         """
 
         if mpicomm is None: mpicomm = MPI.COMM_WORLD

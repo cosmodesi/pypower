@@ -2,6 +2,21 @@
 
 **pypower** is a wrapper for power spectrum estimation.
 
+A typical auto-correlation function estimation is as simple as:
+```
+import numpy as np
+from pypower import CatalogFFTPower
+
+kedges = np.linspace(0., 0.2, 11)
+# pass e.g. mpicomm = MPI.COMM_WORLD if input positions and weights are MPI-scattered
+result = CatalogFFTPower(data_positions1=data_positions1, data_weights1=data_weights1, randoms_positions1=randoms_positions1, randoms_weights1=randoms_weights1,
+                         edges=kedges, ells=(0, 2, 4), boxsize=1000., nmesh=512, resampler='tsc', interlacing=2, los=None, position_type='pos')
+# wavenumber array in result.poles.k
+# multipoles in result.poles.power
+```
+
+Example notebooks presenting most use cases are provided in directory nb/.
+
 # Requirements
 
 Only strict requirements are:

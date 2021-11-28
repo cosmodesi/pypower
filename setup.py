@@ -8,6 +8,7 @@ setup(name='pypower',
       description='Estimation of power spectrum',
       license='GPL3',
       url='http://github.com/adematti/pypower',
-      install_requires=['nbodykit'],
+      install_requires=['numpy', 'scipy', 'pmesh'],
+      extras_require={'extras':['sympy', 'numexpr']},
       packages=['pypower']
 )
