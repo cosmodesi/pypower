@@ -1,25 +1,48 @@
 # pypower
 
-**pypower** is a wrapper for power spectrum and correlation function estimation.
+**pypower** is a wrapper for power spectrum estimation.
 
 # Requirements
 
 Only strict requirements are:
 
   - numpy
-  - nbodykit
+  - scipy
+  - pmesh
+
+To enable faster spherical harmonics computation:
+
+  - sympy
+  - numexpr
 
 ## Installation
 
-To install the code:
+### pip
+
+Simply run:
 ```
-$>  python setup.py install --user
+python -m pip install git+https://github.com/adematti/pypower
 ```
-Or in development mode (any change to Python code will take place immediately):
+
+### git
+
+First:
 ```
-$>  python setup.py develop --user
+git clone https://github.com/adematti/pypower.git
+```
+To install the code::
+```
+python setup.py install --user
+```
+Or in development mode (any change to Python code will take place immediately)::
+```
+python setup.py develop --user
 ```
 
 ## License
 
-**pypower** is free software distributed under a BSD3 license. For details see the [LICENSE](https://github.com/adematti/pypower/blob/main/LICENSE).
+**pypower** is free software distributed under a GPLv3 license. For details see the [LICENSE](https://github.com/adematti/pypower/blob/main/LICENSE).
+
+## Credits
+
+[nbodykit](https://github.com/bccp/nbodykit) for recipe and most routines for power spectrum estimation.

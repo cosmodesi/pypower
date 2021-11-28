@@ -2,127 +2,194 @@ import os
 
 import numpy as np
 from matplotlib import pyplot as plt
-from nbodykit import setup_logging
-from nbodykit.transform import SkyToCartesian
-from nbodykit.utils import ScatterArray, GatherArray
-from nbodykit.lab import cosmology, LogNormalCatalog, UniformCatalog
+
+from cosmoprimo.fiducial import DESI
+from mockfactory import EulerianLinearMock, LagrangianLinearMock, Catalog, utils, setup_logging
+from mockfactory.make_survey import RandomBoxCatalog
+
+from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, PowerStatistic
 
 
 base_dir = '_catalog'
-data_fn = os.path.join(base_dir,'lognormal_data.fits')
-randoms_fn = os.path.join(base_dir,'lognormal_randoms.fits')
-data_masked_fn = os.path.join(base_dir,'lognormal_masked_data.fits')
-randoms_masked_fn = os.path.join(base_dir,'lognormal_masked_randoms.fits')
-
-cosmo = cosmology.Planck15
-nbar = 1e-3
+data_fn = os.path.join(base_dir, 'lognormal_data.fits')
+randoms_fn = os.path.join(base_dir, 'lognormal_randoms.fits')
 
 
-def generate_lognormal():
-    redshift = 1.
-    Plin = cosmology.LinearPower(cosmo,redshift,transfer='CLASS')
-    BoxSize = 600.
+def save_lognormal():
+    z = 1.
+    boxsize = 600.
+    boxcenter = 0.
+    los = 'x'
+    nbar = 1e-3
     bias = 2.0
-    #Nmesh = 256
-    Nmesh = 64
+    nmesh = 256
     seed = 42
-    data = LogNormalCatalog(Plin=Plin,nbar=nbar,BoxSize=BoxSize,Nmesh=Nmesh,bias=bias,seed=seed,unitary_amplitude=True)
-    offset = cosmo.comoving_distance(redshift) - BoxSize/2.
-    data['Position'][:,0] += offset
-    los = data['Position']/np.sqrt(np.sum(data['Position']**2,axis=-1))[:,None]
-    data['RSDPosition'] = data['Position'] + np.sum(data['VelocityOffset']*los,axis=-1)[:,None]*los
-    data['Weight'] = np.ones(data.size)
-    data['NZ'] = np.ones(data.size)*nbar
+    power = DESI().get_fourier().pk_interpolator().to_1d(z=z)
+    f = 0.8
+    mock = LagrangianLinearMock(power, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
+    mock.set_real_delta_field(bias=bias-1.)
+    mock.set_analytic_selection_function(nbar=nbar)
+    mock.poisson_sample(seed=seed, resampler='cic', compensate=True)
+    mock.set_rsd(f=f, los=los)
+    #mock.set_rsd(f=f)
+    data = mock.to_catalog()
+    offset = mock.boxcenter - mock.boxsize / 2.
+    data['Position'] = (data['Position'] - offset) % mock.boxsize + offset
+    randoms = RandomBoxCatalog(nbar=4.*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=44)
 
-    randoms = UniformCatalog(10.*nbar,BoxSize,seed=42,dtype='f8')
-    randoms['Position'][:,0] += offset
-    randoms['Weight'] = np.ones(randoms.size)
-    randoms['NZ'] = np.ones(randoms.size)*nbar
+    for catalog in [data, randoms]:
+        catalog['NZ'] = nbar*catalog.ones()
+        catalog['WEIGHT_FKP'] = np.ones(catalog.size, dtype='f8')
 
-    return data, randoms
+    data.save_fits(data_fn)
+    randoms.save_fits(randoms_fn)
 
 
-def test_fkp_power():
-    BoxSize = 1000.
-    Nmesh = 128
-    dk = 0.01
-    ells = [0,2,4]
-    data, randoms = generate_lognormal()
-
-    def get_ref_power(data, randoms):
-        from nbodykit.lab import FKPCatalog, ConvolvedFFTPower
-        fkp = FKPCatalog(data,randoms,nbar='NZ')
-        mesh = fkp.to_mesh(position='Position',comp_weight='Weight',nbar='NZ',BoxSize=BoxSize,Nmesh=Nmesh,resampler='tsc',interlaced=True)
-        return ConvolvedFFTPower(mesh,poles=ells,dk=dk)
-
-    def get_fkp_power(data, randoms):
-        from pypower import FKPCatalog, ConvolvedFKPFFTPower
-        fkp = FKPCatalog(data,randoms)
-        mesh = fkp.to_mesh(position='Position',weight='Weight',BoxSize=BoxSize,Nmesh=Nmesh,resampler='tsc',interlaced=True)
-        return ConvolvedFKPFFTPower(mesh,poles=ells,edges={'step':dk})
-
-    ref_power = get_ref_power(data,randoms)
-    power = get_fkp_power(data,randoms)
-    ref_norm = ref_power.attrs['randoms.norm']
-    norm = power.attrs['norm']
-    print(norm/ref_norm)
-    for ell in ells:
-        #print(power.poles['power_{}'.format(ell)].real*norm/ref_norm,ref_power.poles['power_{}'.format(ell)].real)
-        assert np.allclose(power.poles['power_{}'.format(ell)].real*norm/ref_norm,ref_power.poles['power_{}'.format(ell)].real)
-
-    def get_fkp_power_cross(data, randoms):
-        from pypower import FKPCatalog, ConvolvedFKPFFTPower
-        fkp = FKPCatalog(data,randoms)
-        mesh = fkp.to_mesh(position='Position',weight='Weight',BoxSize=BoxSize,Nmesh=Nmesh,resampler='tsc',interlaced=True)
-        second = fkp.to_mesh(position='Position',weight='Weight',BoxSize=BoxSize,Nmesh=Nmesh,resampler='tsc',interlaced=True)
-        return ConvolvedFKPFFTPower(mesh,second=second,poles=ells,edges={'step':dk})
-
-    cross = get_fkp_power_cross(data,randoms)
-    for ell in ells:
-        assert np.allclose(power.poles['power_{}'.format(ell)].real,cross.poles['power_{}'.format(ell)].real)
+def test_power_statistic():
+    edges = np.linspace(0., 0.2, 11)
+    modes = (edges[:-1] + edges[1:])/2.
+    power = np.ones_like(modes)
+    nmodes = np.ones_like(modes, dtype='i8')
+    ells = (0, 2, 4)
+    power = PowerStatistic(edges, modes, power, nmodes, ells, statistic='multipole')
+    power.rebin(factor=2)
+    assert np.allclose(power.kedges, np.linspace(0., 0.2, 6))
+    assert power.shape == (modes.size//2,)
+    power_fn = os.path.join(base_dir, 'power.npy')
+    power.save(power_fn)
+    test = PowerStatistic.load(power_fn)
+    assert np.all(test.power == power.power)
 
 
 def test_mesh_power():
-    BoxSize = 1000.
-    Nmesh = 128
-    dk = 0.01
-    ells = [0]
-    data, randoms = generate_lognormal()
+    boxsize = 600.
+    boxcenter = 0.
+    nmesh = 128
+    kedges = np.linspace(0., 0.1, 6)
+    dk = kedges[1] - kedges[0]
+    ells = (0, 2, 4)
+    resampler = 'cic'
+    interlacing = 2
+    dtype = 'f8'
+    los = [1,0,0]
+    data = Catalog.load_fits(data_fn)
+    #randoms = Catalog.load_fits(randoms_fn)
+
+    def get_ref_power(data):
+        from nbodykit.lab import FFTPower
+        mesh = data.to_nbodykit().to_mesh(position='Position', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
+        return FFTPower(mesh, mode='2d', poles=ells, los=los, dk=dk, kmin=kedges[0], kmax=kedges[-1]+1e-9)
+
+    def get_mesh_power(data):
+        mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
+        return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)
+
+    power = get_mesh_power(data).poles
+    #norm = power.wnorm
+    ref_power = get_ref_power(data)
+    #ref_norm = ref_power.attrs['norm']
+
+    for ell in ells:
+        #print(power(ell=ell).real + (ell == 0)*power.shotnoise / ref_power.poles['power_{}'.format(ell)].real)
+        #assert np.allclose(power(ell=ell).real + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)].real, atol=1e-6, rtol=3e-3)
+        assert np.allclose(power(ell=ell) + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)], atol=1e-6, rtol=3e-3)
+
+    def get_mesh_power_cross(data):
+        mesh1 = CatalogMesh(data_positions=data['Position'].T, boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='xyz')
+        mesh2 = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos')
+        return MeshFFTPower(mesh1, mesh2=mesh2, ells=ells, los=los, edges=kedges)
+
+    power_cross = get_mesh_power_cross(data).poles
+    for ell in ells:
+        assert np.allclose(power_cross(ell=ell) - (ell == 0)*power.shotnoise, power(ell=ell))
+
+
+def test_norm():
+    boxsize = 1000.
+    nmesh = 128
+    resampler = 'tsc'
+    interlacing = False
+    boxcenter = np.array([3000.,0.,0.])[None,:]
+    dtype = 'f8'
+    los = None
+    data = Catalog.load_fits(data_fn)
+    randoms = Catalog.load_fits(randoms_fn)
+    for catalog in [data, randoms]:
+        catalog['Position'] += boxcenter
+        catalog['Weight'] = catalog.ones()
+    mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
+                       boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
+
+    from pypower.fft_power import normalization, normalization_from_nbar
+    old = normalization_from_nbar(randoms['NZ'], randoms['Weight'], data_weights=data['Weight'], mpicomm=mesh.mpicomm)
+    new = normalization(mesh)
+    assert np.allclose(new, old, atol=0, rtol=1e-1)
+
+
+def test_catalog_power():
+    boxsize = 1000.
+    nmesh = 128
+    kedges = np.linspace(0., 0.1, 6)
+    dk = kedges[1] - kedges[0]
+    ells = (0, 1, 2, 3, 4)
+    resampler = 'tsc'
+    interlacing = 2
+    boxcenter = np.array([3000.,0.,0.])[None,:]
+    dtype = 'f8'
+    cdtype = 'c16'
+    los = None
+    data = Catalog.load_fits(data_fn)
+    randoms = Catalog.load_fits(randoms_fn)
+    for catalog in [data, randoms]:
+        catalog['Position'] += boxcenter
+        catalog['Weight'] = catalog.ones()
 
     def get_ref_power(data, randoms):
         from nbodykit.lab import FKPCatalog, ConvolvedFFTPower
-        fkp = FKPCatalog(data,randoms,nbar='NZ')
-        mesh = fkp.to_mesh(position='Position',comp_weight='Weight',nbar='NZ',BoxSize=BoxSize,Nmesh=Nmesh,resampler='tsc',interlaced=True)
-        return ConvolvedFFTPower(mesh,poles=ells,dk=dk)
+        fkp = FKPCatalog(data.to_nbodykit(), randoms.to_nbodykit(), nbar='NZ')
+        mesh = fkp.to_mesh(position='Position', comp_weight='Weight', nbar='NZ', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=cdtype)
+        return ConvolvedFFTPower(mesh, poles=ells, dk=dk, kmin=kedges[0], kmax=kedges[-1]+1e-9)
 
-    def get_mesh_power(data, randoms):
-        from pypower import FKPCatalog, ConvolvedMeshFFTPower
-        fkp = FKPCatalog(data,randoms)
-        mesh = fkp.to_mesh(position='Position',weight='Weight',BoxSize=BoxSize,Nmesh=Nmesh,resampler='tsc',interlaced=True,compensated=True)
-        return ConvolvedMeshFFTPower(mesh,poles=ells,edges={'step':dk})
+    def get_catalog_power(data, randoms):
+        return CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
+                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype=dtype)
 
-    ref_power = get_ref_power(data,randoms)
-    power = get_mesh_power(data,randoms)
+    def get_catalog_mesh_power(data, randoms):
+        mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
+                            boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
+        return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)
+
+    power = get_catalog_power(data, randoms).poles
+    norm = power.wnorm
+    ref_power = get_ref_power(data, randoms)
     ref_norm = ref_power.attrs['randoms.norm']
-    norm = power.attrs['norm']
-    for ell in ells:
-        #print(power.poles['power_{}'.format(ell)].real*norm/ref_norm,ref_power.poles['power_{}'.format(ell)].real)
-        assert np.allclose(power.poles['power_{}'.format(ell)].real*norm/ref_norm,ref_power.poles['power_{}'.format(ell)].real)
 
-    def get_mesh_power_cross(data, randoms):
-        from pypower import FKPCatalog, ConvolvedMeshFFTPower
-        fkp = FKPCatalog(data,randoms)
-        mesh = fkp.to_mesh(position='Position',weight='Weight',BoxSize=BoxSize,Nmesh=Nmesh,resampler='tsc',interlaced=True,compensated=True)
-        second = fkp.to_mesh(position='Position',weight='Weight',BoxSize=BoxSize,Nmesh=Nmesh,resampler='tsc',interlaced=True,compensated=True)
-        return ConvolvedMeshFFTPower(mesh,second=second,poles=ells,edges={'step':dk})
-
-    cross = get_mesh_power_cross(data,randoms)
     for ell in ells:
-        assert np.allclose(power.poles['power_{}'.format(ell)].real,cross.poles['power_{}'.format(ell)].real)
+        #print((power(ell=ell).real + (ell == 0)*power.shotnoise)*norm/ref_norm / ref_power.poles['power_{}'.format(ell)].real)
+        # precision is 1e-3 if offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize
+        #assert np.allclose((power(ell=ell).real + (ell == 0)*power.shotnoise)*norm/ref_norm, ref_power.poles['power_{}'.format(ell)].real, atol=1e-6, rtol=3e-2)
+        assert np.allclose((power(ell=ell) + (ell == 0)*power.shotnoise)*norm/ref_norm, ref_power.poles['power_{}'.format(ell)], atol=1e-6, rtol=3e-2)
+
+    power_mesh = get_catalog_mesh_power(data, randoms).poles
+    for ell in ells:
+        assert np.allclose(power_mesh(ell=ell), power(ell=ell))
+
+    def get_catalog_power_cross(data, randoms):
+        return CatalogFFTPower(data_positions1=data['Position'].T, data_weights1=data['Weight'], randoms_positions1=randoms['Position'].T, randoms_weights1=randoms['Weight'],
+                               data_positions2=data['Position'].T, data_weights2=data['Weight'], randoms_positions2=randoms['Position'].T, randoms_weights2=randoms['Weight'],
+                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='xyz')
+
+    power_cross = get_catalog_power_cross(data,randoms).poles
+    for ell in ells:
+        assert np.allclose(power_cross(ell=ell) - (ell == 0)*power.shotnoise, power(ell=ell))
 
 
 if __name__ == '__main__':
 
     setup_logging()
-    test_fkp_power()
+    #save_lognormal()
+
+    test_power_statistic()
     test_mesh_power()
+    test_catalog_power()
+    test_norm()
