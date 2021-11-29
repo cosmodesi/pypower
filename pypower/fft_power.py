@@ -17,7 +17,7 @@ from mpi4py import MPI
 from pmesh.pm import RealField, ComplexField, ParticleMesh
 from pmesh.window import FindResampler, ResampleWindow
 from .utils import BaseClass
-from . import utils
+from . import mpi, utils
 
 
 class FFTPowerError(Exception):
@@ -394,7 +394,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
     return result, result_poles
 
 
-def find_unique_edges(x, x0, xmax=np.inf, mpicomm=None):
+def find_unique_edges(x, x0, xmax=np.inf, mpicomm=mpi.COMM_WORLD):
     """
     Construct unique edges for distribution of Cartesian distances corresponding to coordinates ``x``.
     Taken from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py.
@@ -410,7 +410,7 @@ def find_unique_edges(x, x0, xmax=np.inf, mpicomm=None):
     xmax : float, default=np.inf
         Maximum separation.
 
-    mpicomm : MPI communicator, default=None
+    mpicomm : MPI communicator, default=MPI.COMM_WORLD
         The current MPI communicator.
 
     Returns
@@ -603,6 +603,11 @@ class WedgePowerSpectrum(BasePowerStatistic):
         """Cosine angle to line-of-sight of shape :attr:`shape` = (nk, nmu)."""
         return self.modes[1]
 
+    @property
+    def muedges(self):
+        """Mu edges."""
+        return self.edges[1]
+
     def __call__(self, mu=None):
         r"""Return :attr:`power`, restricted to the bin(s) corresponding to input :math:`\mu` if not ``None``."""
         if mu is not None:
@@ -716,7 +721,7 @@ def _format_positions(positions, position_type='xyz'):
     return np.asarray(positions).T
 
 
-def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=None, boxpad=1.5, check=True, mpicomm=None):
+def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=None, boxpad=1.5, check=True, mpicomm=mpi.COMM_WORLD):
     """
     Compute enclosing box.
 
@@ -749,8 +754,8 @@ def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=
     check : bool, default=True
         Whether to check input ``positions`` (if provided) are in enclosing box.
 
-    mpicomm : MPI communicator, default=None
-        The MPI communicator, if input positions are MPI-scattered.
+    mpicomm : MPI communicator, default=MPI.COMM_WORLD
+        The MPI communicator.
 
     Returns
     -------
@@ -768,8 +773,7 @@ def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=
             positions = [positions]
         # Find bounding coordinates
         pos_min, pos_max = np.min([pos.min(axis=0) for pos in positions],axis=0), np.max([pos.max(axis=0) for pos in positions], axis=0)
-        if mpicomm is not None:
-            pos_min, pos_max = np.min(mpicomm.allgather(pos_min), axis=0), np.max(mpicomm.allgather(pos_max), axis=0)
+        pos_min, pos_max = np.min(mpicomm.allgather(pos_min), axis=0), np.max(mpicomm.allgather(pos_max), axis=0)
         delta = np.abs(pos_max - pos_min)
         if boxcenter is None: boxcenter = 0.5 * (pos_min + pos_max)
         if boxsize is None:
@@ -791,7 +795,7 @@ def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=
     return nmesh, boxsize, boxcenter
 
 
-def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=None):
+def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.COMM_WORLD):
     r"""
     Return BOSS/eBOSS-like normalization, summing over :math:`\bar{n}_{i}` and weight columns, i.e.:
 
@@ -809,8 +813,8 @@ def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=None)
     data_weights : array of shape (N,), default=None
         Data weights, to normalize randoms ``weights`` by ``alpha = sum(data_weights)/sum(weights)``.
 
-    mpicomm : MPI communicator, default=None
-        The MPI communicator, if input arrays are MPI-scattered.
+    mpicomm : MPI communicator, default=MPI.COMM_WORLD
+        The MPI communicator.
 
     Returns
     -------
@@ -820,17 +824,12 @@ def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=None)
     if weights is None:
         weights = np.ones_like(nbar)
     if data_weights is not None:
-        sum_data_weights = np.sum(data_weights)
-        sum_weights = np.sum(weights)
-        if mpicomm is not None:
-            sum_data_weights = mpicomm.allreduce(sum_data_weights)
-            sum_weights = mpicomm.allreduce(sum_weights)
+        sum_data_weights = mpicomm.allreduce(np.sum(data_weights))
+        sum_weights = mpicomm.allreduce(np.sum(weights))
         alpha = sum_data_weights/sum_weights
     else:
         alpha = 1.
-    toret = alpha * np.sum(nbar * weights)
-    if mpicomm is not None:
-        toret = mpicomm.allreduce(toret)
+    toret = mpicomm.allreduce(alpha * np.sum(nbar * weights))
     return toret
 
 
@@ -886,7 +885,7 @@ def normalization(mesh1, mesh2=None, resampler='cic', cellsize=10.):
         positions = get_positions(mesh1)
         if not autocorr: positions += get_positions(mesh2)
         # Determine bounding box
-        nmesh, boxsize, boxcenter = _get_box(cellsize=cellsize, positions=positions, boxpad=1.1)
+        nmesh, boxsize, boxcenter = _get_box(cellsize=cellsize, positions=positions, boxpad=1.1, mpicomm=mesh1.mpicomm)
         nmesh += 1
         boxsize = nmesh*cellsize # enforce exact cellsize
         cellsize = boxsize/nmesh # just to get correct shape
@@ -927,6 +926,45 @@ def normalization(mesh1, mesh2=None, resampler='cic', cellsize=10.):
     return (s1 * s2) / np.prod(boxsize)
 
 
+def ArrayMesh(array, boxsize, mpiroot=0, mpicomm=MPI.COMM_WORLD):
+    """
+    Turn numpy array into :class:`pmesh.pm.RealField`.
+
+    Parameters
+    ----------
+    array : array
+        Mesh numpy array gathered on ``mpiroot``.
+
+    boxsize : array
+        Physical box size.
+
+    mpiroot : int, default=0
+        MPI rank where input array is gathered.
+
+    mpicomm : MPI communicator, default=MPI.COMM_WORLD
+        The MPI communicator.
+
+    Returns
+    -------
+    mesh : pmesh.pm.RealField
+    """
+    if mpicomm.rank == mpiroot:
+        dtype, shape = array.dtype, array.shape
+    else:
+        dtype, shape, array = None, None, None
+
+    dtype = mpicomm.bcast(dtype, root=mpiroot)
+    shape = mpicomm.bcast(shape, root=mpiroot)
+    boxsize = _make_array(boxsize, 3, dtype='f8')
+    pm = ParticleMesh(boxsize=boxsize, Nmesh=shape, dtype=dtype, comm=mpicomm)
+    mesh = pm.create(type='real')
+    if mpicomm.rank == mpiroot:
+        array = array.ravel() # ignore data from other ranks
+    else:
+        array = empty
+    mesh.unravel(array)
+    return mesh
+
 
 class CatalogMesh(BaseClass):
 
@@ -934,9 +972,14 @@ class CatalogMesh(BaseClass):
 
     def __init__(self, data_positions, data_weights=None, randoms_positions=None, randoms_weights=None,
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=1.5, dtype='f8',
-                 resampler='cic', interlacing=2, position_type='xyz', mpicomm=None):
+                 resampler='cic', interlacing=2, position_type='xyz', mpiroot=None, mpicomm=MPI.COMM_WORLD):
         """
         Initialize :class:`CatalogMesh`.
+
+        Note
+        ----
+        When running with MPI, input positions and weights are assumed to be scatted on all MPI ranks of ``mpicomm``.
+        If this is not the case, use :func:`mpi.scatter_array`.
 
         Parameters
         ----------
@@ -990,13 +1033,17 @@ class CatalogMesh(BaseClass):
                 - "xyz": Cartesian positions of shape (3, N)
                 - "rdd": RA/Dec in degree, distance of shape (3, N)
 
-        mpicomm : MPI communicator, default=None
-            The MPI communicator, if input positions and weights are MPI-scattered.
+        mpiroot : int, default=None
+            If ``None``, input positions and weights are assumed to be scatted across all ranks.
+            Else the MPI rank where input positions and weights are gathered.
+
+        mpicomm : MPI communicator, default=MPI.COMM_WORLD
+            The MPI communicator.
         """
-        self.mpicomm = mpicomm if mpicomm is not None else MPI.COMM_WORLD
+        self.mpicomm = mpicomm
         self.dtype = np.dtype(dtype)
-        self._set_positions(data_positions=data_positions, randoms_positions=randoms_positions, position_type=position_type)
-        self._set_weights(data_weights=data_weights, randoms_weights=randoms_weights)
+        self._set_positions(data_positions=data_positions, randoms_positions=randoms_positions, position_type=position_type, mpiroot=mpiroot)
+        self._set_weights(data_weights=data_weights, randoms_weights=randoms_weights, mpiroot=mpiroot)
         self._set_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, boxpad=boxpad)
         self._set_resampler(resampler)
         self._set_interlacing(interlacing)
@@ -1042,19 +1089,39 @@ class CatalogMesh(BaseClass):
         self.nmesh, self.boxsize, self.boxcenter = _get_box(nmesh=nmesh, boxsize=boxsize, cellsize=cellsize, boxcenter=boxcenter,
                                                             positions=positions, boxpad=boxpad, check=check, mpicomm=self.mpicomm)
 
-    def _set_positions(self, data_positions, randoms_positions=None, position_type='xyz'):
-        # Set data and optionally randoms positions
-        self.data_positions = _format_positions(data_positions, position_type=position_type)
-        self.randoms_positions = randoms_positions
-        if randoms_positions is not None:
-            self.randoms_positions = _format_positions(randoms_positions, position_type=position_type)
+    def _set_positions(self, data_positions, randoms_positions=None, position_type='xyz', mpiroot=None):
+        # Set data and optionally randoms positions, scattering on all ranks if not already
+        self.data_positions = data_positions
+        self.randoms_positions = None
+        if mpiroot is None or self.mpicomm.rank == mpiroot:
+            self.data_positions = _format_positions(data_positions, position_type=position_type)
+            if randoms_positions is not None:
+                self.randoms_positions = _format_positions(randoms_positions, position_type=position_type)
+        if mpiroot is not None: # Scatter position arrays on all ranks
+            self.data_positions = mpi.scatter_array(self.data_positions, root=mpiroot, mpicomm=self.mpicomm)
+            if randoms_positions is not None:
+                self.randoms_positions = mpi.scatter_array(self.randoms_positions, root=mpiroot, mpicomm=self.mpicomm)
 
-    def _set_weights(self, data_weights, randoms_weights=None):
-        # Set data and optionally randoms weights and their sum
+    def _set_weights(self, data_weights, randoms_weights=None, mpiroot=None):
+        # Set data and optionally randoms weights and their sum, scattering on all ranks if not already
         self.data_weights = data_weights
-        self.randoms_weights = randoms_weights
-        if data_weights is None: self.data_weights = 1.
-        if randoms_weights is None: self.randoms_weights = 1.
+        self.randoms_weights = None
+        is_data_none = data_weights is None
+        if mpiroot is not None: is_data_none = self.mpicomm.bcast(is_data_none, root=mpiroot)
+        is_randoms_none = randoms_weights is None
+        if mpiroot is not None: is_randoms_none = self.mpicomm.bcast(is_randoms_none, root=mpiroot)
+        if is_data_none: self.data_weights = 1.
+        if self.with_randoms and is_randoms_none: self.randoms_weights = 1.
+        if mpiroot is None or self.mpicomm.rank == mpiroot:
+            if not is_data_none:
+                self.data_weights = np.asarray(data_weights)
+            if self.with_randoms and not is_randoms_none:
+                self.randoms_weights = np.asarray(randoms_weights)
+        if mpiroot is not None: # Scatter weight arrays on all ranks
+            if not is_data_none:
+                self.data_weights = mpi.scatter_array(self.data_weights, root=mpiroot, mpicomm=self.mpicomm)
+            if self.with_randoms and not is_randoms_none:
+                self.randoms_weights = mpi.scatter_array(self.randoms_weights, root=mpiroot, mpicomm=self.mpicomm)
 
         def sum_weights(positions, weights):
             if np.ndim(weights) == 0:
@@ -1209,7 +1276,7 @@ class MeshFFTPower(BaseClass):
             First mesh.
 
         mesh2 : CatalogMesh, RealField, default=None
-            In case of cross-correlation, second mesh, with same size and physical extent that ``mesh1``.
+            In case of cross-correlation, second mesh, with same size and physical extent (``boxsize`` and ``boxcenter``) that ``mesh1``.
 
         edges : tuple, array, default=None
             If ``los`` is local, :math:`k`-edges for :attr:`poles`.
@@ -1219,8 +1286,8 @@ class MeshFFTPower(BaseClass):
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
 
-        los : array
-            If ``los`` is ``None`` or 'local', use local (varying) line-of-sight.
+        los : array, default=None
+            If ``los`` is ``None``, use local (varying) line-of-sight.
             Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
             Else, a 3-vector.
 
@@ -1436,12 +1503,6 @@ class MeshFFTPower(BaseClass):
             if name in state:
                 setattr(self, name, get_power_statistic(statistic=state[name].pop('name')).from_state(state[name]))
 
-    def save(self, filename):
-        """Save power spectrum to ``filename``."""
-        if self.mpicomm.rank == 0:
-            super(MeshFFTPower, self).save(filename)
-        self.mpicomm.Barrier()
-
     def _run_global_los(self):
 
         rank = self.mpicomm.rank
@@ -1631,9 +1692,14 @@ class CatalogFFTPower(MeshFFTPower):
                 data_weights1=None, data_weights2=None, randoms_weights1=None, randoms_weights2=None,
                 edges=None, ells=(0, 2, 4), los=None,
                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=1.5, dtype='f8',
-                resampler='cic', interlacing=2, position_type='xyz', wnorm=None, shotnoise=None, mpicomm=None):
+                resampler='cic', interlacing=2, position_type='xyz', wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTPower`.
+
+        Note
+        ----
+        When running with MPI, input positions and weights are assumed to be scatted on all MPI ranks of ``mpicomm``.
+        If this is not the case, use :func:`mpi.scatter_array`.
 
         Parameters
         ----------
@@ -1669,8 +1735,8 @@ class CatalogFFTPower(MeshFFTPower):
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
 
-        los : array
-            If ``los`` is ``None`` or 'local', use local (varying) line-of-sight.
+        los : array, default=None
+            If ``los`` is ``None``, use local (varying) line-of-sight.
             Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
             Else, a 3-vector.
 
@@ -1721,11 +1787,13 @@ class CatalogFFTPower(MeshFFTPower):
             and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise`
             result on ``mesh1`` by power spectrum normalization.
 
-        mpicomm : MPI communicator, default=None
-            The MPI communicator, defaults to MPI.COMM_WORLD.
-        """
+        mpiroot : int, default=None
+            If ``None``, input positions and weights are assumed to be scatted across all ranks.
+            Else the MPI rank where input positions and weights are gathered.
 
-        if mpicomm is None: mpicomm = MPI.COMM_WORLD
+        mpicomm : MPI communicator, default=MPI.COMM_WORLD
+            The MPI communicator.
+        """
 
         positions = []
         d = {}
@@ -1733,8 +1801,20 @@ class CatalogFFTPower(MeshFFTPower):
             tmp = locals()[name]
             if tmp is not None:
                 tmp = _format_positions(tmp, position_type=position_type)
+            if mpiroot is not None and mpicomm.bcast(tmp is not None, root=mpiroot):
+                tmp = mpi.scatter_array(tmp, root=mpiroot, mpicomm=mpicomm)
+            if tmp is not None:
                 positions.append(tmp)
             d[name] = tmp
+
+        for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2']:
+            tmp = locals()[name]
+            if tmp is not None:
+                tmp = np.asarray(tmp)
+            if mpiroot is not None and mpicomm.bcast(tmp is not None, root=mpiroot):
+                tmp = mpi.scatter_array(tmp, root=mpiroot, mpicomm=mpicomm)
+            d[name] = tmp
+
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=positions, boxpad=boxpad, mpicomm=mpicomm)
 
@@ -1744,9 +1824,9 @@ class CatalogFFTPower(MeshFFTPower):
                                nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, resampler=resampler, interlacing=interlacing,
                                position_type='pos', dtype=dtype, mpicomm=mpicomm)
 
-        mesh1 = get_mesh(d['data_positions1'], data_weights=data_weights1, randoms_positions=d['randoms_positions1'], randoms_weights=randoms_weights1)
+        mesh1 = get_mesh(d['data_positions1'], data_weights=d['data_weights1'], randoms_positions=d['randoms_positions1'], randoms_weights=d['randoms_weights1'])
         mesh2 = None
         if d['data_positions2'] is not None:
-            mesh2 = get_mesh(d['data_positions2'], data_weights=data_weights2, randoms_positions=d['randoms_positions2'], randoms_weights=randoms_weights2)
+            mesh2 = get_mesh(d['data_positions2'], data_weights=d['data_weights2'], randoms_positions=d['randoms_positions2'], randoms_weights=d['randoms_weights2'])
         # Now, run power spectrum estimation
         super(CatalogFFTPower,self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)

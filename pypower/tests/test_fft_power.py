@@ -8,7 +8,7 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import LagrangianLinearMock, Catalog
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, PowerStatistic, utils, setup_logging
+from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, PowerStatistic, mpi, utils, setup_logging
 
 
 base_dir = '_catalog'
@@ -120,7 +120,7 @@ def test_mesh_power():
         assert np.allclose(power_cross(ell=ell) - (ell == 0)*power.shotnoise, power(ell=ell))
 
 
-def test_norm():
+def test_normalization():
     boxsize = 1000.
     nmesh = 128
     resampler = 'tsc'
@@ -183,7 +183,7 @@ def test_catalog_power():
     ref_power = get_ref_power(data, randoms)
     ref_norm = ref_power.attrs['randoms.norm']
 
-    for position_type in ['pos', 'xyz', 'rdd']:
+    for position_type in ['pos', 'xyz', 'rdd'][:1]:
         result = get_catalog_power(data, randoms, position_type=position_type)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -214,6 +214,45 @@ def test_catalog_power():
         assert np.allclose(power_cross(ell=ell) - (ell == 0)*power.shotnoise, power(ell=ell))
 
 
+def test_mpi():
+    boxsize = 1000.
+    nmesh = 128
+    kedges = np.linspace(0., 0.1, 6)
+    dk = kedges[1] - kedges[0]
+    ells = (0,)
+    resampler = 'tsc'
+    interlacing = 2
+    boxcenter = np.array([3000.,0.,0.])[None,:]
+    dtype = 'f8'
+    cdtype = 'c16'
+    los = None
+    data = Catalog.load_fits(data_fn)
+    randoms = Catalog.load_fits(randoms_fn)
+    for catalog in [data, randoms]:
+        catalog['Position'] += boxcenter
+        catalog['Weight'] = catalog.ones()
+
+    def run(mpiroot=None, mpicomm=mpi.COMM_WORLD):
+        return CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
+                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos',
+                               dtype=dtype, mpiroot=mpiroot, mpicomm=mpicomm).poles
+
+    ref_power = run(mpiroot=None, mpicomm=data.mpicomm)
+    for catalog in [data, randoms]:
+        catalog['Position'] = mpi.gather_array(catalog['Position'], root=0, mpicomm=catalog.mpicomm)
+        catalog['Weight'] = mpi.gather_array(catalog['Weight'], root=0, mpicomm=catalog.mpicomm)
+
+    power = run(mpiroot=0, mpicomm=data.mpicomm)
+    for ell in power.ells:
+        assert np.allclose(power(ell=ell), ref_power(ell=ell))
+
+    from mpi4py import MPI
+    if data.mpicomm.rank == 0:
+        power = run(mpiroot=0, mpicomm=MPI.COMM_SELF)
+        for ell in power.ells:
+            assert np.allclose(power(ell=ell), ref_power(ell=ell))
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -222,4 +261,4 @@ if __name__ == '__main__':
     test_power_statistic()
     test_mesh_power()
     test_catalog_power()
-    test_norm()
+    test_normalization()
