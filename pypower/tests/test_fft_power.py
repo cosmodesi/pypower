@@ -9,6 +9,7 @@ from mockfactory import LagrangianLinearMock, Catalog
 from mockfactory.make_survey import RandomBoxCatalog
 
 from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, PowerStatistic, mpi, utils, setup_logging
+from pypower.fft_power import normalization, normalization_from_nbar
 
 
 base_dir = '_catalog'
@@ -68,35 +69,43 @@ def test_mesh_power():
     boxsize = 600.
     boxcenter = 0.
     nmesh = 256
-    kedges = np.linspace(0., 0.1, 6)
+    kedges = np.linspace(0., 1., 11)
     muedges = np.linspace(-1., 1., 4)
     dk = kedges[1] - kedges[0]
+    los = 'x'
     ells = (0, 2, 4)
     resampler = 'cic'
     interlacing = 2
     dtype = 'f8'
     data = Catalog.load_fits(data_fn)
-    #randoms = Catalog.load_fits(randoms_fn)
 
     def get_ref_power(data):
         from nbodykit.lab import FFTPower
         mesh = data.to_nbodykit().to_mesh(position='Position', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
         return FFTPower(mesh, mode='2d', poles=ells, Nmu=len(muedges) - 1, los=[1,0,0], dk=dk, kmin=kedges[0], kmax=kedges[-1]+1e-9)
 
-    def get_mesh_power(data, los):
+    def get_mesh_power(data, los, edges):
         mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
-        return MeshFFTPower(mesh, ells=ells, los=los, edges=(kedges, muedges))
+        return MeshFFTPower(mesh, ells=ells, los=los, edges=edges)
 
-    def get_mesh_power_cross(data, los):
+    def get_mesh_power_compensation(data):
+        mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype).to_mesh()
+        return MeshFFTPower(mesh, ells=ells, los=los, edges=(kedges, muedges), compensations=resampler)
+
+    def get_mesh_power_cross(data):
         mesh1 = CatalogMesh(data_positions=data['Position'].T, boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='xyz')
         mesh2 = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos')
         return MeshFFTPower(mesh1, mesh2=mesh2, ells=ells, los=los, edges=kedges)
 
     ref_power = get_ref_power(data)
+    ref_kedges = ref_power.power.edges['k']
     #ref_norm = ref_power.attrs['norm']
 
-    for los in [[1,0,0], 'x']:
-        result = get_mesh_power(data, los=los)
+    list_options = []
+    list_options.append({'los':[1,0,0], 'edges':(ref_kedges, muedges)})
+    list_options.append({'los':'x', 'edges':({'min':ref_kedges[0],'max':ref_kedges[-1],'step':ref_kedges[1] - ref_kedges[0]}, muedges)})
+    for options in list_options:
+        result = get_mesh_power(data, **options)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             fn = os.path.join(tmp_dir, 'tmp.npy')
@@ -111,13 +120,39 @@ def test_mesh_power():
         power = result.poles
         #norm = power.wnorm
         for ell in ells:
-            #print(power(ell=ell).real + (ell == 0)*power.shotnoise / ref_power.poles['power_{}'.format(ell)].real)
+            #print((power(ell=ell).real + (ell == 0)*power.shotnoise) / ref_power.poles['power_{}'.format(ell)].real)
             #assert np.allclose(power(ell=ell).real + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)].real, atol=1e-6, rtol=3e-3)
-            assert np.allclose(power(ell=ell) + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)], atol=1e-6, rtol=3e-3)
+            # Exact if offset = 0. in to_mesh()
+            assert np.allclose(power(ell=ell) + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)], atol=1e-6, rtol=5e-3)
 
-    power_cross = get_mesh_power_cross(data, los=los).poles
+    power_compensation = get_mesh_power_compensation(data).poles
+    for ill, ell in enumerate(ells):
+        assert np.allclose(power_compensation.power_nonorm[ill]/power_compensation.wnorm, power.power_nonorm[ill]/power.wnorm)
+
+    power_cross = get_mesh_power_cross(data).poles
     for ell in ells:
         assert np.allclose(power_cross(ell=ell) - (ell == 0)*power.shotnoise, power(ell=ell))
+
+    randoms = Catalog.load_fits(randoms_fn)
+
+    def get_ref_power(data, randoms):
+        from nbodykit.lab import FFTPower
+        mesh_data = data.to_nbodykit().to_mesh(position='Position', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
+        mesh_randoms = randoms.to_nbodykit().to_mesh(position='Position', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
+        mesh = mesh_data.compute() - mesh_randoms.compute()
+        return FFTPower(mesh, mode='2d', poles=ells, Nmu=len(muedges) - 1, los=[1,0,0], dk=dk, kmin=kedges[0], kmax=kedges[-1]+1e-9)
+
+    def get_power(data, randoms):
+        mesh = CatalogMesh(data_positions=data['Position'], randoms_positions=randoms['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos')
+        wnorm = normalization(mesh, uniform=True)
+        return MeshFFTPower(mesh, ells=ells, los=[1,0,0], edges=(kedges, muedges), wnorm=wnorm)
+
+    ref_power = get_ref_power(data, randoms)
+    power = get_power(data, randoms)
+    for ill, ell in enumerate(ells):
+        #print(power.power_nonorm[ill] / ref_power.poles['power_{}'.format(ell)])
+        assert np.allclose((power.poles(ell=ell) + (ell == 0)*power.poles.shotnoise), ref_power.poles['power_{}'.format(ell)], atol=1e-6, rtol=3e-2)
+    assert np.allclose(power.wedges.power + power.wedges.shotnoise, ref_power.power['power'], atol=1e-6, rtol=3e-2)
 
 
 def test_normalization():
@@ -135,8 +170,6 @@ def test_normalization():
         catalog['Weight'] = catalog.ones()
     mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
                        boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
-
-    from pypower.fft_power import normalization, normalization_from_nbar
     old = normalization_from_nbar(randoms['NZ'], randoms['Weight'], data_weights=data['Weight'], mpicomm=mesh.mpicomm)
     new = normalization(mesh)
     assert np.allclose(new, old, atol=0, rtol=1e-1)
@@ -145,7 +178,7 @@ def test_normalization():
 def test_catalog_power():
     boxsize = 1000.
     nmesh = 128
-    kedges = np.linspace(0., 0.1, 6)
+    kedges = np.linspace(0., 0.3, 6)
     dk = kedges[1] - kedges[0]
     ells = (0, 1, 2, 3, 4)
     resampler = 'tsc'
@@ -183,8 +216,13 @@ def test_catalog_power():
     ref_power = get_ref_power(data, randoms)
     ref_norm = ref_power.attrs['randoms.norm']
 
-    for position_type in ['pos', 'xyz', 'rdd'][:1]:
-        result = get_catalog_power(data, randoms, position_type=position_type)
+    list_options = []
+    list_options.append({'position_type':'pos'})
+    list_options.append({'position_type':'xyz'})
+    list_options.append({'position_type':'rdd'})
+
+    for options in list_options:
+        result = get_catalog_power(data, randoms, **options)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             fn = os.path.join(tmp_dir, 'tmp.npy')
@@ -195,10 +233,10 @@ def test_catalog_power():
         norm = power.wnorm
 
         for ell in ells:
-            #print((power(ell=ell).real + (ell == 0)*power.shotnoise)*norm/ref_norm / ref_power.poles['power_{}'.format(ell)].real)
-            # precision is 1e-3 if offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize
+            #print((power(ell=ell) + (ell == 0)*power.shotnoise)*norm/ref_norm / ref_power.poles['power_{}'.format(ell)])
+            # precision is 1e-7 if offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize
             #assert np.allclose((power(ell=ell).real + (ell == 0)*power.shotnoise)*norm/ref_norm, ref_power.poles['power_{}'.format(ell)].real, atol=1e-6, rtol=3e-2)
-            assert np.allclose((power(ell=ell) + (ell == 0)*power.shotnoise)*norm/ref_norm, ref_power.poles['power_{}'.format(ell)], atol=1e-6, rtol=3e-2)
+            assert np.allclose((power(ell=ell) + (ell == 0)*power.shotnoise)*norm/ref_norm, ref_power.poles['power_{}'.format(ell)], atol=1e-6, rtol=5e-2)
 
     power_mesh = get_catalog_mesh_power(data, randoms).poles
     for ell in ells:

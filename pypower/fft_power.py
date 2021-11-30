@@ -139,10 +139,9 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
         Choices are ['ngp', 'cic', 'tcs', 'pcs'].
 
     shotnoise : bool, default=False
-        If ``True``, return expresion for eq. 19 in https://arxiv.org/abs/astro-ph/0409240.
-        This the correct choice when applying interlacing, as aliased images are suppressed
-        and :math:`P(k)` can be taken out of eq. 17.
-        If ``False``, returns expression for eq. 18.
+        If ``False``, return expression for eq. 18 in https://arxiv.org/abs/astro-ph/0409240.
+        This the correct choice when applying interlacing, as aliased images (:math:`\mathbf{n} \neq (0,0,0)`) are suppressed in eq. 17.
+        If ``True``, return expression for eq. 19.
 
     Returns
     -------
@@ -152,6 +151,7 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
         for each :math:`x`, :math:`y`, :math:`z`, axis.
     """
     resampler = resampler.lower()
+
     if shotnoise:
 
         if resampler == 'ngp':
@@ -191,7 +191,7 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
         def window(*x):
             toret = 1.
             for xi in x:
-                toret = toret * np.sinc(0.5 * xi / np.pi) ** p
+                toret = toret * np.sinc(0.5 / np.pi * xi) ** p
             return toret
 
     return window
@@ -394,7 +394,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
     return result, result_poles
 
 
-def find_unique_edges(x, x0, xmax=np.inf, mpicomm=mpi.COMM_WORLD):
+def find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD):
     """
     Construct unique edges for distribution of Cartesian distances corresponding to coordinates ``x``.
     Taken from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py.
@@ -406,6 +406,9 @@ def find_unique_edges(x, x0, xmax=np.inf, mpicomm=mpi.COMM_WORLD):
 
     x0 : array_like of shape (ndim, )
         3-vector of fundamental coordinate separation.
+
+    xmin : float, default=0.
+        Minimum separation.
 
     xmax : float, default=np.inf
         Maximum separation.
@@ -423,7 +426,7 @@ def find_unique_edges(x, x0, xmax=np.inf, mpicomm=mpi.COMM_WORLD):
         ix2 = np.int64(fx2 / (x0.min() * 0.5) ** 2 + 0.5)
         ix2, ind = np.unique(ix2, return_index=True)
         fx = fx2[ind] ** 0.5
-        return fx[fx < xmax]
+        return fx[(fx >= xmin) & (fx <= xmax)]
 
     xo = _make_array(x0, len(x), dtype='f8')
     fx = find_unique_local(x, x0)
@@ -833,7 +836,7 @@ def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.C
     return toret
 
 
-def normalization(mesh1, mesh2=None, resampler='cic', cellsize=10.):
+def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10.):
     r"""
     Return DESI-like normalization, summing over mesh cells:
 
@@ -856,6 +859,9 @@ def normalization(mesh1, mesh2=None, resampler='cic', cellsize=10.):
     mesh2 : CatalogMesh, RealField, default=None
         Second mesh, for cross-correlations.
 
+    uniform : bool, default=False
+        Whether to assume uniform selection function (only revelant when both ``mesh1`` and ``mesh2`` are :class:`CatalogMesh`).
+
     resampler : string, ResampleWindow, default='cic'
         Particle-mesh assignment scheme. Choices are ['ngp', 'cic', 'tsc', 'pcs'].
 
@@ -870,7 +876,7 @@ def normalization(mesh1, mesh2=None, resampler='cic', cellsize=10.):
     if mesh2 is None: mesh2 = mesh1
     autocorr = mesh2 is mesh1
 
-    if isinstance(mesh1, CatalogMesh) and isinstance(mesh2, CatalogMesh):
+    if (not uniform) and isinstance(mesh1, CatalogMesh) and isinstance(mesh2, CatalogMesh):
 
         # If one of input meshes do not have randoms, assume uniform density (and same volume)
         if (not mesh1.with_randoms) or (not mesh2.with_randoms):
@@ -915,7 +921,7 @@ def normalization(mesh1, mesh2=None, resampler='cic', cellsize=10.):
     else:
         s1 = mesh1.csum()
         boxsize = mesh1.pm.BoxSize
-    if self.autocorr:
+    if autocorr:
         s2 = s1
     else:
         if isinstance(mesh2, CatalogMesh):
@@ -1051,7 +1057,7 @@ class CatalogMesh(BaseClass):
     @property
     def compensation(self):
         """Return dictionary specifying compensation scheme for particle-mesh resampling."""
-        return {'resampler':_get_resampler_name(self.resampler), 'shotnoise':bool(self.interlacing)}
+        return {'resampler':_get_resampler_name(self.resampler), 'shotnoise': not bool(self.interlacing)}
 
     def clone(self, data_positions=None, data_weights=None, randoms_positions=None, randoms_weights=None,
               boxsize=None, cellsize=None, nmesh=None, boxcenter=None, dtype=None,
@@ -1208,7 +1214,7 @@ class CatalogMesh(BaseClass):
 
         if self.interlacing:
             if self.mpicomm.rank == 0:
-                self.log_info('Running interlacing.')
+                self.log_info('Running interlacing at order {:d}.'.format(self.interlacing))
             cellsize = self.boxsize/self.nmesh
             shifts = np.arange(self.interlacing)*1./self.interlacing
             # remove 0 shift, already computed
@@ -1225,6 +1231,7 @@ class CatalogMesh(BaseClass):
                     s1[...] = s1[...] + s2[...] * np.exp(shift * 1j * kc)
             out = out.c2r()
             out[:] /= self.interlacing
+        #out[:] /= (self.sum_data_weights/self.nmesh.prod())
         return out
 
     def unnormalized_shotnoise(self):
@@ -1279,9 +1286,11 @@ class MeshFFTPower(BaseClass):
             In case of cross-correlation, second mesh, with same size and physical extent (``boxsize`` and ``boxcenter``) that ``mesh1``.
 
         edges : tuple, array, default=None
-            If ``los`` is local, :math:`k`-edges for :attr:`poles`.
+            If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
             Else, one can also provide :math:`\mu-edges` (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
-            If ``edges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
+            If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
+            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :amth:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
+            'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
 
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
@@ -1295,9 +1304,11 @@ class MeshFFTPower(BaseClass):
             Box center; defaults to 0.
             Used only if provided ``mesh1`` and ``mesh2`` are not ``CatalogMesh``.
 
-        compensations : list, tuple, default=None
+        compensations : list, tuple, string, default=None
             Compensations to apply to mesh to (optionally) correct for particle-mesh assignment scheme;
-            e.g. 'cic-sn' (resp. 'cic') for cic assignment scheme, with (resp. without) interlacing.
+            e.g. 'cic' (resp. 'cic-sn') for cic assignment scheme, with (resp. without) interlacing.
+            In case ``mesh2`` is not ``None`` (cross-correlation), provide a list (or tuple) of two such strings
+            (for ``mesh1`` and ``mesh2``, respectively).
             Used only if provided ``mesh1`` or ``mesh2`` are not ``CatalogMesh``.
 
         wnorm : float, default=None
@@ -1343,7 +1354,7 @@ class MeshFFTPower(BaseClass):
                 else:
                     boxcenter = mesh.boxcenter
                 compensation = mesh.compensation
-                if self.compensations[i] is compensation:
+                if self.compensations[i] is not None:
                     if self.compensations[i] != compensation:
                         self.log_warning('Provided compensation is not the same as that of provided {} instance'.format(mesh.__class__.__name__))
                 else:
@@ -1379,8 +1390,8 @@ class MeshFFTPower(BaseClass):
             raise FFTPowerError('Communicator mismatch between input meshes')
 
         self._set_edges(edges)
-        self._set_ells(ells)
         self._set_los(los)
+        self._set_ells(ells)
         self.wnorm = wnorm
         if wnorm is None:
             self.wnorm = normalization(mesh1, mesh2)
@@ -1401,6 +1412,8 @@ class MeshFFTPower(BaseClass):
             compensations = [compensations]*2
 
         def _format_compensation(compensation):
+            if isinstance(compensation, dict):
+                return compensation
             resampler = None
             for name in ['ngp', 'cic', 'tsc', 'pcs']:
                 if name in compensation:
@@ -1414,28 +1427,42 @@ class MeshFFTPower(BaseClass):
 
     def _set_edges(self, edges):
         # Set :attr:`edges`
-        if edges is None or np.ndim(edges[0]) == 0:
+        if edges is None or (not isinstance(edges[0], dict) and np.ndim(edges[0]) == 0):
             edges = (edges,)
         if len(edges) == 1:
             kedges, muedges = edges[0], None
         else:
             kedges, muedges = edges
-        if kedges is None: # Find unique edges
-            k = self.mesh1.pm.create_coords(type='complex')
-            kedges, find_unique_edges(k, 2 * np.pi / self.boxsize, kmax, mpicomm=self.mpicomm)
+        if kedges is None:
+            kedges = {}
+        if isinstance(kedges, dict):
+            kmin = kedges.get('min', 0.)
+            kmax = kedges.get('max', np.pi/(self.nmesh/self.boxsize).max())
+            dk = kedges.get('step', None)
+            if dk is None:
+                # find unique edges
+                k = self.mesh1.pm.create_coords(type='complex')
+                kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax, mpicomm=self.mpicomm)
+            else:
+                kedges = np.arange(kmin, kmax*(1+1e-9), dk)
         if muedges is None:
             muedges = np.linspace(-1, 1, 2, endpoint=True) # single :math:`\mu`-wedge
         self.edges = (np.asarray(kedges, dtype='f8'), np.asarray(muedges, dtype='f8'))
 
     def _set_ells(self, ells):
         # Set :attr:`ells`
-        if np.ndim(ells) == 0:
-            ells = (ells,)
-        self.ells = tuple(ells)
-        if not self.ells:
-            raise FFTPowerError('Specify non-empty list of ells')
-        if any(ell < 0 for ell in self.ells):
-            raise FFTPowerError('Multipole numbers must be non-negative integers')
+        if ells is None:
+            if self.los is None:
+                raise FFTPowerError('Specify non-empty list of ells')
+            self.ells = None
+        else:
+            if np.ndim(ells) == 0:
+                ells = (ells,)
+            self.ells = tuple(ells)
+            if self.los is None and not self.ells:
+                raise FFTPowerError('Specify non-empty list of ells')
+            if any(ell < 0 for ell in self.ells):
+                raise FFTPowerError('Multipole numbers must be non-negative integers')
 
     def _set_los(self, los):
         # Set :attr:`los`
@@ -1467,8 +1494,12 @@ class MeshFFTPower(BaseClass):
         return self.mesh1.pm.Nmesh
 
     def _compensate(self, cfield, *compensations):
+        if self.mpicomm.rank == 0:
+            self.log_info('Applying compensations {}.'.format(compensations))
         # Apply compensation window for particle-assignment scheme
         windows = [_get_compensation_window(**compensation) for compensation in compensations]
+        #from nbodykit.source.mesh.catalog import CompensateCIC
+        #cfield.apply(func=CompensateCIC, kind='circular', out=Ellipsis)
         cellsize = self.boxsize/self.nmesh
         for k, slab in zip(cfield.slabs.x, cfield.slabs):
             kc = tuple(ki * ci for ki, ci in zip(k, cellsize))
@@ -1510,7 +1541,7 @@ class MeshFFTPower(BaseClass):
         # Calculate the 3d power spectrum, slab-by-slab to save memory
         # FFT 1st density field and apply the resampler transfer kernel
         cfield1 = self.mesh1.r2c()
-        #cfield1[:] *= volume
+        #print(cfield1.value.sum(), cfield1.value.dtype, cfield1.value.shape)
         if self.compensations[0] is not None:
             self._compensate(cfield1, self.compensations[0])
 
@@ -1521,17 +1552,17 @@ class MeshFFTPower(BaseClass):
             if self.compensations[1] is not None:
                 self._compensate(cfield2, self.compensations[1])
 
-        volume = self.nmesh.prod()**2
         for i, c1, c2 in zip(cfield1.slabs.i, cfield1.slabs, cfield2.slabs):
             c1[...] = c1 * c2.conj()
             mask_zero = True
             for ii in i: mask_zero = mask_zero & (ii == 0)
             c1[mask_zero] = 0.
 
+        #cfield1[:] *= self.boxsize.prod()
+
         #from nbodykit.algorithms.fftpower import project_to_basis
-        #result, result_poles = project_to_basis(cfield1, self.edges, poles=self.ells, los=self.los)
+        #result, result_poles = project_to_basis(cfield1, self.edges, poles=[], los=self.los)
         result, result_poles = project_to_basis(cfield1, self.edges, ells=self.ells, los=self.los)
-        norm = self.nmesh.prod()**2
 
         stop = time.time()
         if rank == 0:
@@ -1541,6 +1572,7 @@ class MeshFFTPower(BaseClass):
         attrs = self._get_attrs()
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':attrs}
         k, mu, power, nmodes = (np.squeeze(result[ii]) for ii in [0,1,2,3])
+        norm = self.nmesh.prod()**2
         power *= norm
         self.wedges = WedgePowerSpectrum(modes=(k,mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
 
@@ -1618,6 +1650,7 @@ class MeshFFTPower(BaseClass):
             offset = self.boxcenter - self.boxsize/2.
             # NOTE: we do not apply half cell shift as in nbodykit below
             #offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize / self.nmesh # in nbodykit
+            #offset = self.boxcenter + 0.5*self.boxsize / self.nmesh # in nbodykit
 
             # The real-space grid
             xgrid = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))]
@@ -1728,9 +1761,11 @@ class CatalogFFTPower(MeshFFTPower):
             Optionally (for cross-correlation), weights in the second randoms catalog.
 
         edges : tuple, array, default=None
-            If ``los`` is local, :math:`k`-edges for :attr:`poles`.
+            If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
             Else, one can also provide :math:`\mu-edges` (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
-            If ``edges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
+            If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
+            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :amth:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
+            'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
 
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
@@ -1794,7 +1829,6 @@ class CatalogFFTPower(MeshFFTPower):
         mpicomm : MPI communicator, default=MPI.COMM_WORLD
             The MPI communicator.
         """
-
         positions = []
         d = {}
         for name in ['data_positions1', 'data_positions2', 'randoms_positions1', 'randoms_positions2']:
