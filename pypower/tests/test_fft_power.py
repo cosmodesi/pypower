@@ -233,10 +233,11 @@ def test_catalog_power():
         norm = power.wnorm
 
         for ell in ells:
-            #print((power(ell=ell) + (ell == 0)*power.shotnoise)*norm/ref_norm / ref_power.poles['power_{}'.format(ell)])
+            ref = ref_power.poles['power_{}'.format(ell)]
+            if ell % 2 == 1: ref = ref.conj() # change of line-of-sight convention
             # precision is 1e-7 if offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize
             #assert np.allclose((power(ell=ell).real + (ell == 0)*power.shotnoise)*norm/ref_norm, ref_power.poles['power_{}'.format(ell)].real, atol=1e-6, rtol=3e-2)
-            assert np.allclose((power(ell=ell) + (ell == 0)*power.shotnoise)*norm/ref_norm, ref_power.poles['power_{}'.format(ell)], atol=1e-6, rtol=5e-2)
+            assert np.allclose((power(ell=ell) + (ell == 0)*power.shotnoise)*norm/ref_norm, ref, atol=1e-6, rtol=5e-2)
 
     power_mesh = get_catalog_mesh_power(data, randoms).poles
     for ell in ells:

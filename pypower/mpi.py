@@ -266,3 +266,162 @@ def scatter_array(data, counts=None, root=0, mpicomm=COMM_WORLD):
     mpicomm.Scatterv([data, (counts, offsets), dt], [recvbuffer, dt], root=root)
     dt.Free()
     return recvbuffer
+
+
+def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=None, weights2=None, boxsize=None, domain_factor=None):
+    """
+    Adapted from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/pair_counters/domain.py.
+    Decompose positions and weights on a grid of MPI processes.
+    Requires mpi4py and pmesh.
+
+    Parameters
+    ----------
+    mpicomm : MPI communicator
+        The MPI communicator.
+
+    smoothing : float
+        The maximum Cartesian separation implied by the user's binning.
+
+    positions1 : list, array
+        Positions in the first catalog. Typically of shape (3, N) or (2, N);
+        in the latter case input arrays are assumed to be angular coordinates in degrees
+        (these will be projected onto the unit sphere for further decomposition).
+
+    positions2 : list, array, default=None
+        Optionally, for cross-pair counts, positions in the second catalog. See ``positions1``.
+
+    weights1 : list, array, default=None
+        Optionally, weights of the first catalog.
+
+    weights2 : list, array, default=None
+        Optionally, weights in the second catalog.
+
+    boxsize : array, default=None
+        For periodic wrapping, the 3 side-lengths of the periodic cube.
+
+    domain_factor : int, default=None
+        Multiply the size of the MPI mesh by this factor.
+        If ``None``, defaults to 2 in case ``boxsize`` is ``None``,
+        else (periodic wrapping) 1.
+
+    Returns
+    -------
+    (positions1, weights1), (positions2, weights2) : arrays
+        The (decomposed) set of positions and weights.
+    """
+    if mpicomm.size == 1:
+        return (positions1, weights1), (positions2, weights2)
+
+    def split_size_3d(s):
+        """
+        Split `s` into three integers, a, b, c, such
+        that a * b * c == s and a <= b <= c.
+        """
+        a = int(s ** (1./3.)) + 1
+        d = s
+        while a > 1:
+            if s % a == 0:
+                s = s // a
+                break
+            a = a - 1
+        b = int(s ** 0.5) + 1
+        while b > 1:
+            if s % b == 0:
+                s = s // b
+                break
+            b = b - 1
+        c = s
+        return a, b, c
+
+    periodic = boxsize is not None
+    angular = len(positions1) == 2
+    ngrid = split_size_3d(mpicomm.size)
+    if domain_factor is None:
+        domain_factor = 1 if periodic else 2
+    ngrid *= domain_factor
+
+    size1 = mpicomm.allreduce(len(positions1[0]))
+
+    auto = positions2 is None
+    if auto:
+        positions2 = positions1
+        weights2 = weights1
+        size2 = size1
+    else:
+        size2 = mpicomm.allreduce(len(positions2[0]))
+
+    cpositions1 = positions1
+    cpositions2 = positions2
+    if angular:
+        # project to unit sphere
+        cpositions1 = utils.sky_to_cartesian([*positions1, np.ones_like(positions1[0])], degree=True)
+        if auto:
+            cpositions2 = cpositions1
+        else:
+            cpositions2 = utils.sky_to_cartesian([*positions2, np.ones_like(positions2[0])], degree=True)
+
+    cpositions1 = np.array(cpositions1).T
+    if periodic:
+        cpositions1 %= boxsize
+    if auto:
+        cpositions2 = cpositions1
+    else:
+        cpositions2 = np.array(cpositions2).T
+        if periodic:
+            cpositions2 %= boxsize
+
+    if periodic:
+        posmin = np.zeros_like(boxsize)
+        posmax = np.asarray(boxsize)
+    else:
+        def get_boxsize(positions):
+            posmin, posmax = positions.min(axis=0), positions.max(axis=0)
+            posmin = np.min(mpicomm.allgather(posmin), axis=0)
+            posmax = np.max(mpicomm.allgather(posmax), axis=0)
+            return posmin, posmax
+
+        posmin, posmax = get_boxsize(cpositions1)
+        if not auto:
+            posmin2, posmax2 = get_boxsize(cpositions2)
+            posmin = np.min([posmin, posmin2], axis=0)
+            posmax = np.max([posmax, posmax2], axis=0)
+        posmin -= 1e-9 # margin to make sure all positions will be included
+        posmax += 1e-9
+
+    # domain decomposition
+    grid = [np.linspace(pmin, pmax, grid + 1, endpoint=True) for pmin, pmax, grid in zip(posmin, posmax, ngrid)]
+    domain = GridND(grid, comm=mpicomm, periodic=periodic) # raises VisibleDeprecationWarning: Creating an ndarray from ragged nested sequences
+
+    if not periodic:
+        # balance the load
+        domain.loadbalance(domain.load(cpositions1))
+
+    # exchange first particles
+    layout = domain.decompose(cpositions1, smoothing=0)
+    positions1 = layout.exchange(*positions1, pack=False) # exchange takes a list of arrays
+    if weights1 is not None:
+        multiple_weights = len(weights1) > 1
+        weights1 = layout.exchange(*weights1, pack=False)
+        if multiple_weights: weights1 = list(weights1)
+        else: weights1 = [weights1]
+
+    boxsize = posmax - posmin
+
+    # exchange second particles
+    if smoothing > boxsize.max() * 0.25:
+        positions2 = [gather_array(p, root=Ellipsis, mpicomm=mpicomm) for p in positions2]
+        if weights2 is not None: weights2 = [gather_array(w, root=Ellipsis, mpicomm=mpicomm) for w in weights2]
+    else:
+        layout = domain.decompose(cpositions2, smoothing=smoothing)
+        positions2 = layout.exchange(*positions2, pack=False)
+        if weights2 is not None:
+            multiple_weights = len(weights2) > 1
+            weights2 = layout.exchange(*weights2, pack=False)
+            if multiple_weights: weights2 = list(weights2)
+            else: weights2 = [weights2]
+
+    assert mpicomm.allreduce(len(positions1[0])) == size1, 'some particles disappeared...'
+
+    positions1 = list(positions1) # exchange returns tuple
+    positions2 = list(positions2)
+    return (positions1, weights1), (positions2, weights2)

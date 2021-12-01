@@ -403,6 +403,12 @@ class CatalogMesh(BaseClass):
     def _set_weights(self, data_weights, randoms_weights=None, shifted_weights=None, mpiroot=None):
         # Set data and optionally shifted and randoms weights and their sum, scattering on all ranks if not already
 
+        if not self.with_randoms and randoms_weights is not None:
+            raise ValueError('randoms_weights are provided, but not randoms_positions')
+
+        if not self.with_shifted and shifted_weights is not None:
+            raise ValueError('shifted_weights are provided, but not shifted_positions')
+
         def get_weights(weights):
             is_none = (mpiroot is None and weights is None) or (mpiroot is not None and self.mpicomm.bcast(weights is None, root=mpiroot))
             if is_none:

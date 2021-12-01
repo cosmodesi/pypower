@@ -745,7 +745,7 @@ class MeshFFTPower(BaseClass):
         Estimated power spectrum wedges.
     """
 
-    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None):
+    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los='firstpoint', boxcenter=None, compensations=None, wnorm=None, shotnoise=None):
         r"""
         Initialize :class:`MeshFFTPower`.
 
@@ -767,8 +767,8 @@ class MeshFFTPower(BaseClass):
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
 
-        los : array, default=None
-            If ``los`` is ``None``, use local (varying) line-of-sight.
+        los : string, array, default=None
+            If ``los`` is 'firstpoint' (resp. 'endpoint'), use local (varying) first point (resp. end point) line-of-sight.
             Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
             Else, a 3-vector.
 
@@ -938,11 +938,22 @@ class MeshFFTPower(BaseClass):
 
     def _set_los(self, los):
         # Set :attr:`los`
+        self.los_type = 'global'
         if los is None:
+            self.los_type = 'firstpoint'
             self.los = None
-        else:
-            if isinstance(los, str):
+        elif isinstance(los, str):
+            los = los.lower()
+            allowed_los = ['endpoint', 'firstpoint', 'x', 'y', 'z']
+            if los not in allowed_los:
+                raise ValueError('los should be one of {}'.format(allowed_los))
+            if los in ['midpoint', 'endpoint', 'firstpoint']:
+                self.los_type = los
+                self.los = None
+            else:
+                self.los_type = 'global'
                 los = 'xyz'.index(los)
+        if self.los_type == 'global':
             if np.ndim(los) == 0:
                 ilos = los
                 los = np.zeros(3, dtype='f8')
@@ -979,10 +990,10 @@ class MeshFFTPower(BaseClass):
                 slab[...] /= window(*kc)
 
     def run(self):
-        if self.los is None: # local (varying) line-of-sight
-            self._run_local_los()
-        else: # global (fixed) line-of-sight
+        if self.los_type == 'global': # global (fixed) line-of-sight
             self._run_global_los()
+        else: # local (varying) line-of-sight
+            self._run_local_los()
 
     def _get_attrs(self):
         # Return some attributes, to be saved in :attr:`poles` and :attr:`wedges`
@@ -1181,7 +1192,12 @@ class MeshFFTPower(BaseClass):
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
         # Factor of 4*pi from spherical harmonic addition theorem + volume factor
         norm = self.nmesh.prod()**2
-        poles = np.array([result[ells.index(ell)] for ell in self.ells]) * norm
+        for ill, ell in enumerate(ells):
+            result[ill] *= norm
+            if ell % 2 == 1 and self.los_type == 'firstpoint':
+                result[ill] = result[ill].conj()
+
+        poles = np.array([result[ells.index(ell)] for ell in self.ells])
         # Format the power results into :class:`PolePowerSpectrum` instance
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         attrs = self._get_attrs()
@@ -1257,8 +1273,8 @@ class CatalogFFTPower(MeshFFTPower):
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
 
-        los : array, default=None
-            If ``los`` is ``None``, use local (varying) line-of-sight.
+        los : string, array, default=None
+            If ``los`` is 'firstpoint' (resp. 'endpoint'), use local (varying) first point (resp. end point) line-of-sight.
             Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
             Else, a 3-vector.
 
