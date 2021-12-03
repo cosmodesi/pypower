@@ -104,10 +104,11 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
     return window
 
 
-def _format_positions(positions, position_type='xyz'):
+def _format_positions(positions, position_type='xyz', dtype=None):
     # Format input array of positions
+    # position_type in ["xyz", "rdd", "pos"]
     if position_type == 'pos': # array of shape (N, 3)
-        positions = np.asarray(positions)
+        positions = np.asarray(positions, dtype=dtype)
         if positions.shape[-1] != 3:
             raise ValueError('For position type = {}, please provide a (N, 3) array for positions'.format(position_type))
         return positions
@@ -115,7 +116,7 @@ def _format_positions(positions, position_type='xyz'):
     positions = list(positions)
     for ip, p in enumerate(positions):
         # cast to the input dtype if exists (may be set by previous weights)
-        positions[ip] = np.asarray(p)
+        positions[ip] = np.asarray(p, dtype=dtype)
     size = len(positions[0])
     dtype = positions[0].dtype
     if not np.issubdtype(dtype, np.floating):

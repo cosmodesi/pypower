@@ -11,13 +11,13 @@ https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/convpower/fkp.p
 import time
 
 import numpy as np
-from mpi4py import MPI
 
 from pmesh.pm import RealField, ComplexField, ParticleMesh
 from pmesh.window import FindResampler, ResampleWindow
 from .utils import BaseClass
 from . import mpi, utils
 from .mesh import _make_array, _get_resampler, _get_resampler_name, _get_compensation_window, _format_positions, _get_box, CatalogMesh
+from .direct_power import _format_weights, get_default_nrealizations, get_inverse_probability_weight, get_direct_power_engine
 
 
 def get_real_Ylm(ell, m):
@@ -383,9 +383,9 @@ class BasePowerStatistic(BaseClass):
     Specific power statistic should extend this class.
     """
     name = 'base'
-    _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm']
+    _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'power_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm']
 
-    def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., attrs=None):
+    def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., power_direct_nonorm=None, attrs=None):
         r"""
         Initialize :class:`BasePowerStatistic`.
 
@@ -415,6 +415,11 @@ class BasePowerStatistic(BaseClass):
         self.edges = tuple(np.asarray(edge, dtype='f8') for edge in edges)
         self.modes = np.asarray(modes)
         self.power_nonorm = np.asarray(power_nonorm)
+        self.power_direct_nonorm = power_direct_nonorm
+        if power_direct_nonorm is None:
+            self.power_direct_nonorm = np.zeros_like(self.power_nonorm)
+        else:
+            self.power_direct_nonorm = np.asarray(power_direct_nonorm)
         self.nmodes = np.asarray(nmodes)
         self.wnorm = wnorm
         self.shotnoise_nonorm = shotnoise_nonorm
@@ -423,7 +428,7 @@ class BasePowerStatistic(BaseClass):
     @property
     def power(self):
         """Power spectrum, normalized and with shot noise removed."""
-        return (self.power_nonorm - self.shotnoise_nonorm) / self.wnorm
+        return (self.power_nonorm + self.power_direct_nonorm - self.shotnoise_nonorm) / self.wnorm
 
     @property
     def shotnoise(self):
@@ -470,8 +475,11 @@ class BasePowerStatistic(BaseClass):
         self.modes = [utils.rebin(m*nmodes, new_shape, statistic=np.sum)/self.nmodes for m in self.modes]
         self.power_nonorm.shape = (-1,) + self.shape
         self.power_nonorm = np.asarray([utils.rebin(power*nmodes, new_shape, statistic=np.sum)/self.nmodes for power in self.power_nonorm])
+        self.power_direct_nonorm.shape = (-1,) + self.shape
+        self.power_direct_nonorm = np.asarray([utils.rebin(power, new_shape, statistic=np.sum)/np.prod(factor) for power in self.power_direct_nonorm])
         self.edges = [edges[::f] for edges,f in zip(self.edges, factor)]
         self.power_nonorm.shape = self.shape
+        self.power_direct_nonorm.shape = self.shape
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -573,7 +581,7 @@ class MultipolePowerSpectrum(BasePowerStatistic):
     @property
     def power(self):
         """Power spectrum, normalized and with shot noise removed from monopole."""
-        power = self.power_nonorm / self.wnorm
+        power = (self.power_nonorm + self.power_direct_nonorm) / self.wnorm
         if 0 in self.ells:
             power[self.ells.index(0)] -= self.shotnoise
         return power
@@ -1017,6 +1025,12 @@ class MeshFFTPower(BaseClass):
             if name in state:
                 setattr(self, name, get_power_statistic(statistic=state[name].pop('name')).from_state(state[name]))
 
+    def save(self, filename):
+        """Save power to ``filename``."""
+        if self.mpicomm.rank == 0:
+            super(MeshFFTPower, self).save(filename)
+        self.mpicomm.Barrier()
+
     def _run_global_los(self):
 
         rank = self.mpicomm.rank
@@ -1215,7 +1229,9 @@ class CatalogFFTPower(MeshFFTPower):
                 shifted_weights1=None, shifted_weights2=None,
                 edges=None, ells=(0, 2, 4), los=None,
                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=1.5, dtype='f8',
-                resampler='cic', interlacing=2, position_type='xyz', wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                resampler='cic', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
+                direct_engine='kdtree', direct_limits=(0., 2./60.), direct_limit_type='degree', periodic=False,
+                wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTPower`.
 
@@ -1316,6 +1332,41 @@ class CatalogFFTPower(MeshFFTPower):
                 - "xyz": Cartesian positions of shape (3, N)
                 - "rdd": RA/Dec in degree, distance of shape (3, N)
 
+        weight_type : string, default='auto'
+            The type of weighting to apply to provided weights. One of:
+
+                - ``None``: no weights are applied.
+                - "product_individual": each pair is weighted by the product of weights :math:`w_{1} w_{2}`.
+                - "inverse_bitwise": each pair is weighted by :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2}))`.
+                   Multiple bitwise weights can be provided as a list.
+                   Individual weights can additionally be provided as float arrays.
+                   In case of cross-correlations with floating weights, bitwise weights are automatically turned to IIP weights,
+                   i.e. :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1}))`.
+                - "auto": automatically choose weighting based on input ``weights1`` and ``weights2``,
+                   i.e. ``None`` when ``weights1`` and ``weights2`` are ``None``,
+                   "inverse_bitwise" if one of input weights is integer, else "product_individual".
+
+        weight_attrs : dict, default=None
+            Dictionary of weighting scheme attributes. In case ``weight_type`` is "inverse_bitwise",
+            one can provide "nrealizations", the total number of realizations (*including* current one;
+            defaulting to the number of bits in input weights plus one);
+            "noffset", the offset to be added to the bitwise counts in the denominator (defaulting to 1)
+            and "default_value", the default value of pairwise weights if the denominator is zero (defaulting to 0).
+            Inverse probability weight is then computed as: :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2}))`.
+            For example, for the "zero-truncated" estimator (arXiv:1912.08803), one would use noffset = 0.
+
+        direct_engine : string, default='kdtree'
+            Engine for direct power spectrum computation (if input weights are bitwise weights), one of ["kdtree"].
+
+        direct_limits : tuple, default=(0., 2./60.)
+            Limits of particle pair separations used in the direct power spectrum computation.
+
+        direct_limit_type : string, default='degree'
+            Type of ``direct_limits``; i.e. are those angular limits ("degree", "radian"), or 3D limits ("s")?
+
+        periodic : bool, default=False
+            Whether to assume periodic boundary conditions in direct power spectrum computation.
+
         wnorm : float, default=None
             Power spectrum normalization, to use instead of internal estimate obtained with :func:`normalization`.
 
@@ -1333,6 +1384,7 @@ class CatalogFFTPower(MeshFFTPower):
             The MPI communicator.
         """
         positions = []
+        weight_attrs = weight_attrs or {}
         d = {}
         for name in ['data_positions1', 'data_positions2', 'randoms_positions1', 'randoms_positions2', 'shifted_positions1', 'shifted_positions2']:
             tmp = locals()[name]
@@ -1344,13 +1396,45 @@ class CatalogFFTPower(MeshFFTPower):
                 positions.append(tmp)
             d[name] = tmp
 
+        dw, n_bitwise_weights = {}, {}
         for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']:
             tmp = locals()[name]
-            if tmp is not None:
-                tmp = np.asarray(tmp)
+            if tmp is not None and len(tmp):
+                if np.ndim(tmp[0]) == 0:
+                    tmp = [tmp]
+                tmp = [np.asarray(w) for w in tmp]
             if mpiroot is not None and mpicomm.bcast(tmp is not None, root=mpiroot):
-                tmp = mpi.scatter_array(tmp, root=mpiroot, mpicomm=mpicomm)
-            d[name] = tmp
+                tmp = [mpi.scatter_array(w, root=mpiroot, mpicomm=mpicomm) for w in tmp]
+            dw[name], n_bitwise_weights[name] = _format_weights(tmp, weight_type=weight_type)
+
+        with_shifted = d['shifted_positions1'] is not None
+        with_randoms = d['randoms_positions1'] is not None
+        autocorr = d['data_positions2'] is None
+        if autocorr and (d['randoms_positions2'] is not None or d['shifted_positions2'] is not None):
+            raise ValueError('randoms_positions2 or shifted_positions2 are provided, but not data_positions2')
+
+        weight_attrs = weight_attrs.copy()
+        noffset = weight_attrs.get('noffset', 1)
+        default_value = weight_attrs.get('default_value', 0)
+        weight_attrs.update(noffset=noffset, default_value=default_value)
+
+        def get_nrealizations(weights):
+            nrealizations = weight_attrs.get('nrealizations', None)
+            if nrealizations is None: nrealizations = get_default_nrealizations(weights)
+            return nrealizations
+
+        for name in dw:
+            if n_bitwise_weights[name]:
+                bitwise_weight = dw[name][:n_bitwise_weights[name]]
+                nrealizations = get_nrealizations(bitwise_weight)
+                d[name] = get_inverse_probability_weight(bitwise_weight, noffset=noffset, nrealizations=nrealizations, default_value=default_value)
+                if len(dw[name]) > n_bitwise_weights[name]:
+                    d[name] *= dw[name][n_bitwise_weights[name]]
+            elif len(dw[name]):
+                d[name] = dw[name][0]
+            else:
+                d[name] = None
+
 
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=positions, boxpad=boxpad, mpicomm=mpicomm)
@@ -1365,8 +1449,31 @@ class CatalogFFTPower(MeshFFTPower):
         mesh1 = get_mesh(d['data_positions1'], data_weights=d['data_weights1'], randoms_positions=d['randoms_positions1'], randoms_weights=d['randoms_weights1'],
                          shifted_positions=d['shifted_positions1'], shifted_weights=d['shifted_weights1'])
         mesh2 = None
-        if d['data_positions2'] is not None:
+        if not autocorr:
             mesh2 = get_mesh(d['data_positions2'], data_weights=d['data_weights2'], randoms_positions=d['randoms_positions2'], randoms_weights=d['randoms_weights2'],
                              shifted_positions=d['shifted_positions2'], shifted_weights=d['shifted_weights2'])
         # Now, run power spectrum estimation
         super(CatalogFFTPower,self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
+
+        D2 = D1 = 'data_positions1'
+        if not autocorr: D2 = 'data_positions2'
+        S2 = S1 = 'shifted_positions1' if with_shifted else 'randoms_positions1'
+        if not autocorr: S2 = 'shifted_positions2' if with_shifted else 'randoms_positions2'
+
+        pairs = [(D1, D2)]
+        if with_shifted or with_randoms:
+            pairs.append((S1, S2))
+            pairs.append((D1, S2))
+            if not autocorr:
+                pairs.append((D2, S1))
+
+        DirectPowerEngine = get_direct_power_engine(direct_engine)
+        for (p1, p2) in pairs:
+            w1, w2 = p1.replace('positions', 'weights'), p2.replace('positions', 'weights')
+            if n_bitwise_weights[w1] and n_bitwise_weights[w2] and self.ells:
+                power = DirectPowerEngine(self.poles.k, d[p1], weights1=d[w1], positions2=d[p2], weights2=d[w2], ells=ells, limits=direct_limits, limit_type=direct_limit_type,
+                                          weight_type='inverse_bitwise_minus_individual', weight_attrs=weight_attrs, los=los, boxsize=self.boxsize if periodic else None,
+                                          mpicomm=self.mpicomm).power_nonorm
+                if autocorr and (p1, p2) == (D1, S2): # double counting
+                    power *= 2
+                self.poles.power_direct_nonorm[...] = power

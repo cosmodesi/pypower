@@ -210,7 +210,7 @@ def test_catalog_power():
 
     def get_catalog_mesh_power(data, randoms):
         mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
-                            boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
+                           boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
         return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)
 
     ref_power = get_ref_power(data, randoms)
