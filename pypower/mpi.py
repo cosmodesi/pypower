@@ -1,6 +1,7 @@
 import numpy as np
 
 from mpi4py import MPI
+from pmesh.domain import GridND
 
 from . import utils
 
@@ -282,12 +283,10 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
     smoothing : float
         The maximum Cartesian separation implied by the user's binning.
 
-    positions1 : list, array
-        Positions in the first catalog. Typically of shape (3, N) or (2, N);
-        in the latter case input arrays are assumed to be angular coordinates in degrees
-        (these will be projected onto the unit sphere for further decomposition).
+    positions1 : array of shape (N, 3)
+        Positions in the first catalog.
 
-    positions2 : list, array, default=None
+    positions2 : array of shape (N, 3), default=None
         Optionally, for cross-pair counts, positions in the second catalog. See ``positions1``.
 
     weights1 : list, array, default=None
@@ -334,13 +333,12 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
         return a, b, c
 
     periodic = boxsize is not None
-    angular = len(positions1) == 2
     ngrid = split_size_3d(mpicomm.size)
     if domain_factor is None:
         domain_factor = 1 if periodic else 2
     ngrid *= domain_factor
 
-    size1 = mpicomm.allreduce(len(positions1[0]))
+    size1 = mpicomm.allreduce(len(positions1))
 
     auto = positions2 is None
     if auto:
@@ -348,27 +346,18 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
         weights2 = weights1
         size2 = size1
     else:
-        size2 = mpicomm.allreduce(len(positions2[0]))
+        size2 = mpicomm.allreduce(len(positions2))
 
     cpositions1 = positions1
     cpositions2 = positions2
-    if angular:
-        # project to unit sphere
-        cpositions1 = utils.sky_to_cartesian([*positions1, np.ones_like(positions1[0])], degree=True)
-        if auto:
-            cpositions2 = cpositions1
-        else:
-            cpositions2 = utils.sky_to_cartesian([*positions2, np.ones_like(positions2[0])], degree=True)
 
-    cpositions1 = np.array(cpositions1).T
     if periodic:
-        cpositions1 %= boxsize
+        cpositions1 = cpositions1 % boxsize
     if auto:
         cpositions2 = cpositions1
     else:
-        cpositions2 = np.array(cpositions2).T
         if periodic:
-            cpositions2 %= boxsize
+            cpositions2 = cpositions2 % boxsize
 
     if periodic:
         posmin = np.zeros_like(boxsize)
@@ -398,7 +387,7 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
 
     # exchange first particles
     layout = domain.decompose(cpositions1, smoothing=0)
-    positions1 = layout.exchange(*positions1, pack=False) # exchange takes a list of arrays
+    positions1 = layout.exchange(positions1) # exchange takes a list of arrays
     if weights1 is not None:
         multiple_weights = len(weights1) > 1
         weights1 = layout.exchange(*weights1, pack=False)
@@ -413,15 +402,13 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
         if weights2 is not None: weights2 = [gather_array(w, root=Ellipsis, mpicomm=mpicomm) for w in weights2]
     else:
         layout = domain.decompose(cpositions2, smoothing=smoothing)
-        positions2 = layout.exchange(*positions2, pack=False)
+        positions2 = layout.exchange(positions2)
         if weights2 is not None:
             multiple_weights = len(weights2) > 1
             weights2 = layout.exchange(*weights2, pack=False)
             if multiple_weights: weights2 = list(weights2)
             else: weights2 = [weights2]
 
-    assert mpicomm.allreduce(len(positions1[0])) == size1, 'some particles disappeared...'
+    assert mpicomm.allreduce(len(positions1)) == size1, 'some particles disappeared...'
 
-    positions1 = list(positions1) # exchange returns tuple
-    positions2 = list(positions2)
     return (positions1, weights1), (positions2, weights2)

@@ -10,7 +10,13 @@ from scipy import special
 
 from .utils import BaseClass
 from . import mpi, utils
-from .mesh import _make_array, _format_positions
+
+
+def _make_array(value, shape, dtype='f8'):
+    # Return numpy array filled with value
+    toret = np.empty(shape, dtype=dtype)
+    toret[...] = value
+    return toret
 
 
 def get_default_nrealizations(weights):
@@ -56,31 +62,85 @@ def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, defa
     return toret
 
 
-def _format_weights(weights, weight_type='auto', size=None, dtype=None):
+def _format_positions(positions, position_type='xyz', dtype=None, mpicomm=None, mpiroot=None):
+    # Format input array of positions
+    # position_type in ["xyz", "rdd", "pos"]
+
+    def __format_positions(positions, position_type=position_type, dtype=dtype):
+        if position_type == 'pos': # array of shape (N, 3)
+            positions = np.asarray(positions, dtype=dtype)
+            if positions.shape[-1] != 3:
+                return None, 'For position type = {}, please provide a (N, 3) array for positions'.format(position_type)
+            return positions, None
+        # Array of shape (3, N)
+        positions = list(positions)
+        for ip, p in enumerate(positions):
+            # cast to the input dtype if exists (may be set by previous weights)
+            positions[ip] = np.asarray(p, dtype=dtype)
+        size = len(positions[0])
+        dtype = positions[0].dtype
+        if not np.issubdtype(dtype, np.floating):
+            return None, 'Input position arrays should be of floating type, not {}'.format(dtype)
+        for p in positions[1:]:
+            if len(p) != size:
+                return None, 'All position arrays should be of the same size'
+            if p.dtype != dtype:
+                return None, 'All position arrays should be of the same type, you can e.g. provide dtype'
+        if len(positions) != 3:
+            return None, 'For position type = {}, please provide a list of 3 arrays for positions'.format(position_type)
+        if position_type == 'rdd': # RA, Dec, distance
+            positions = utils.sky_to_cartesian(positions, degree=True)
+        elif position_type != 'xyz':
+            return None, 'Position type should be one of ["xyz", "rdd"]'
+        return np.asarray(positions).T, None
+
+    error = None
+    if positions is not None and not all(position is None for position in positions):
+        positions, error = __format_positions(positions) # return error separately to raise on all processes
+    errors = [err for err in mpicomm.allgather(error) if err is not None]
+    if errors:
+        raise ValueError(errors[0])
+    if mpiroot is not None and mpicomm.bcast(positions is not None, root=mpiroot):
+        positions = mpi.scatter_array(positions, root=mpiroot, mpicomm=mpicomm)
+    return positions
+
+
+def _format_weights(weights, weight_type='auto', size=None, dtype=None, mpicomm=None, mpiroot=None):
     # Format input weights, as a list of n_bitwise_weights uint8 arrays, and optionally a float array for individual weights.
     # Return formated list of weights, and n_bitwise_weights.
-    if weights is None or len(weights) == 0:
-        return [], 0
-    if np.ndim(weights[0]) == 0:
-        weights = [weights]
-    individual_weights = []
-    bitwise_weights = []
-    for w in weights:
-        if size is not None and len(w) != size:
-            raise ValueError('All weight arrays should be of the same size as position arrays')
-        if np.issubdtype(w.dtype, np.integer):
-            if weight_type == 'product_individual': # enforce float individual weight
+
+    def __format_weights(weights, weight_type=weight_type, dtype=dtype):
+        if weights is None or all(weight is None for weight in weights):
+            return [], 0
+        if np.ndim(weights[0]) == 0:
+            weights = [weights]
+        individual_weights = []
+        bitwise_weights = []
+        for w in weights:
+            if np.issubdtype(w.dtype, np.integer):
+                if weight_type == 'product_individual': # enforce float individual weight
+                    individual_weights.append(w)
+                else: # certainly bitwise weight
+                    bitwise_weights.append(w)
+            else:
                 individual_weights.append(w)
-            else: # certainly bitwise weight
-                bitwise_weights.append(w)
-        else:
-            individual_weights.append(w)
-    # any integer array bit size will be a multiple of 8
-    bitwise_weights = utils.reformat_bitarrays(*bitwise_weights, dtype=np.uint8)
-    n_bitwise_weights = len(bitwise_weights)
-    weights = bitwise_weights
-    if individual_weights:
-        weights += [np.prod(individual_weights, axis=0, dtype=dtype)]
+        # any integer array bit size will be a multiple of 8
+        bitwise_weights = utils.reformat_bitarrays(*bitwise_weights, dtype=np.uint8)
+        n_bitwise_weights = len(bitwise_weights)
+        weights = bitwise_weights
+        if individual_weights:
+            weights += [np.prod(individual_weights, axis=0, dtype=dtype)]
+        return weights, n_bitwise_weights
+
+    weights, n_bitwise_weights = __format_weights(weights)
+    if mpiroot is not None:
+        nw = mpicomm.bcast(len(weights), root=mpiroot)
+        if mpicomm.rank != mpiroot: weights = [None]*nw
+        weights = [mpi.scatter_array(weight, root=mpiroot, mpicomm=mpicomm) for weight in weights]
+        n_bitwise_weights = mpicomm.bcast(n_bitwise_weights, root=mpiroot)
+    if size is not None:
+        if not all(len(weight) == size for weight in weights):
+            raise ValueError('All weight arrays should be of the same size as position arrays')
     return weights, n_bitwise_weights
 
 
@@ -148,7 +208,7 @@ class BaseDirectPowerEngine(BaseClass):
     """Direct power spectrum measurement, summing over particle pairs."""
 
     def __init__(self, modes, positions1, positions2=None, weights1=None, weights2=None, ells=(0, 2, 4), limits=(0., 2./60.), limit_type='degree',
-                 position_type='xyz', weight_type='auto', weight_attrs=None, los='endpoint', boxsize=None, mpicomm=mpi.COMM_WORLD, **kwargs):
+                 position_type='xyz', weight_type='auto', weight_attrs=None, los='endpoint', boxsize=None, mpiroot=None, mpicomm=mpi.COMM_WORLD, **kwargs):
         r"""
         Initialize :class:`BaseDirectPowerEngine`.
 
@@ -217,6 +277,10 @@ class BaseDirectPowerEngine(BaseClass):
         boxsize : array, float, default=None
             For periodic wrapping, the side-length(s) of the periodic cube.
 
+        mpiroot : int, default=None
+            If ``None``, input positions and weights are assumed to be scatted across all ranks.
+            Else the MPI rank where input positions and weights are gathered.
+
         mpicomm : MPI communicator, default=MPI.COMM_WORLD
             The MPI communicator.
         """
@@ -226,8 +290,8 @@ class BaseDirectPowerEngine(BaseClass):
         self._set_los(los)
         self._set_limits(limits, limit_type=limit_type)
         self._set_boxsize(boxsize=boxsize)
-        self._set_positions(positions1, positions2=positions2, position_type=position_type)
-        self._set_weights(weights1, weights2=weights2, weight_type=weight_type, weight_attrs=weight_attrs)
+        self._set_positions(positions1, positions2=positions2, position_type=position_type, mpiroot=mpiroot)
+        self._set_weights(weights1, weights2=weights2, weight_type=weight_type, weight_attrs=weight_attrs, mpiroot=mpiroot)
         self.attrs = kwargs
         self.run()
 
@@ -286,15 +350,12 @@ class BaseDirectPowerEngine(BaseClass):
         if self.periodic:
             self.boxsize = _make_array(boxsize, 3, dtype='f8')
 
-    def _set_positions(self, positions1, positions2=None, position_type='xyz'):
-        self.positions1 = _format_positions(positions1, position_type=position_type)
+    def _set_positions(self, positions1, positions2=None, position_type='xyz', mpiroot=None):
+        self.positions1 = _format_positions(positions1, position_type=position_type, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.positions2 = _format_positions(positions2, position_type=position_type, mpicomm=self.mpicomm, mpiroot=mpiroot)
         self.autocorr = positions2 is None
-        if self.autocorr:
-            self.positions2 = None
-        else:
-            self.positions2 = _format_positions(positions2, position_type=position_type)
 
-    def _set_weights(self, weights1, weights2=None, weight_type='auto', weight_attrs=None):
+    def _set_weights(self, weights1, weights2=None, weight_type='auto', weight_attrs=None, mpiroot=None):
 
         if weight_type is not None: weight_type = weight_type.lower()
         allowed_weight_types = [None, 'auto', 'product_individual', 'inverse_bitwise', 'inverse_bitwise_minus_individual']
@@ -302,51 +363,34 @@ class BaseDirectPowerEngine(BaseClass):
             raise ValueError('weight_type should be one of {}'.format(allowed_weight_types))
         self.weight_type = weight_type
 
-        if self.autocorr:
-            if weights2 is not None:
-                raise ValueError('weights2 are provided, but not positions2')
-
-        if weights1 is None:
-            if weights2 is not None:
-                raise ValueError('weights2 are provided, but not weights1')
-        else:
-            if self.autocorr:
-                if weights2 is not None:
-                    raise ValueError('weights2 are provided, but not positions2')
-            else:
-                if weights2 is None:
-                    raise ValueError('weights1 are provided, but not weights2')
-
         weight_attrs = weight_attrs or {}
         self.weight_attrs = {}
 
         self.n_bitwise_weights = 0
-        if weight_type is None:
+        if self.weight_type is None:
             self.weights1 = self.weights2 = []
+
         else:
-            self.weight_attrs = {}
+
             noffset = weight_attrs.get('noffset', 1)
             default_value = weight_attrs.get('default_value', 0.)
             self.weight_attrs.update(noffset=noffset, default_value=default_value)
 
-            self.weights1, n_bitwise_weights1 = _format_weights(weights1, weight_type=weight_type, size=len(self.positions1))
+            self.weights1, n_bitwise_weights1 = _format_weights(weights1, weight_type=weight_type, size=len(self.positions1), mpicomm=self.mpicomm, mpiroot=mpiroot)
 
             def get_nrealizations(weights):
                 nrealizations = weight_attrs.get('nrealizations', None)
                 if nrealizations is None: nrealizations = get_default_nrealizations(weights)
                 return nrealizations
-            #elif self.n_bitwise_weights and self.nrealizations - 1 > self.n_bitwise_weights * 8:
-            #    raise ValueError('Provided number of realizations is {:d}, '
-            #                           'more than actual number of bits in bitwise weights {:d} plus 1'.format(self.nrealizations, self.n_bitwise_weights * 8))
-            self.weights2 = weights2
 
             if self.autocorr:
 
+                self.weights2 = self.weights1
                 self.weight_attrs['nrealizations'] = get_nrealizations(self.weights1[:n_bitwise_weights1])
                 self.n_bitwise_weights = n_bitwise_weights1
 
             else:
-                self.weights2, n_bitwise_weights2 = _format_weights(weights2, weight_type=weight_type, size=len(self.positions2))
+                self.weights2, n_bitwise_weights2 = _format_weights(weights2, weight_type=weight_type, size=len(self.positions2), mpicomm=self.mpicomm, mpiroot=mpiroot)
 
                 if n_bitwise_weights2 == n_bitwise_weights1:
 
@@ -354,14 +398,13 @@ class BaseDirectPowerEngine(BaseClass):
                     self.n_bitwise_weights = n_bitwise_weights1
 
                 else:
-
                     if n_bitwise_weights2 == 0:
                         indweights = self.weights1[n_bitwise_weights1] if len(self.weights1) > n_bitwise_weights1 else 1.
                         self.weight_attrs['nrealizations'] = get_nrealizations(self.weights1[:n_bitwise_weights1])
                         self.weights1 = [self._get_inverse_probability_weight(self.weights1[:n_bitwise_weights1])*indweights]
                         self.n_bitwise_weights = 0
                         self.log_info('Setting IIP weights for first catalog.')
-                    elif self.n_bitwise_weights == 0:
+                    elif n_bitwise_weights1 == 0:
                         indweights = self.weights2[n_bitwise_weights2] if len(self.weights2) > n_bitwise_weights2 else 1.
                         self.weight_attrs['nrealizations'] = get_nrealizations(self.weights2[:n_bitwise_weights2])
                         self.weights2 = [self._get_inverse_probability_weight(self.weights2[:n_bitwise_weights2])*indweights]
@@ -389,11 +432,7 @@ class BaseDirectPowerEngine(BaseClass):
                 positions2 = self.positions2/utils.distance(self.positions2.T)[:,None]
                 weights2 = [self.positions2] + weights2
         if self.with_mpi:
-            smoothing = self.limits[1]
-            if self.limit_type == 'theta':
-                smoothing = 2 * np.sin(0.5 * np.deg2rad(smoothing))
-            from . import mpi
-            (positions1, weights1), (positions2, weights2) = mpi.domain_decompose(self.mpicomm, smoothing, positions1, weights1=weights1,
+            (positions1, weights1), (positions2, weights2) = mpi.domain_decompose(self.mpicomm, self.limits[1], positions1, weights1=weights1,
                                                                                   positions2=positions2, weights2=weights2, boxsize=self.boxsize)
         elif self.autocorr:
             positions2, weights2 = positions1, weights1
@@ -437,9 +476,6 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
         start = time.time()
         ells = sorted(set(self.ells))
         (dlimit_positions1, dpositions1, dweights1), (dlimit_positions2, dpositions2, dweights2) = self._mpi_decompose()
-        kwargs = {'leafsize': 16, 'compact_nodes': True, 'copy_data': False, 'balanced_tree': True}
-        for name in kwargs:
-            if name in self.attrs: kwargs[name] = self.attrs[name]
         autocorr = dpositions2 is dpositions1
         dlimit_positions = dlimit_positions1
         # Very unfortunately, cKDTree.query_pairs does not handle cross-correlations...
@@ -447,6 +483,21 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
         # https://github.com/scipy/scipy/blob/47bb6febaa10658c72962b9615d5d5aa2513fa3a/scipy/spatial/ckdtree/src/query_pairs.cxx#L210
         if not autocorr:
             dlimit_positions = np.concatenate([dlimit_positions1, dlimit_positions2], axis=0)
+
+        kwargs = {'leafsize': 16, 'compact_nodes': True, 'copy_data': False, 'balanced_tree': True}
+        for name in kwargs:
+            if name in self.attrs: kwargs[name] = self.attrs[name]
+
+        result = [np.zeros_like(self.modes) for ell in ells]
+        legendre = [special.legendre(ell) for ell in ells]
+
+        def normalize(los):
+            return los/utils.distance(los.T)[:,None]
+
+        def power_slab(distance, mu, weight):
+            for ill, ell in enumerate(ells):
+                tmp = weight * special.spherical_jn(ell, self.modes[:,None]*distance, derivative=False) * legendre[ill](mu)
+                result[ill] += np.sum(tmp, axis=-1)
 
         tree = spatial.cKDTree(dlimit_positions, **kwargs, boxsize=None)
         pairs = tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray')
@@ -472,9 +523,6 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
         if len(dweights1) > self.n_bitwise_weights:
             weight *= dweights1[-1] * dweights2[-1] # single individual weight, at the end
 
-        #print('npairs', dpositions1.shape[0])
-        def normalize(los): return los/utils.distance(los.T)[:,None]
-
         diff = dpositions2 - dpositions1
         distance = utils.distance(diff.T)
         if self.los_type == 'global':
@@ -490,25 +538,12 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                 mu = np.sum(diff * normalize(dpositions1 + dpositions2), axis=-1)/distance
         del diff
 
-        stop = time.time()
-        if rank == 0:
-            self.log_info('Pairs computed in elapsed time {:.2f} s.'.format(stop - start))
-        start = stop
-
-        result = [np.zeros_like(self.modes) for ell in ells]
-        legendre = [special.legendre(ell) for ell in ells]
-
-        def power_slab(distance, mu, weight):
-            for ill, ell in enumerate(self.ells):
-                tmp = weight * special.spherical_jn(ell, self.modes[:,None]*distance, derivative=False) * legendre[ill](mu)
-                result[ill] += np.sum(tmp, axis=-1)
-
         # To avoid memory issues when performing distance*modes product, work by slabs
-        nslabs = len(ells) * len(self.modes)
+        nslabs_pairs = len(ells) * len(self.modes)
         npairs = distance.size
 
-        for islab in range(nslabs):
-            sl = slice(islab*npairs//nslabs, (islab+1)*npairs//nslabs, 1)
+        for islab in range(nslabs_pairs):
+            sl = slice(islab*npairs//nslabs_pairs, (islab+1)*npairs//nslabs_pairs, 1)
             d = distance[sl]
             w = 1. if np.ndim(weight) == 0 else weight[sl]
             if self.los_type in ['global', 'midpoint']:
@@ -519,11 +554,12 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                     power_slab(d, mu2[sl], w)
 
         for ill, ell in enumerate(ells):
+            # Note: in arXiv:1912.08803, eq. 26, should rather be sij = rj - ri
             result[ill] = (-1j)**ell * (2 * ell + 1) * result[ill]
             if ell % 2 == 1 and self.los_type == 'firstpoint':
                 result[ill] = result[ill].conj()
 
-        self.power_nonorm = np.asarray([result[ells.index(ell)] for ell in self.ells])
+        self.power_nonorm = self.mpicomm.allreduce(np.asarray([result[ells.index(ell)] for ell in self.ells]))
 
         stop = time.time()
         if rank == 0:

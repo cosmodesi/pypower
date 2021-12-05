@@ -3,6 +3,7 @@ import tempfile
 
 import numpy as np
 from matplotlib import pyplot as plt
+from mpi4py import MPI
 
 from cosmoprimo.fiducial import DESI
 from mockfactory import LagrangianLinearMock, Catalog
@@ -108,7 +109,7 @@ def test_mesh_power():
         result = get_mesh_power(data, **options)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            fn = os.path.join(tmp_dir, 'tmp.npy')
+            fn = result.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             result.save(fn)
             result = MeshFFTPower.load(fn)
 
@@ -225,7 +226,7 @@ def test_catalog_power():
         result = get_catalog_power(data, randoms, **options)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            fn = os.path.join(tmp_dir, 'tmp.npy')
+            fn = result.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             result.save(fn)
             result = CatalogFFTPower.load(fn)
 
@@ -285,7 +286,6 @@ def test_mpi():
     for ell in power.ells:
         assert np.allclose(power(ell=ell), ref_power(ell=ell))
 
-    from mpi4py import MPI
     if data.mpicomm.rank == 0:
         power = run(mpiroot=0, mpicomm=MPI.COMM_SELF)
         for ell in power.ells:
@@ -301,3 +301,4 @@ if __name__ == '__main__':
     test_mesh_power()
     test_catalog_power()
     test_normalization()
+    test_mpi()

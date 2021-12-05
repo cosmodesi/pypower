@@ -16,8 +16,8 @@ from pmesh.pm import RealField, ComplexField, ParticleMesh
 from pmesh.window import FindResampler, ResampleWindow
 from .utils import BaseClass
 from . import mpi, utils
-from .mesh import _make_array, _get_resampler, _get_resampler_name, _get_compensation_window, _format_positions, _get_box, CatalogMesh
-from .direct_power import _format_weights, get_default_nrealizations, get_inverse_probability_weight, get_direct_power_engine
+from .mesh import _get_resampler, _get_resampler_name, _get_compensation_window, _get_box, CatalogMesh
+from .direct_power import _make_array, _format_positions, _format_weights, get_default_nrealizations, get_inverse_probability_weight, get_direct_power_engine
 
 
 def get_real_Ylm(ell, m):
@@ -1387,25 +1387,14 @@ class CatalogFFTPower(MeshFFTPower):
         weight_attrs = weight_attrs or {}
         d = {}
         for name in ['data_positions1', 'data_positions2', 'randoms_positions1', 'randoms_positions2', 'shifted_positions1', 'shifted_positions2']:
-            tmp = locals()[name]
-            if tmp is not None:
-                tmp = _format_positions(tmp, position_type=position_type)
-            if mpiroot is not None and mpicomm.bcast(tmp is not None, root=mpiroot):
-                tmp = mpi.scatter_array(tmp, root=mpiroot, mpicomm=mpicomm)
+            tmp = _format_positions(locals()[name], position_type=position_type, mpicomm=mpicomm, mpiroot=mpiroot)
             if tmp is not None:
                 positions.append(tmp)
             d[name] = tmp
 
         dw, n_bitwise_weights = {}, {}
         for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']:
-            tmp = locals()[name]
-            if tmp is not None and len(tmp):
-                if np.ndim(tmp[0]) == 0:
-                    tmp = [tmp]
-                tmp = [np.asarray(w) for w in tmp]
-            if mpiroot is not None and mpicomm.bcast(tmp is not None, root=mpiroot):
-                tmp = [mpi.scatter_array(w, root=mpiroot, mpicomm=mpicomm) for w in tmp]
-            dw[name], n_bitwise_weights[name] = _format_weights(tmp, weight_type=weight_type)
+            dw[name], n_bitwise_weights[name] = _format_weights(locals()[name], weight_type=weight_type, mpicomm=mpicomm, mpiroot=mpiroot)
 
         with_shifted = d['shifted_positions1'] is not None
         with_randoms = d['randoms_positions1'] is not None
@@ -1471,9 +1460,9 @@ class CatalogFFTPower(MeshFFTPower):
         for (p1, p2) in pairs:
             w1, w2 = p1.replace('positions', 'weights'), p2.replace('positions', 'weights')
             if n_bitwise_weights[w1] and n_bitwise_weights[w2] and self.ells:
-                power = DirectPowerEngine(self.poles.k, d[p1], weights1=d[w1], positions2=d[p2], weights2=d[w2], ells=ells, limits=direct_limits, limit_type=direct_limit_type,
+                power = DirectPowerEngine(self.poles.k, d[p1], weights1=dw[w1], positions2=d[p2], weights2=dw[w2], ells=ells, limits=direct_limits, limit_type=direct_limit_type,
                                           weight_type='inverse_bitwise_minus_individual', weight_attrs=weight_attrs, los=los, boxsize=self.boxsize if periodic else None,
-                                          mpicomm=self.mpicomm).power_nonorm
+                                          position_type='pos', mpicomm=self.mpicomm).power_nonorm
                 if autocorr and (p1, p2) == (D1, S2): # double counting
                     power *= 2
-                self.poles.power_direct_nonorm[...] = power
+                self.poles.power_direct_nonorm += power

@@ -4,14 +4,8 @@ from mpi4py import MPI
 from pmesh.pm import RealField, ComplexField, ParticleMesh
 from pmesh.window import FindResampler, ResampleWindow
 from .utils import BaseClass
+from .direct_power import _make_array, _format_positions, _format_weights
 from . import mpi, utils
-
-
-def _make_array(value, shape, dtype='f8'):
-    # Return numpy array filled with value
-    toret = np.empty(shape, dtype=dtype)
-    toret[...] = value
-    return toret
 
 
 def _get_resampler(resampler):
@@ -102,37 +96,6 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
             return toret
 
     return window
-
-
-def _format_positions(positions, position_type='xyz', dtype=None):
-    # Format input array of positions
-    # position_type in ["xyz", "rdd", "pos"]
-    if position_type == 'pos': # array of shape (N, 3)
-        positions = np.asarray(positions, dtype=dtype)
-        if positions.shape[-1] != 3:
-            raise ValueError('For position type = {}, please provide a (N, 3) array for positions'.format(position_type))
-        return positions
-    # Array of shape (3, N)
-    positions = list(positions)
-    for ip, p in enumerate(positions):
-        # cast to the input dtype if exists (may be set by previous weights)
-        positions[ip] = np.asarray(p, dtype=dtype)
-    size = len(positions[0])
-    dtype = positions[0].dtype
-    if not np.issubdtype(dtype, np.floating):
-        raise ValueError('Input position arrays should be of floating type, not {}'.format(dtype))
-    for p in positions[1:]:
-        if len(p) != size:
-            raise ValueError('All position arrays should be of the same size')
-        if p.dtype != dtype:
-            raise ValueError('All position arrays should be of the same type, you can e.g. provide dtype')
-    if len(positions) != 3:
-        raise ValueError('For position type = {}, please provide a list of 3 arrays for positions'.format(position_type))
-    if position_type == 'rdd': # RA, Dec, distance
-        positions = utils.sky_to_cartesian(positions, degree=True)
-    elif position_type != 'xyz':
-        raise ValueError('Position type should be one of ["xyz", "rdd"]')
-    return np.asarray(positions).T
 
 
 def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=None, boxpad=1.5, check=True, mpicomm=mpi.COMM_WORLD):
@@ -385,44 +348,32 @@ class CatalogMesh(BaseClass):
     def _set_positions(self, data_positions, randoms_positions=None, shifted_positions=None, position_type='xyz', mpiroot=None):
         # Set data and optionally shifted and randoms positions, scattering on all ranks if not already
 
-        def get_positions(positions):
-            is_none = (mpiroot is None and positions is None) or (mpiroot is not None and self.mpicomm.bcast(positions is None, root=mpiroot))
-            if is_none:
-                return None
-            if mpiroot is None or self.mpicomm.rank == mpiroot:
-                positions = _format_positions(positions, position_type=position_type)
-            if mpiroot is not None: # Scatter position arrays on all ranks
-                positions = mpi.scatter_array(positions, root=mpiroot, mpicomm=self.mpicomm)
-            return positions
-
-        self.data_positions = get_positions(data_positions)
+        self.data_positions = _format_positions(data_positions, position_type=position_type, mpicomm=self.mpicomm, mpiroot=mpiroot)
         if self.data_positions is None:
             raise ValueError('Provide at least an array of data positions')
-        self.randoms_positions = get_positions(randoms_positions)
-        self.shifted_positions = get_positions(shifted_positions)
+        self.randoms_positions = _format_positions(randoms_positions, position_type=position_type, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.shifted_positions = _format_positions(shifted_positions, position_type=position_type, mpicomm=self.mpicomm, mpiroot=mpiroot)
 
     def _set_weights(self, data_weights, randoms_weights=None, shifted_weights=None, mpiroot=None):
         # Set data and optionally shifted and randoms weights and their sum, scattering on all ranks if not already
 
-        if not self.with_randoms and randoms_weights is not None:
-            raise ValueError('randoms_weights are provided, but not randoms_positions')
-
-        if not self.with_shifted and shifted_weights is not None:
-            raise ValueError('shifted_weights are provided, but not shifted_positions')
-
         def get_weights(weights):
-            is_none = (mpiroot is None and weights is None) or (mpiroot is not None and self.mpicomm.bcast(weights is None, root=mpiroot))
-            if is_none:
-                return 1.
-            if mpiroot is None or self.mpicomm.rank == mpiroot:
-                weights = np.asarray(weights)
-            if mpiroot is not None: # Scatter weight arrays on all ranks
-                weights = mpi.scatter_array(weights, root=mpiroot, mpicomm=self.mpicomm)
-            return weights
+            weights = _format_weights(weights, weight_type='product_individual', mpicomm=self.mpicomm, mpiroot=mpiroot)[0]
+            if weights: return weights[0]
+            return None
 
         self.data_weights = get_weights(data_weights)
         self.randoms_weights = get_weights(randoms_weights)
         self.shifted_weights = get_weights(shifted_weights)
+
+        if not self.with_randoms and self.randoms_weights is not None:
+            raise ValueError('randoms_weights are provided, but not randoms_positions')
+
+        if not self.with_shifted and self.shifted_weights is not None:
+            raise ValueError('shifted_weights are provided, but not shifted_positions')
+
+        for name in ['data_weights', 'randoms_weights', 'shifted_weights']:
+            if getattr(self, name) is None: setattr(self, name, 1.)
 
         def sum_weights(positions, weights):
             if np.ndim(weights) == 0:

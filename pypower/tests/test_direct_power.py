@@ -3,8 +3,9 @@ import tempfile
 
 import numpy as np
 from scipy import special
+from mpi4py import MPI
 
-from pypower import DirectPower, utils, setup_logging
+from pypower import DirectPower, CatalogFFTPower, mpi, utils, setup_logging
 
 
 def generate_catalogs(size=100, boxsize=(1000,)*3, offset=(1000.,0.,0.), n_individual_weights=1, n_bitwise_weights=0, seed=42):
@@ -40,12 +41,33 @@ def dotproduct_normalized(position1, position2):
     return dotproduct(position1, position2)/(norm(position1)*norm(position2))
 
 
-def get_weight(weights1, weights2, n_bitwise_weights=0, nrealizations=None, noffset=1, default_value=0.):
+def wiip(weights, nrealizations=None, noffset=1, default_value=0.):
+    denom = noffset + utils.popcount(*weights)
+    mask = denom == 0
+    denom[mask] = 1.
+    toret = nrealizations/denom
+    toret[mask] = default_value
+    return toret
+
+
+def wpip_single(weights1, weights2, nrealizations=None, noffset=1, default_value=0.):
+    denom = noffset + sum(bin(w1 & w2).count('1') for w1, w2 in zip(weights1, weights2))
+    return default_value if denom == 0 else nrealizations/denom
+
+
+def wiip_single(weights, nrealizations=None, noffset=1, default_value=0.):
+    denom = noffset + utils.popcount(*weights)
+    return default_value if denom == 0 else nrealizations/denom
+
+
+def get_weight(weights1, weights2, n_bitwise_weights=0, nrealizations=None, noffset=1, default_value=0., weight_type='auto'):
     if nrealizations is None:
         weight = 1
     else:
-        denom = noffset + sum(bin(w1 & w2).count('1') for w1, w2 in zip(weights1[:n_bitwise_weights], weights2[:n_bitwise_weights]))
-        weight = default_value if denom == 0 else nrealizations/denom
+        weight = wpip_single(weights1[:n_bitwise_weights], weights2[:n_bitwise_weights], nrealizations=nrealizations, noffset=noffset, default_value=default_value)
+    if weight_type == 'inverse_bitwise_minus_individual':
+        weight -= wiip_single(weights1[:n_bitwise_weights], nrealizations=nrealizations, noffset=noffset, default_value=default_value)\
+                 * wiip_single(weights2[:n_bitwise_weights], nrealizations=nrealizations, noffset=noffset, default_value=default_value)
     for w1, w2 in zip(weights1[n_bitwise_weights:], weights2[n_bitwise_weights:]):
         weight *= w1 * w2
     return weight
@@ -72,7 +94,6 @@ def ref_theta(modes, limits, data1, data2=None, boxsize=None, los='midpoint', el
                     weight = get_weight(weights1, weights2, **kwargs)
                     for ill, ell in enumerate(ells):
                         toret[ill] += weight * (2*ell + 1) * (-1j)**ell * special.spherical_jn(ell, modes * dist) * legendre[ill](mu)
-    #print('npairs', npairs)
     return np.asarray(toret)
 
 
@@ -125,7 +146,8 @@ def test_direct_power():
     list_options = []
     list_options.append({})
     list_options.append({'autocorr':True})
-    list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1})
+    list_options.append({'n_individual_weights':1})
+    list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'weight_type':'inverse_bitwise_minus_individual'})
     list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'iip':1})
     list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'bitwise_type': 'i4', 'iip':1})
     list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'bitwise_type': 'i4', 'iip':1, 'limit_type':'s'})
@@ -138,8 +160,9 @@ def test_direct_power():
             n_individual_weights = options.pop('n_individual_weights',0)
             n_bitwise_weights = options.pop('n_bitwise_weights',0)
             data1, data2 = generate_catalogs(size, boxsize=boxsize, n_individual_weights=n_individual_weights, n_bitwise_weights=n_bitwise_weights, seed=42)
-            #n_individual_weights = 0
             #data1, data2 = data1[:3], data2[:3]
+            #data1 = data1[:3] + [data1[3]*data1[4]]
+            #data2 = data2[:3] + [data2[3]*data2[4]]
             limit_type = options.pop('limit_type', 'theta')
             if limit_type == 'theta':
                 limits = (0., 1.)
@@ -164,21 +187,17 @@ def test_direct_power():
             setdefaultnone(weight_attrs, 'nrealizations', n_bitwise_weights * 64 + 1)
             setdefaultnone(weight_attrs, 'noffset', 1)
             set_default_value = 'default_value' in weight_attrs
-            setdefaultnone(weight_attrs, 'default_value', 0)
-            refdata1, refdata2 = data1.copy(), data2.copy()
             if set_default_value:
                 for w in data1[3:3+n_bitwise_weights] + data2[3:3+n_bitwise_weights]: w[:] = 0 # set to zero to make sure default_value is used
-
-            def wiip(weights):
-                denom = weight_attrs['noffset'] + utils.popcount(*weights)
-                mask = denom == 0
-                denom[mask] = 1.
-                toret = weight_attrs['nrealizations']/denom
-                toret[mask] = weight_attrs['default_value']
-                return toret
+            setdefaultnone(weight_attrs, 'default_value', 0)
+            refdata1, refdata2 = data1.copy(), data2.copy()
+            mpicomm = mpi.COMM_WORLD
+            refdata1 = [mpi.gather_array(d, root=None, mpicomm=mpicomm) for d in refdata1]
+            refdata2 = [mpi.gather_array(d, root=None, mpicomm=mpicomm) for d in refdata2]
 
             def dataiip(data):
-                return data[:3] + [wiip(data[3:3+n_bitwise_weights])] + data[3+n_bitwise_weights:]
+                kwargs = {name: weight_attrs[name] for name in ['nrealizations', 'noffset', 'default_value']}
+                return data[:3] + [wiip(data[3:3+n_bitwise_weights], **kwargs)] + data[3+n_bitwise_weights:]
 
             if iip:
                 refdata1 = dataiip(refdata1)
@@ -196,9 +215,9 @@ def test_direct_power():
 
             if dtype is not None:
                 for ii in range(len(data1)):
-                    if np.issubdtype(data1[ii].dtype, np.floating):
-                        refdata1[ii] = np.asarray(data1[ii], dtype=dtype)
-                        refdata2[ii] = np.asarray(data2[ii], dtype=dtype)
+                    if np.issubdtype(refdata1[ii].dtype, np.floating):
+                        refdata1[ii] = np.asarray(refdata1[ii], dtype=dtype)
+                        refdata2[ii] = np.asarray(refdata2[ii], dtype=dtype)
 
             ref = ref_funcs[limit_type](modes, limits, refdata1, data2=None if autocorr else refdata2, n_bitwise_weights=n_bitwise_weights, **refoptions, **weight_attrs)
 
@@ -210,7 +229,6 @@ def test_direct_power():
                 data1 = update_bit_type(data1)
                 data2 = update_bit_type(data2)
 
-            npos = 3
             if position_type != 'xyz':
 
                 def update_pos_type(data):
@@ -221,18 +239,49 @@ def test_direct_power():
                 data2 = update_pos_type(data2)
 
             def run(**kwargs):
-                return DirectPower(modes, positions1=data1[:npos], positions2=None if autocorr else data2[:npos],
-                                   weights1=data1[npos:], weights2=None if autocorr else data2[npos:], position_type=position_type, bin_type=bin_type,
+                return DirectPower(modes, positions1=data1[:3], positions2=None if autocorr else data2[:3],
+                                   weights1=data1[3:], weights2=None if autocorr else data2[3:], position_type=position_type,
                                    limits=limits, limit_type=limit_type, engine=engine, **kwargs, **options)
 
             test = run()
             assert np.allclose(test.power_nonorm, ref, **tol)
 
             with tempfile.TemporaryDirectory() as tmp_dir:
-                fn = os.path.join(tmp_dir, 'tmp.npy')
+                fn = test.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
                 test.save(fn)
                 test2 = DirectPower.load(fn)
                 assert np.allclose(test.power_nonorm, ref, **tol)
+
+            mpiroot = 0
+            data1 = [mpi.gather_array(d, root=mpiroot, mpicomm=mpicomm) for d in data1]
+            data2 = [mpi.gather_array(d, root=mpiroot, mpicomm=mpicomm) for d in data2]
+            test_mpi = run(mpiroot=mpiroot)
+            assert np.allclose(test_mpi.power_nonorm, test.power_nonorm, **tol)
+
+            if test.mpicomm.rank == 0:
+                test_mpi = run(mpiroot=mpiroot, mpicomm=MPI.COMM_SELF)
+            assert np.allclose(test_mpi.power_nonorm, test.power_nonorm, **tol)
+
+
+def test_catalog_power():
+    nmesh = 128
+    kedges = np.linspace(0., 0.1, 6)
+    ells = (0, 1, 2)
+    resampler = 'tsc'
+    interlacing = 2
+    boxcenter = np.array([3000.,0.,0.])[None,:]
+    dtype = 'f8'
+    data1, data2 = generate_catalogs(size=10000, boxsize=(1000.,)*3, n_individual_weights=1, n_bitwise_weights=2, seed=42)
+    randoms1, randoms2 = generate_catalogs(size=10000, boxsize=(1000.,)*3, n_individual_weights=1, n_bitwise_weights=0, seed=84)
+    limits = (0., 1.)
+    limit_type = 'theta'
+    power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
+                            data_positions2=data2[:3], data_weights2=data2[3:], randoms_positions2=randoms2[:3], randoms_weights2=randoms2[3:],
+                            nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
+                            direct_limits=limits, direct_limit_type=limit_type)
+    direct = DirectPower(power.poles.k, positions1=data1[:3], positions2=data2[:3], weights1=data1[3:], weights2=data2[3:], position_type='xyz',
+                         ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual')
+    assert np.allclose(power.poles.power_direct_nonorm, direct.power_nonorm)
 
 
 if __name__ == '__main__':
@@ -240,3 +289,4 @@ if __name__ == '__main__':
     setup_logging()
     test_bitwise_weight()
     test_direct_power()
+    test_catalog_power()
