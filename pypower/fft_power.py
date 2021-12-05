@@ -917,7 +917,7 @@ class MeshFFTPower(BaseClass):
             kedges = {}
         if isinstance(kedges, dict):
             kmin = kedges.get('min', 0.)
-            kmax = kedges.get('max', np.pi/(self.nmesh/self.boxsize).max())
+            kmax = kedges.get('max', np.pi/(self.boxsize/self.nmesh).max())
             dk = kedges.get('step', None)
             if dk is None:
                 # find unique edges
