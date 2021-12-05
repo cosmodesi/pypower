@@ -824,7 +824,7 @@ class MeshFFTPower(BaseClass):
             mesh = locals()[name]
             if isinstance(mesh, CatalogMesh):
                 if mesh.mpicomm.rank == 0:
-                    self.log_info('Painting catalog {:d} to mesh.'.format(i+1))
+                    self.log_info('Painting catalog {:d} to mesh {}.'.format(i+1, str(mesh)))
                 setattr(self, name, mesh.to_mesh(dtype=get_dtype(mesh)))
                 if mesh.mpicomm.rank == 0:
                     self.log_info('Done painting catalog {:d} to mesh.'.format(i+1))
@@ -907,7 +907,7 @@ class MeshFFTPower(BaseClass):
 
     def _set_edges(self, edges):
         # Set :attr:`edges`
-        if edges is None or (not isinstance(edges[0], dict) and np.ndim(edges[0]) == 0):
+        if edges is None or isinstance(edges, dict) or (not isinstance(edges[0], dict) and np.ndim(edges[0]) == 0):
             edges = (edges,)
         if len(edges) == 1:
             kedges, muedges = edges[0], None

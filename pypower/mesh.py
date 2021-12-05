@@ -301,6 +301,10 @@ class CatalogMesh(BaseClass):
         self._set_resampler(resampler)
         self._set_interlacing(interlacing)
 
+    def __repr__(self):
+        info = ['{}={}'.format(name, getattr(self,name)) for name in ['nmesh', 'boxsize', 'boxcenter', 'dtype']]
+        return '{}({})'.format(self.__class__.__name__,', '.join(info))
+
     @property
     def compensation(self):
         """Return dictionary specifying compensation scheme for particle-mesh resampling."""

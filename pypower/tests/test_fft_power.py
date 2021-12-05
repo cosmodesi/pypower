@@ -85,7 +85,7 @@ def test_mesh_power():
         mesh = data.to_nbodykit().to_mesh(position='Position', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
         return FFTPower(mesh, mode='2d', poles=ells, Nmu=len(muedges) - 1, los=[1,0,0], dk=dk, kmin=kedges[0], kmax=kedges[-1]+1e-9)
 
-    def get_mesh_power(data, los, edges):
+    def get_mesh_power(data, los, edges=(kedges, muedges)):
         mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
         return MeshFFTPower(mesh, ells=ells, los=los, edges=edges)
 
@@ -200,14 +200,14 @@ def test_catalog_power():
         mesh = fkp.to_mesh(position='Position', comp_weight='Weight', nbar='NZ', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=cdtype)
         return ConvolvedFFTPower(mesh, poles=ells, dk=dk, kmin=kedges[0], kmax=kedges[-1]+1e-9)
 
-    def get_catalog_power(data, randoms, position_type='pos'):
+    def get_catalog_power(data, randoms, position_type='pos', edges=kedges):
         data_positions, randoms_positions = data['Position'], randoms['Position']
         if position_type == 'xyz':
             data_positions, randoms_positions = data['Position'].T, randoms['Position'].T
         elif position_type == 'rdd':
             data_positions, randoms_positions = utils.cartesian_to_sky(data['Position'].T), utils.cartesian_to_sky(randoms['Position'].T)
         return CatalogFFTPower(data_positions1=data_positions, data_weights1=data['Weight'], randoms_positions1=randoms_positions, randoms_weights1=randoms['Weight'],
-                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type=position_type, dtype=dtype)
+                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=edges, position_type=position_type, dtype=dtype)
 
     def get_catalog_mesh_power(data, randoms):
         mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
@@ -215,12 +215,14 @@ def test_catalog_power():
         return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)
 
     ref_power = get_ref_power(data, randoms)
+    ref_kedges = ref_power.poles.edges['k']
     ref_norm = ref_power.attrs['randoms.norm']
 
     list_options = []
     list_options.append({'position_type':'pos'})
     list_options.append({'position_type':'xyz'})
     list_options.append({'position_type':'rdd'})
+    list_options.append({'edges':{'min':ref_kedges[0],'max':ref_kedges[-1],'step':ref_kedges[1] - ref_kedges[0]}})
 
     for options in list_options:
         result = get_catalog_power(data, randoms, **options)
