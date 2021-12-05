@@ -208,7 +208,7 @@ class BaseDirectPowerEngine(BaseClass):
     """Direct power spectrum measurement, summing over particle pairs."""
 
     def __init__(self, modes, positions1, positions2=None, weights1=None, weights2=None, ells=(0, 2, 4), limits=(0., 2./60.), limit_type='degree',
-                 position_type='xyz', weight_type='auto', weight_attrs=None, los='endpoint', boxsize=None, mpiroot=None, mpicomm=mpi.COMM_WORLD, **kwargs):
+                 position_type='xyz', weight_type='auto', weight_attrs=None, los='endpoint', boxsize=None, dtype='f8', mpiroot=None, mpicomm=mpi.COMM_WORLD, **kwargs):
         r"""
         Initialize :class:`BaseDirectPowerEngine`.
 
@@ -277,6 +277,9 @@ class BaseDirectPowerEngine(BaseClass):
         boxsize : array, float, default=None
             For periodic wrapping, the side-length(s) of the periodic cube.
 
+        dtype : string, dtype, default='f8'
+            The data type to use for input positions and weights.
+
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scatted across all ranks.
             Else the MPI rank where input positions and weights are gathered.
@@ -285,6 +288,7 @@ class BaseDirectPowerEngine(BaseClass):
             The MPI communicator.
         """
         self.mpicomm = mpicomm
+        self.dtype = np.dtype(dtype)
         self._set_modes(modes)
         self._set_ells(ells)
         self._set_los(los)
@@ -351,8 +355,8 @@ class BaseDirectPowerEngine(BaseClass):
             self.boxsize = _make_array(boxsize, 3, dtype='f8')
 
     def _set_positions(self, positions1, positions2=None, position_type='xyz', mpiroot=None):
-        self.positions1 = _format_positions(positions1, position_type=position_type, mpicomm=self.mpicomm, mpiroot=mpiroot)
-        self.positions2 = _format_positions(positions2, position_type=position_type, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.positions1 = _format_positions(positions1, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.positions2 = _format_positions(positions2, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
         self.autocorr = positions2 is None
 
     def _set_weights(self, weights1, weights2=None, weight_type='auto', weight_attrs=None, mpiroot=None):
@@ -376,7 +380,7 @@ class BaseDirectPowerEngine(BaseClass):
             default_value = weight_attrs.get('default_value', 0.)
             self.weight_attrs.update(noffset=noffset, default_value=default_value)
 
-            self.weights1, n_bitwise_weights1 = _format_weights(weights1, weight_type=weight_type, size=len(self.positions1), mpicomm=self.mpicomm, mpiroot=mpiroot)
+            self.weights1, n_bitwise_weights1 = _format_weights(weights1, weight_type=weight_type, size=len(self.positions1), dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
 
             def get_nrealizations(weights):
                 nrealizations = weight_attrs.get('nrealizations', None)
@@ -390,7 +394,7 @@ class BaseDirectPowerEngine(BaseClass):
                 self.n_bitwise_weights = n_bitwise_weights1
 
             else:
-                self.weights2, n_bitwise_weights2 = _format_weights(weights2, weight_type=weight_type, size=len(self.positions2), mpicomm=self.mpicomm, mpiroot=mpiroot)
+                self.weights2, n_bitwise_weights2 = _format_weights(weights2, weight_type=weight_type, size=len(self.positions2), dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
 
                 if n_bitwise_weights2 == n_bitwise_weights1:
 

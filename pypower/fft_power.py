@@ -1315,7 +1315,7 @@ class CatalogFFTPower(MeshFFTPower):
             When ``boxsize`` is determined from ``positions``, take ``boxpad`` times the smallest box enclosing ``positions`` as ``boxsize``.
 
         dtype : string, dtype, default='f8'
-            The data type of the mesh when painting.
+            The data type to use for input positions and weights and the mesh.
 
         resampler : string, ResampleWindow, default='cic'
             Resampler used to assign particles to the mesh.
@@ -1387,14 +1387,14 @@ class CatalogFFTPower(MeshFFTPower):
         weight_attrs = weight_attrs or {}
         d = {}
         for name in ['data_positions1', 'data_positions2', 'randoms_positions1', 'randoms_positions2', 'shifted_positions1', 'shifted_positions2']:
-            tmp = _format_positions(locals()[name], position_type=position_type, mpicomm=mpicomm, mpiroot=mpiroot)
+            tmp = _format_positions(locals()[name], position_type=position_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
             if tmp is not None:
                 positions.append(tmp)
             d[name] = tmp
 
         dw, n_bitwise_weights = {}, {}
         for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']:
-            dw[name], n_bitwise_weights[name] = _format_weights(locals()[name], weight_type=weight_type, mpicomm=mpicomm, mpiroot=mpiroot)
+            dw[name], n_bitwise_weights[name] = _format_weights(locals()[name], weight_type=weight_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
 
         with_shifted = d['shifted_positions1'] is not None
         with_randoms = d['randoms_positions1'] is not None

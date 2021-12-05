@@ -269,7 +269,7 @@ class CatalogMesh(BaseClass):
             When ``boxsize`` is determined from ``positions``, take ``boxpad`` times the smallest box enclosing ``positions`` as ``boxsize``.
 
         dtype : string, dtype, default='f8'
-            The data type of the mesh when painting.
+            The data type to use for input positions and weights and the mesh.
 
         resampler : string, ResampleWindow, default='cic'
             Resampler used to assign particles to the mesh.
@@ -348,17 +348,17 @@ class CatalogMesh(BaseClass):
     def _set_positions(self, data_positions, randoms_positions=None, shifted_positions=None, position_type='xyz', mpiroot=None):
         # Set data and optionally shifted and randoms positions, scattering on all ranks if not already
 
-        self.data_positions = _format_positions(data_positions, position_type=position_type, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.data_positions = _format_positions(data_positions, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
         if self.data_positions is None:
             raise ValueError('Provide at least an array of data positions')
-        self.randoms_positions = _format_positions(randoms_positions, position_type=position_type, mpicomm=self.mpicomm, mpiroot=mpiroot)
-        self.shifted_positions = _format_positions(shifted_positions, position_type=position_type, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.randoms_positions = _format_positions(randoms_positions, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.shifted_positions = _format_positions(shifted_positions, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
 
     def _set_weights(self, data_weights, randoms_weights=None, shifted_weights=None, mpiroot=None):
         # Set data and optionally shifted and randoms weights and their sum, scattering on all ranks if not already
 
         def get_weights(weights):
-            weights = _format_weights(weights, weight_type='product_individual', mpicomm=self.mpicomm, mpiroot=mpiroot)[0]
+            weights = _format_weights(weights, weight_type='product_individual', dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)[0]
             if weights: return weights[0]
             return None
 
