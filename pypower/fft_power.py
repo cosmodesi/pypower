@@ -871,6 +871,8 @@ class MeshFFTPower(BaseClass):
 
         self._set_edges(edges)
         self._set_los(los)
+        swap = self.los_type == 'firstpoint'
+        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1 # swap meshes + complex conjugaison at the end of run()
         self._set_ells(ells)
         self.wnorm = wnorm
         if wnorm is None:
@@ -884,6 +886,7 @@ class MeshFFTPower(BaseClass):
         if self.mpicomm.rank == 0:
             self.log_info('Running power spectrum estimation.')
         self.run()
+        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1
 
     def _set_compensations(self, compensations):
         # Set :attr:`compensations`
@@ -1208,8 +1211,7 @@ class MeshFFTPower(BaseClass):
         norm = self.nmesh.prod()**2
         for ill, ell in enumerate(ells):
             result[ill] *= norm
-            if ell % 2 == 1 and self.los_type == 'firstpoint':
-                result[ill] = result[ill].conj()
+            if self.los_type == 'firstpoint': result[ill] = result[ill].conj()
 
         poles = np.array([result[ells.index(ell)] for ell in self.ells])
         # Format the power results into :class:`PolePowerSpectrum` instance
@@ -1227,6 +1229,7 @@ class CatalogFFTPower(MeshFFTPower):
                 shifted_positions1=None, shifted_positions2=None,
                 data_weights1=None, data_weights2=None, randoms_weights1=None, randoms_weights2=None,
                 shifted_weights1=None, shifted_weights2=None,
+                D1D2_twopoint_weights=None, D1R2_twopoint_weights=None, D2R1_twopoint_weights=None, D1S2_twopoint_weights=None, D2S1_twopoint_weights=None,
                 edges=None, ells=(0, 2, 4), los=None,
                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=1.5, dtype='f8',
                 resampler='cic', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
@@ -1345,6 +1348,7 @@ class CatalogFFTPower(MeshFFTPower):
                 - "auto": automatically choose weighting based on input ``weights1`` and ``weights2``,
                    i.e. ``None`` when ``weights1`` and ``weights2`` are ``None``,
                    "inverse_bitwise" if one of input weights is integer, else "product_individual".
+            In addition, angular upweights can be provided with ``D1D2_twopoint_weights``, ``D1R2_twopoint_weights``, etc.
 
         weight_attrs : dict, default=None
             Dictionary of weighting scheme attributes. In case ``weight_type`` is "inverse_bitwise",
@@ -1354,6 +1358,30 @@ class CatalogFFTPower(MeshFFTPower):
             and "default_value", the default value of pairwise weights if the denominator is zero (defaulting to 0).
             Inverse probability weight is then computed as: :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2}))`.
             For example, for the "zero-truncated" estimator (arXiv:1912.08803), one would use noffset = 0.
+
+        D1D2_twopoint_weights : WeightTwoPointEstimator, default=None
+            Weights to be applied to each pair of particles between first and second data catalogs.
+            A :class:`WeightTwoPointEstimator` instance (from *pycorr*) or any object with arrays ``sep``
+            (separations) and ``weight`` (weight at given separation) as attributes
+            (i.e. to be accessed through ``twopoint_weights.sep``, ``twopoint_weights.weight``)
+            or as keys (i.e. ``twopoint_weights['sep']``, ``twopoint_weights['weight']``)
+            or as element (i.e. ``sep, weight = twopoint_weights``).
+
+        D1R2_twopoint_weights : WeightTwoPointEstimator, default=None
+            Weights to be applied to each pair of particles between first data catalog and second randoms catalog.
+            See ``D1D2_twopoint_weights``.
+
+        D2R1_twopoint_weights : WeightTwoPointEstimator, default=None
+            Weights to be applied to each pair of particles between second data catalog and first randoms catalog.
+            See ``D1D2_twopoint_weights``.
+
+        D1S2_twopoint_weights : WeightTwoPointEstimator, default=None
+            Weights to be applied to each pair of particles between first data catalog and second shifted catalog.
+            See ``D1D2_twopoint_weights``.
+
+        D2S1_twopoint_weights : WeightTwoPointEstimator, default=None
+            Weights to be applied to each pair of particles between second data catalog and first shifted catalog.
+            See ``D1D2_twopoint_weights``.
 
         direct_engine : string, default='kdtree'
             Engine for direct power spectrum computation (if input weights are bitwise weights), one of ["kdtree"].
@@ -1383,23 +1411,26 @@ class CatalogFFTPower(MeshFFTPower):
         mpicomm : MPI communicator, default=MPI.COMM_WORLD
             The MPI communicator.
         """
-        positions = []
+        bpositions = []
         weight_attrs = weight_attrs or {}
-        d = {}
+
+        positions = {}
         for name in ['data_positions1', 'data_positions2', 'randoms_positions1', 'randoms_positions2', 'shifted_positions1', 'shifted_positions2']:
             tmp = _format_positions(locals()[name], position_type=position_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
             if tmp is not None:
-                positions.append(tmp)
-            d[name] = tmp
+                bpositions.append(tmp)
+            label = name.replace('data_positions','D').replace('randoms_positions','R').replace('shifted_positions','S')
+            positions[label] = tmp
 
-        dw, n_bitwise_weights = {}, {}
+        bweights, n_bitwise_weights = {}, {}
         for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']:
-            dw[name], n_bitwise_weights[name] = _format_weights(locals()[name], weight_type=weight_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
+            label = name.replace('data_weights','D').replace('randoms_weights','R').replace('shifted_weights','S')
+            bweights[label], n_bitwise_weights[label] = _format_weights(locals()[name], weight_type=weight_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
 
-        with_shifted = d['shifted_positions1'] is not None
-        with_randoms = d['randoms_positions1'] is not None
-        autocorr = d['data_positions2'] is None
-        if autocorr and (d['randoms_positions2'] is not None or d['shifted_positions2'] is not None):
+        with_shifted = positions['S1'] is not None
+        with_randoms = positions['R1'] is not None
+        autocorr = positions['D2'] is None
+        if autocorr and (positions['R2'] is not None or positions['S2'] is not None):
             raise ValueError('randoms_positions2 or shifted_positions2 are provided, but not data_positions2')
 
         weight_attrs = weight_attrs.copy()
@@ -1412,21 +1443,21 @@ class CatalogFFTPower(MeshFFTPower):
             if nrealizations is None: nrealizations = get_default_nrealizations(weights)
             return nrealizations
 
-        for name in dw:
+        weights = {}
+        for name in bweights:
             if n_bitwise_weights[name]:
-                bitwise_weight = dw[name][:n_bitwise_weights[name]]
+                bitwise_weight = bweights[name][:n_bitwise_weights[name]]
                 nrealizations = get_nrealizations(bitwise_weight)
-                d[name] = get_inverse_probability_weight(bitwise_weight, noffset=noffset, nrealizations=nrealizations, default_value=default_value)
-                if len(dw[name]) > n_bitwise_weights[name]:
-                    d[name] *= dw[name][n_bitwise_weights[name]]
-            elif len(dw[name]):
-                d[name] = dw[name][0]
+                weights[name] = get_inverse_probability_weight(bitwise_weight, noffset=noffset, nrealizations=nrealizations, default_value=default_value)
+                if len(bweights[name]) > n_bitwise_weights[name]:
+                    weights[name] *= bweights[name][n_bitwise_weights[name]] # individual weights
+            elif len(bweights[name]):
+                weights[name] = bweights[name][0] # individual weights
             else:
-                d[name] = None
-
+                weights[name] = None
 
         # Get box encompassing all catalogs
-        nmesh, boxsize, boxcenter = _get_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=positions, boxpad=boxpad, mpicomm=mpicomm)
+        nmesh, boxsize, boxcenter = _get_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=bpositions, boxpad=boxpad, mpicomm=mpicomm)
 
         # Get catalog meshes
         def get_mesh(data_positions, data_weights=None, randoms_positions=None, randoms_weights=None, shifted_positions=None, shifted_weights=None):
@@ -1435,34 +1466,42 @@ class CatalogFFTPower(MeshFFTPower):
                                nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, resampler=resampler, interlacing=interlacing,
                                position_type='pos', dtype=dtype, mpicomm=mpicomm)
 
-        mesh1 = get_mesh(d['data_positions1'], data_weights=d['data_weights1'], randoms_positions=d['randoms_positions1'], randoms_weights=d['randoms_weights1'],
-                         shifted_positions=d['shifted_positions1'], shifted_weights=d['shifted_weights1'])
+        mesh1 = get_mesh(positions['D1'], data_weights=weights['D1'], randoms_positions=positions['R1'], randoms_weights=weights['R1'],
+                         shifted_positions=positions['S1'], shifted_weights=weights['S1'])
         mesh2 = None
         if not autocorr:
-            mesh2 = get_mesh(d['data_positions2'], data_weights=d['data_weights2'], randoms_positions=d['randoms_positions2'], randoms_weights=d['randoms_weights2'],
-                             shifted_positions=d['shifted_positions2'], shifted_weights=d['shifted_weights2'])
+            mesh2 = get_mesh(positions['D2'], data_weights=weights['D2'], randoms_positions=positions['R2'], randoms_weights=weights['R2'],
+                             shifted_positions=positions['S2'], shifted_weights=weights['S2'])
         # Now, run power spectrum estimation
         super(CatalogFFTPower,self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
 
-        D2 = D1 = 'data_positions1'
-        if not autocorr: D2 = 'data_positions2'
-        S2 = S1 = 'shifted_positions1' if with_shifted else 'randoms_positions1'
-        if not autocorr: S2 = 'shifted_positions2' if with_shifted else 'randoms_positions2'
 
-        pairs = [(D1, D2)]
-        if with_shifted or with_randoms:
-            pairs.append((S1, S2))
-            pairs.append((D1, S2))
-            if not autocorr:
-                pairs.append((D2, S1))
+        if self.ells:
 
-        DirectPowerEngine = get_direct_power_engine(direct_engine)
-        for (p1, p2) in pairs:
-            w1, w2 = p1.replace('positions', 'weights'), p2.replace('positions', 'weights')
-            if n_bitwise_weights[w1] and n_bitwise_weights[w2] and self.ells:
-                power = DirectPowerEngine(self.poles.k, d[p1], weights1=dw[w1], positions2=d[p2], weights2=dw[w2], ells=ells, limits=direct_limits, limit_type=direct_limit_type,
-                                          weight_type='inverse_bitwise_minus_individual', weight_attrs=weight_attrs, los=los, boxsize=self.boxsize if periodic else None,
-                                          position_type='pos', mpicomm=self.mpicomm).power_nonorm
-                if autocorr and (p1, p2) == (D1, S2): # double counting
-                    power *= 2
-                self.poles.power_direct_nonorm += power
+            twopoint_weights = {'D1D2':D1D2_twopoint_weights, 'D1R2':D1R2_twopoint_weights, 'D2R1':D2R1_twopoint_weights, 'D1S2':D1S2_twopoint_weights, 'D2S1':D2S1_twopoint_weights}
+
+            pairs = [(1, 'D1', 'D2')]
+            if with_shifted:
+                S1, S2 = 'S1', 'S2'
+            else:
+                S1, S2 = 'R1', 'R2'
+            if with_shifted or with_randoms:
+                #pairs.append((1, S1, S2))
+                if autocorr:
+                    pairs.append((-2, 'D1', S2))
+                else:
+                    pairs.append((-1, 'D1', S2))
+                    pairs.append((-1, 'D2', S1))
+
+            DirectPowerEngine = get_direct_power_engine(direct_engine)
+            for coeff, label1, label2 in pairs:
+                label12 = label1+label2
+                if autocorr:
+                    if label12 == 'D1D2': n_bitwise_weights[label2] = n_bitwise_weights[label1]
+                    if label12 == 'D1R2': label2 = 'R1'
+                    if label12 == 'D1S2': label2 = 'S1'
+                if (n_bitwise_weights[label1] and n_bitwise_weights[label2]) or twopoint_weights[label12]:
+                    power = DirectPowerEngine(self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions[label2], weights2=bweights[label2], ells=ells,
+                                              limits=direct_limits, limit_type=direct_limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights[label12],
+                                              weight_attrs=weight_attrs, los=los, boxsize=self.boxsize if periodic else None, position_type='pos', mpicomm=self.mpicomm).power_nonorm
+                    self.poles.power_direct_nonorm += coeff * power

@@ -362,8 +362,11 @@ class CatalogMesh(BaseClass):
         # Set data and optionally shifted and randoms weights and their sum, scattering on all ranks if not already
 
         def get_weights(weights):
+            if np.isscalar(weights):
+                return weights
             weights = _format_weights(weights, weight_type='product_individual', dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)[0]
-            if weights: return weights[0]
+            if weights:
+                return weights[0]
             return None
 
         self.data_weights = get_weights(data_weights)

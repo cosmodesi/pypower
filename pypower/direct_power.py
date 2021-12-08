@@ -12,6 +12,9 @@ from .utils import BaseClass
 from . import mpi, utils
 
 
+_tree_npairs_max = 1000 * 1000
+
+
 def _make_array(value, shape, dtype='f8'):
     # Return numpy array filled with value
     toret = np.empty(shape, dtype=dtype)
@@ -54,7 +57,7 @@ def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, defa
     if nrealizations is None:
         nrealizations = get_default_nrealizations(weights[0])
     #denom = noffset + sum(utils.popcount(w1 & w2) for w1, w2 in zip(*weights))
-    denom = noffset + sum(utils.popcount(_vlogical_and(*weight)) for weight in zip(*weights))
+    denom = noffset + sum((utils.popcount(_vlogical_and(*weight)) for weight in zip(*weights)))
     mask = denom == 0
     denom[mask] = 1
     toret = nrealizations/denom
@@ -208,7 +211,8 @@ class BaseDirectPowerEngine(BaseClass):
     """Direct power spectrum measurement, summing over particle pairs."""
 
     def __init__(self, modes, positions1, positions2=None, weights1=None, weights2=None, ells=(0, 2, 4), limits=(0., 2./60.), limit_type='degree',
-                 position_type='xyz', weight_type='auto', weight_attrs=None, los='endpoint', boxsize=None, dtype='f8', mpiroot=None, mpicomm=mpi.COMM_WORLD, **kwargs):
+                 position_type='xyz', weight_type='auto', weight_attrs=None, twopoint_weights=None, los='endpoint', boxsize=None,
+                 dtype='f8', mpiroot=None, mpicomm=mpi.COMM_WORLD, **kwargs):
         r"""
         Initialize :class:`BaseDirectPowerEngine`.
 
@@ -260,6 +264,8 @@ class BaseDirectPowerEngine(BaseClass):
                    i.e. ``None`` when ``weights1`` and ``weights2`` are ``None``,
                    "inverse_bitwise" if one of input weights is integer, else "product_individual".
 
+            In addition, angular upweights can be provided with ``twopoint_weights``.
+
         weight_attrs : dict, default=None
             Dictionary of weighting scheme attributes. In case ``weight_type`` is "inverse_bitwise",
             one can provide "nrealizations", the total number of realizations (*including* current one;
@@ -268,6 +274,14 @@ class BaseDirectPowerEngine(BaseClass):
             and "default_value", the default value of pairwise weights if the denominator is zero (defaulting to 0).
             Inverse probability weight is then computed as: :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2}))`.
             For example, for the "zero-truncated" estimator (arXiv:1912.08803), one would use noffset = 0.
+
+        twopoint_weights : WeightTwoPointEstimator, default=None
+            Weights to be applied to each pair of particles.
+            A :class:`WeightTwoPointEstimator` instance (from *pycorr*) or any object with arrays ``sep``
+            (separations) and ``weight`` (weight at given separation) as attributes
+            (i.e. to be accessed through ``twopoint_weights.sep``, ``twopoint_weights.weight``)
+            or as keys (i.e. ``twopoint_weights['sep']``, ``twopoint_weights['weight']``)
+            or as element (i.e. ``sep, weight = twopoint_weights``).
 
         los : string, array, default=None
             If ``los`` is 'firstpoint' (resp. 'endpoint', 'midpoint'), use local (varying) first-point (resp. end-point, mid-point) line-of-sight.
@@ -295,7 +309,7 @@ class BaseDirectPowerEngine(BaseClass):
         self._set_limits(limits, limit_type=limit_type)
         self._set_boxsize(boxsize=boxsize)
         self._set_positions(positions1, positions2=positions2, position_type=position_type, mpiroot=mpiroot)
-        self._set_weights(weights1, weights2=weights2, weight_type=weight_type, weight_attrs=weight_attrs, mpiroot=mpiroot)
+        self._set_weights(weights1, weights2=weights2, weight_type=weight_type, twopoint_weights=twopoint_weights, weight_attrs=weight_attrs, mpiroot=mpiroot)
         self.attrs = kwargs
         self.run()
 
@@ -359,7 +373,7 @@ class BaseDirectPowerEngine(BaseClass):
         self.positions2 = _format_positions(positions2, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
         self.autocorr = positions2 is None
 
-    def _set_weights(self, weights1, weights2=None, weight_type='auto', weight_attrs=None, mpiroot=None):
+    def _set_weights(self, weights1, weights2=None, weight_type='auto', twopoint_weights=None, weight_attrs=None, mpiroot=None):
 
         if weight_type is not None: weight_type = weight_type.lower()
         allowed_weight_types = [None, 'auto', 'product_individual', 'inverse_bitwise', 'inverse_bitwise_minus_individual']
@@ -416,6 +430,30 @@ class BaseDirectPowerEngine(BaseClass):
                         self.log_info('Setting IIP weights for second catalog.')
                     else:
                         raise ValueError('Incompatible length of bitwise weights: {:d} and {:d} bytes'.format(n_bitwise_weights1, n_bitwise_weights2))
+
+        if len(self.weights1) == len(self.weights2) + 1:
+            self.weights2.append(np.ones(len(self.positions1), dtype=self.dtype))
+        elif len(self.weights1) == len(self.weights2) - 1:
+            self.weights1.append(np.ones(len(self.positions2), dtype=self.dtype))
+        elif len(self.weights1) != len(self.weights2):
+            raise ValueError('Something fishy happened with weights; number of weights1/weights2 is {:d}/{:d}'.format(len(self.weights1),len(self.weights2)))
+
+        self.twopoint_weights = twopoint_weights
+        if twopoint_weights is not None:
+            from collections import namedtuple
+            TwoPointWeight = namedtuple('TwoPointWeight', ['sep', 'weight'])
+            try:
+                sep = twopoint_weights.sep
+                weight = twopoint_weights.weight
+            except AttributeError:
+                try:
+                    sep = twopoint_weights['sep']
+                    weight = twopoint_weights['weight']
+                except IndexError:
+                    sep, weight = twopoint_weights
+            # just to make sure we use the correct dtype
+            self.twopoint_weights = TwoPointWeight(sep=np.cos(np.radians(sep[::-1]), dtype=self.dtype),
+                                                   weight=np.array(weight[::-1], dtype=self.dtype))
 
     def _get_inverse_probability_weight(self, *weights):
         return get_inverse_probability_weight(*weights, noffset=self.weight_attrs['noffset'], nrealizations=self.weight_attrs['nrealizations'],
@@ -479,14 +517,6 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
         rank = self.mpicomm.rank
         start = time.time()
         ells = sorted(set(self.ells))
-        (dlimit_positions1, dpositions1, dweights1), (dlimit_positions2, dpositions2, dweights2) = self._mpi_decompose()
-        autocorr = dpositions2 is dpositions1
-        dlimit_positions = dlimit_positions1
-        # Very unfortunately, cKDTree.query_pairs does not handle cross-correlations...
-        # But I feel this could be changed super easily here:
-        # https://github.com/scipy/scipy/blob/47bb6febaa10658c72962b9615d5d5aa2513fa3a/scipy/spatial/ckdtree/src/query_pairs.cxx#L210
-        if not autocorr:
-            dlimit_positions = np.concatenate([dlimit_positions1, dlimit_positions2], axis=0)
 
         kwargs = {'leafsize': 16, 'compact_nodes': True, 'copy_data': False, 'balanced_tree': True}
         for name in kwargs:
@@ -503,65 +533,111 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                 tmp = weight * special.spherical_jn(ell, self.modes[:,None]*distance, derivative=False) * legendre[ill](mu)
                 result[ill] += np.sum(tmp, axis=-1)
 
-        tree = spatial.cKDTree(dlimit_positions, **kwargs, boxsize=None)
-        pairs = tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray')
-        distance = utils.distance((dlimit_positions[pairs[:,0]] - dlimit_positions[pairs[:,1]]).T)
-        pairs = pairs[(distance > 0.) & (distance >= self.limits[0]) & (distance < self.limits[1])]
+        # We proceed by slab to avoid blowing up the memory
+        def tree_slab(d1, d2):
+            swap = len(d2[0]) < len(d1[0])
+            if swap:
+                d1, d2 = d2, d1
+            # First estimate number of pairs from a subsample
+            size1, size2 = len(d1[0]), len(d2[0])
+            size_max, seed = 1000, 42
+            size1_downsample, size2_downsample = min(size1, size_max), min(size2, size_max)
+            rng = np.random.RandomState(seed=seed)
+            dpositions = np.concatenate([d[0][rng.choice(size, size_downsample, replace=False)] for d, size, size_downsample\
+                                        in zip([d1, d2], [size1, size2], [size1_downsample, size2_downsample])])
+            tree = spatial.cKDTree(dpositions, **kwargs, boxsize=None)
+            npairs_downsample = len(tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray'))
+            npairs_downsample *= 1 + 3 / npairs_downsample**0.5 # 3 sigma margin
+            npairs_downsample *= size1 / size1_downsample # scale to size of d1
+            npairs_max = _tree_npairs_max
+            nslabs = int(size2 / size2_downsample * npairs_downsample / npairs_max + 1.)
+            if nslabs == 1: # do not touch autocorrelation
+                yield (d2, d1) if swap else (d1, d2)
+            else:
+                for islab in range(nslabs):
+                    sl = slice(islab*size2//nslabs,(islab+1)*size2//nslabs)
+                    tmp2 = tuple(d[sl] for d in d2[:-1]) + ([d[sl] for d in d2[-1]],)
+                    yield (tmp2, d1) if swap else (d1, tmp2)
 
-        if not autocorr: # Let us remove restrict to the pairs 1 <-> 2 (removing 1 <-> 1 and 2 <-> 2)
-            pairs = pairs[(pairs[:,0] < dlimit_positions1.shape[0]) & (pairs[:,1] >= dlimit_positions1.shape[0])]
-            pairs[:,1] -= dlimit_positions1.shape[0]
-        del tree
-        del dlimit_positions
+        for (dlimit_positions1, dpositions1, dweights1), (dlimit_positions2, dpositions2, dweights2) in tree_slab(*self._mpi_decompose()):
 
-        dpositions1, dpositions2 = dpositions1[pairs[:,0]], dpositions2[pairs[:,1]]
-        dweights1, dweights2 = [w[pairs[:,0]] for w in dweights1], [w[pairs[:,1]] for w in dweights2]
-        del pairs
-        del distance
+            autocorr = dpositions2 is dpositions1
+            dlimit_positions = dlimit_positions1
+            # Very unfortunately, cKDTree.query_pairs does not handle cross-correlations...
+            # But I feel this could be changed super easily here:
+            # https://github.com/scipy/scipy/blob/47bb6febaa10658c72962b9615d5d5aa2513fa3a/scipy/spatial/ckdtree/src/query_pairs.cxx#L210
+            if not autocorr:
+                dlimit_positions = np.concatenate([dlimit_positions1, dlimit_positions2], axis=0)
 
-        weight = 1.
-        if self.n_bitwise_weights:
-            weight = self._get_inverse_probability_weight(dweights1[:self.n_bitwise_weights], dweights2[:self.n_bitwise_weights])
-        if self.weight_type == 'inverse_bitwise_minus_individual':
-            weight -= self._get_inverse_probability_weight(dweights1[:self.n_bitwise_weights]) * self._get_inverse_probability_weight(dweights2[:self.n_bitwise_weights])
-        if len(dweights1) > self.n_bitwise_weights:
-            weight *= dweights1[-1] * dweights2[-1] # single individual weight, at the end
+            tree = spatial.cKDTree(dlimit_positions, **kwargs, boxsize=None)
+            pairs = tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray')
+            distance = utils.distance((dlimit_positions[pairs[:,0]] - dlimit_positions[pairs[:,1]]).T)
+            pairs = pairs[(distance > 0.) & (distance >= self.limits[0]) & (distance < self.limits[1])]
 
-        diff = dpositions2 - dpositions1
-        distance = utils.distance(diff.T)
-        if self.los_type == 'global':
-            los = self.los
-            mu = np.sum(diff * los, axis=-1)/distance
-        else:
-            if self.los_type in ['firstpoint', 'endpoint']:
-                # Calculation using the endpoint los; we switch to the firstpoint los at the end
-                mu1 = np.sum(diff * normalize(dpositions2), axis=-1)/distance
-                if autocorr:
-                    mu2 = - np.sum(diff * normalize(dpositions1), axis=-1)/distance # i>j and i<j
-            elif self.los_type == 'midpoint':
-                mu = np.sum(diff * normalize(dpositions1 + dpositions2), axis=-1)/distance
-        del diff
+            if not autocorr: # Let us remove restrict to the pairs 1 <-> 2 (removing 1 <-> 1 and 2 <-> 2)
+                pairs = pairs[(pairs[:,0] < dlimit_positions1.shape[0]) & (pairs[:,1] >= dlimit_positions1.shape[0])]
+                pairs[:,1] -= dlimit_positions1.shape[0]
+            del tree
+            del dlimit_positions
 
-        # To avoid memory issues when performing distance*modes product, work by slabs
-        nslabs_pairs = len(ells) * len(self.modes)
-        npairs = distance.size
+            dpositions1, dpositions2 = dpositions1[pairs[:,0]], dpositions2[pairs[:,1]]
+            dweights1, dweights2 = [w[pairs[:,0]] for w in dweights1], [w[pairs[:,1]] for w in dweights2]
+            del pairs
+            del distance
 
-        for islab in range(nslabs_pairs):
-            sl = slice(islab*npairs//nslabs_pairs, (islab+1)*npairs//nslabs_pairs, 1)
-            d = distance[sl]
-            w = 1. if np.ndim(weight) == 0 else weight[sl]
-            if self.los_type in ['global', 'midpoint']:
-                power_slab(d, mu[sl], (1. + autocorr)*w) # 2 factor as i < j
-            else: # firstpoint, endpoint
-                power_slab(d, mu1[sl], w)
-                if autocorr:
-                    power_slab(d, mu2[sl], w)
+            weight = 1.
+            if self.twopoint_weights is not None:
+                costheta = np.sum(normalize(dpositions1) * normalize(dpositions2), axis=-1)
+                weight *= np.interp(costheta, self.twopoint_weights.sep, self.twopoint_weights.weight, left=1., right=1.)
+            if self.n_bitwise_weights:
+                weight *= self._get_inverse_probability_weight(dweights1[:self.n_bitwise_weights], dweights2[:self.n_bitwise_weights])
+            if self.weight_type == 'inverse_bitwise_minus_individual':
+                if self.n_bitwise_weights:
+                    weight -= self._get_inverse_probability_weight(dweights1[:self.n_bitwise_weights]) * self._get_inverse_probability_weight(dweights2[:self.n_bitwise_weights])
+                else:
+                    if self.twopoint_weights is None:
+                        raise ValueError('{} without bitwise weights and twopoint_weights will yield zero total weights!'.format(self.weight_type))
+                    weight -= 1. # twopoint_weights are provided, so we compute twopoint_weights - 1
+
+            if len(dweights1) > self.n_bitwise_weights:
+                weight *= dweights1[-1] * dweights2[-1] # single individual weight, at the end
+
+            diff = dpositions2 - dpositions1
+            distance = utils.distance(diff.T)
+            if self.los_type == 'global':
+                los = self.los
+                mu = np.sum(diff * los, axis=-1)/distance
+            else:
+                if self.los_type == 'firstpoint':
+                    mu1 = np.sum(diff * normalize(dpositions1), axis=-1)/distance
+                    if autocorr:
+                        mu2 = - np.sum(diff * normalize(dpositions2), axis=-1)/distance # i>j and i<j
+                elif self.los_type == 'endpoint':
+                    mu1 = np.sum(diff * normalize(dpositions2), axis=-1)/distance
+                    if autocorr:
+                        mu2 = - np.sum(diff * normalize(dpositions1), axis=-1)/distance # i>j and i<j
+                elif self.los_type == 'midpoint':
+                    mu = np.sum(diff * normalize(dpositions1 + dpositions2), axis=-1)/distance
+            del diff
+
+            # To avoid memory issues when performing distance*modes product, work by slabs
+            nslabs_pairs = len(ells) * len(self.modes)
+            npairs = distance.size
+
+            for islab in range(nslabs_pairs):
+                sl = slice(islab*npairs//nslabs_pairs, (islab+1)*npairs//nslabs_pairs, 1)
+                d = distance[sl]
+                w = 1. if np.ndim(weight) == 0 else weight[sl]
+                if self.los_type in ['global', 'midpoint']:
+                    power_slab(d, mu[sl], (1. + autocorr)*w) # 2 factor as i < j
+                else: # firstpoint, endpoint
+                    power_slab(d, mu1[sl], w)
+                    if autocorr:
+                        power_slab(d, mu2[sl], w)
 
         for ill, ell in enumerate(ells):
             # Note: in arXiv:1912.08803, eq. 26, should rather be sij = rj - ri
             result[ill] = (-1j)**ell * (2 * ell + 1) * result[ill]
-            if ell % 2 == 1 and self.los_type == 'firstpoint':
-                result[ill] = result[ill].conj()
 
         self.power_nonorm = self.mpicomm.allreduce(np.asarray([result[ells.index(ell)] for ell in self.ells]))
 
