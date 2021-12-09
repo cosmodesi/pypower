@@ -757,6 +757,10 @@ class MeshFFTPower(BaseClass):
         r"""
         Initialize :class:`MeshFFTPower`.
 
+        Warning
+        -------
+        :math:'\mu'-binning includes 1 (so specifying ``[0, 0.2, 0.5]`` as muedges will return wedges for ``[0, 0.2, 1]``)
+
         Parameters
         ----------
         mesh1 : CatalogMesh, RealField
@@ -1237,6 +1241,10 @@ class CatalogFFTPower(MeshFFTPower):
                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTPower`.
+
+        Warning
+        -------
+        :math:'\mu'-binning includes 1 (so specifying ``[0, 0.2, 0.5]`` as muedges will return wedges for ``[0, 0.2, 1]``)
 
         Note
         ----
