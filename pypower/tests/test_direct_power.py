@@ -160,7 +160,7 @@ def test_direct_power():
     list_options.append({'autocorr':True})
     list_options.append({'n_individual_weights':1})
     list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'weight_type':'inverse_bitwise_minus_individual', 'tree_npairs_max':10})
-    list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'iip':1})
+    list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'iip':1, 'dtype':'f4'})
     list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'bitwise_type': 'i4', 'iip':1})
     list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'bitwise_type': 'i4', 'iip':1, 'limit_type':'s'})
     list_options.append({'n_individual_weights':2, 'n_bitwise_weights':2, 'iip':2, 'position_type':'rdd', 'weight_attrs':{'nrealizations':42, 'noffset':3}})
@@ -238,7 +238,7 @@ def test_direct_power():
             tol = {'atol':1e-8, 'rtol':1e-2} if itemsize <= 4 else {'atol':1e-8, 'rtol':1e-6}
 
             if dtype is not None:
-                for ii in range(len(data1)):
+                for ii in range(len(refdata1)):
                     if np.issubdtype(refdata1[ii].dtype, np.floating):
                         refdata1[ii] = np.asarray(refdata1[ii], dtype=dtype)
                         refdata2[ii] = np.asarray(refdata2[ii], dtype=dtype)

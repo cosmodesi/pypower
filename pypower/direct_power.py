@@ -34,7 +34,7 @@ def _vlogical_and(*arrays):
     return toret
 
 
-def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, default_value=0.):
+def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, default_value=0., dtype='f8'):
     r"""
     Return inverse probability weight given input bitwise weights.
     Inverse probability weight is computed as::math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2} \& ...))`.
@@ -53,14 +53,23 @@ def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, defa
 
     default_value : float, default=0.
         Default weight value, if the denominator is zero (defaults to 0).
+
+    dtype : string, np.dtype
+        Type for output weight.
+
+    Returns
+    -------
+    weight : array
+        IIP weight.
     """
     if nrealizations is None:
         nrealizations = get_default_nrealizations(weights[0])
     #denom = noffset + sum(utils.popcount(w1 & w2) for w1, w2 in zip(*weights))
-    denom = noffset + sum((utils.popcount(_vlogical_and(*weight)) for weight in zip(*weights)))
+    denom = noffset + sum(utils.popcount(_vlogical_and(*weight)) for weight in zip(*weights))
     mask = denom == 0
     denom[mask] = 1
-    toret = nrealizations/denom
+    toret = np.empty_like(denom, dtype=dtype)
+    toret[...] = nrealizations/denom
     toret[mask] = default_value
     return toret
 
@@ -457,7 +466,7 @@ class BaseDirectPowerEngine(BaseClass):
 
     def _get_inverse_probability_weight(self, *weights):
         return get_inverse_probability_weight(*weights, noffset=self.weight_attrs['noffset'], nrealizations=self.weight_attrs['nrealizations'],
-                                              default_value=self.weight_attrs['default_value'])
+                                              default_value=self.weight_attrs['default_value'], dtype=self.dtype)
 
     @property
     def with_mpi(self):
