@@ -87,7 +87,7 @@ def _format_positions(positions, position_type='xyz', dtype=None, mpicomm=None, 
         # Array of shape (3, N)
         positions = list(positions)
         for ip, p in enumerate(positions):
-            # cast to the input dtype if exists (may be set by previous weights)
+            # Cast to the input dtype if exists (may be set by previous weights)
             positions[ip] = np.asarray(p, dtype=dtype)
         size = len(positions[0])
         dtype = positions[0].dtype
@@ -99,21 +99,25 @@ def _format_positions(positions, position_type='xyz', dtype=None, mpicomm=None, 
             if p.dtype != dtype:
                 return None, 'All position arrays should be of the same type, you can e.g. provide dtype'
         if len(positions) != 3:
-            return None, 'For position type = {}, please provide a list of 3 arrays for positions'.format(position_type)
+            return None, 'For position type = {}, please provide a list of 3 arrays for positions (found {:d})'.format(position_type, len(positions))
         if position_type == 'rdd': # RA, Dec, distance
             positions = utils.sky_to_cartesian(positions, degree=True)
         elif position_type != 'xyz':
-            return None, 'Position type should be one of ["xyz", "rdd"]'
+            return None, 'Position type should be one of ["pos", "xyz", "rdd"]'
         return np.asarray(positions).T, None
 
     error = None
-    if positions is not None and not all(position is None for position in positions):
+    if positions is not None and (position_type == 'pos' or not all(position is None for position in positions)):
         positions, error = __format_positions(positions) # return error separately to raise on all processes
-    errors = [err for err in mpicomm.allgather(error) if err is not None]
+    if mpicomm is not None:
+        error = mpicomm.allgather(error)
+    else:
+        error = [error]
+    errors = [err for err in error if err is not None]
     if errors:
         raise ValueError(errors[0])
-    if mpiroot is not None and mpicomm.bcast(positions is not None, root=mpiroot):
-        positions = mpi.scatter_array(positions, root=mpiroot, mpicomm=mpicomm)
+    if mpiroot is not None and mpicomm.bcast(positions is not None if mpicomm.rank == mpiroot else None, root=mpiroot):
+        positions = mpi.scatter_array(positions, mpicomm=mpicomm, root=mpiroot)
     return positions
 
 
@@ -145,11 +149,12 @@ def _format_weights(weights, weight_type='auto', size=None, dtype=None, mpicomm=
         return weights, n_bitwise_weights
 
     weights, n_bitwise_weights = __format_weights(weights)
-    if mpiroot is not None:
-        nw = mpicomm.bcast(len(weights), root=mpiroot)
-        if mpicomm.rank != mpiroot: weights = [None]*nw
-        weights = [mpi.scatter_array(weight, root=mpiroot, mpicomm=mpicomm) for weight in weights]
+    if mpiroot is not None and mpicomm.bcast(weights is not None if mpicomm.rank == mpiroot else None, root=mpiroot):
+        n = mpicomm.bcast(len(weights) if mpicomm.rank == mpiroot else None, root=mpiroot)
+        if mpicomm.rank != mpiroot: weights = [None]*n
+        weights = [mpi.scatter_array(weight, mpicomm=mpicomm, root=mpiroot) for weight in weights]
         n_bitwise_weights = mpicomm.bcast(n_bitwise_weights, root=mpiroot)
+
     if size is not None:
         if not all(len(weight) == size for weight in weights):
             raise ValueError('All weight arrays should be of the same size as position arrays')
@@ -378,9 +383,12 @@ class BaseDirectPowerEngine(BaseClass):
             self.boxsize = _make_array(boxsize, 3, dtype='f8')
 
     def _set_positions(self, positions1, positions2=None, position_type='xyz', mpiroot=None):
-        self.positions1 = _format_positions(positions1, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
-        self.positions2 = _format_positions(positions2, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
-        self.autocorr = positions2 is None
+        if position_type is not None: position_type = position_type.lower()
+        self.position_type = position_type
+
+        self.positions1 = _format_positions(positions1, position_type=self.position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.positions2 = _format_positions(positions2, position_type=self.position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.autocorr = self.positions2 is None
 
     def _set_weights(self, weights1, weights2=None, weight_type='auto', twopoint_weights=None, weight_attrs=None, mpiroot=None):
 
@@ -568,6 +576,8 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                     tmp2 = tuple(d[sl] for d in d2[:-1]) + ([d[sl] for d in d2[-1]],)
                     yield (tmp2, d1) if swap else (d1, tmp2)
 
+        delta_tree, delta_sum = 0., 0.
+
         for (dlimit_positions1, dpositions1, dweights1), (dlimit_positions2, dpositions2, dweights2) in tree_slab(*self._mpi_decompose()):
 
             autocorr = dpositions2 is dpositions1
@@ -578,8 +588,11 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             if not autocorr:
                 dlimit_positions = np.concatenate([dlimit_positions1, dlimit_positions2], axis=0)
 
+            start_i = time.time()
             tree = spatial.cKDTree(dlimit_positions, **kwargs, boxsize=None)
             pairs = tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray')
+            delta_tree += time.time() - start_i
+            start_i = time.time()
             distance = utils.distance((dlimit_positions[pairs[:,0]] - dlimit_positions[pairs[:,1]]).T)
             pairs = pairs[(distance > 0.) & (distance >= self.limits[0]) & (distance < self.limits[1])]
 
@@ -643,6 +656,12 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                     power_slab(d, mu1[sl], w)
                     if autocorr:
                         power_slab(d, mu2[sl], w)
+
+            delta_sum += time.time() - start_i
+
+        if rank == 0:
+            self.log_info('Building tree took {:.2f} s.'.format(delta_tree))
+            self.log_info('Sum over pairs took {:.2f} s.'.format(delta_sum))
 
         for ill, ell in enumerate(ells):
             # Note: in arXiv:1912.08803, eq. 26, should rather be sij = rj - ri

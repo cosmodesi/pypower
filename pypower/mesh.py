@@ -351,12 +351,14 @@ class CatalogMesh(BaseClass):
 
     def _set_positions(self, data_positions, randoms_positions=None, shifted_positions=None, position_type='xyz', mpiroot=None):
         # Set data and optionally shifted and randoms positions, scattering on all ranks if not already
+        if position_type is not None: position_type = position_type.lower()
+        self.position_type = position_type
 
-        self.data_positions = _format_positions(data_positions, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.data_positions = _format_positions(data_positions, position_type=self.position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
         if self.data_positions is None:
             raise ValueError('Provide at least an array of data positions')
-        self.randoms_positions = _format_positions(randoms_positions, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
-        self.shifted_positions = _format_positions(shifted_positions, position_type=position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.randoms_positions = _format_positions(randoms_positions, position_type=self.position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.shifted_positions = _format_positions(shifted_positions, position_type=self.position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
 
     def _set_weights(self, data_weights, randoms_weights=None, shifted_weights=None, mpiroot=None):
         # Set data and optionally shifted and randoms weights and their sum, scattering on all ranks if not already

@@ -477,7 +477,7 @@ class BasePowerStatistic(BaseClass):
         self.power_nonorm = np.asarray([utils.rebin(power*nmodes, new_shape, statistic=np.sum)/self.nmodes for power in self.power_nonorm])
         self.power_direct_nonorm.shape = (-1,) + self.shape
         self.power_direct_nonorm = np.asarray([utils.rebin(power, new_shape, statistic=np.sum)/np.prod(factor) for power in self.power_direct_nonorm])
-        self.edges = [edges[::f] for edges,f in zip(self.edges, factor)]
+        self.edges = tuple(edges[::f] for edges, f in zip(self.edges, factor))
         self.power_nonorm.shape = self.shape
         self.power_direct_nonorm.shape = self.shape
 
