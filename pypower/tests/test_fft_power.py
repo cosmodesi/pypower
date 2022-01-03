@@ -9,11 +9,11 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import LagrangianLinearMock, Catalog
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, PowerStatistic, mpi, utils, setup_logging
-from pypower.fft_power import normalization, normalization_from_nbar
+from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, PowerSpectrumStatistic, mpi, utils, setup_logging
+from pypower.fft_power import normalization, normalization_from_nbar, find_unique_edges
 
 
-base_dir = '_catalog'
+base_dir = 'catalog'
 data_fn = os.path.join(base_dir, 'lognormal_data.fits')
 randoms_fn = os.path.join(base_dir, 'lognormal_randoms.fits')
 
@@ -54,7 +54,7 @@ def test_power_statistic():
     power = np.ones_like(modes)
     nmodes = np.ones_like(modes, dtype='i8')
     ells = (0, 2, 4)
-    power = PowerStatistic(edges, modes, power, nmodes, ells, statistic='multipole')
+    power = PowerSpectrumStatistic(edges, modes, power, nmodes, ells, statistic='multipole')
     power.rebin(factor=2)
     assert np.allclose(power.k, (modes[::2] + modes[1::2])/2.)
     assert np.allclose(power.kedges, np.linspace(0., 0.2, 6))
@@ -62,8 +62,14 @@ def test_power_statistic():
     with tempfile.TemporaryDirectory() as tmp_dir:
         fn = os.path.join(tmp_dir, 'tmp.npy')
         power.save(fn)
-        test = PowerStatistic.load(fn)
+        test = PowerSpectrumStatistic.load(fn)
         assert np.all(test.power == power.power)
+
+
+def test_find_edges():
+    x = np.meshgrid(np.arange(10.), np.arange(10.), indexing='ij')
+    x0 = np.ones(len(x), dtype='f8')
+    edges = find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD)
 
 
 def test_mesh_power():
@@ -114,8 +120,7 @@ def test_mesh_power():
             result = MeshFFTPower.load(fn)
 
         power = result.wedges
-        for imu, mu in enumerate(power.mu.T):
-            mu = np.mean(mu, axis=-1) # average over k
+        for imu, mu in enumerate(power.muavg):
             assert np.allclose(power(mu=mu) + power.shotnoise, ref_power.power['power'][:,imu], atol=1e-6, rtol=3e-3)
 
         power = result.poles
@@ -299,6 +304,7 @@ if __name__ == '__main__':
     #save_lognormal()
 
     test_power_statistic()
+    test_find_edges()
     test_mesh_power()
     test_catalog_power()
     test_normalization()

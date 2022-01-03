@@ -98,7 +98,7 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
     return window
 
 
-def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=None, boxpad=1.5, check=True, mpicomm=mpi.COMM_WORLD):
+def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=None, boxpad=2., check=True, mpicomm=mpi.COMM_WORLD):
     """
     Compute enclosing box.
 
@@ -125,7 +125,7 @@ def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=
         If ``boxsize`` and / or ``boxcenter`` is ``None``, use this (list of) position arrays
         to determine ``boxsize`` and / or ``boxcenter``.
 
-    boxpad : float, default=1.5
+    boxpad : float, default=2.
         When ``boxsize`` is determined from ``positions``, take ``boxpad`` times the smallest box enclosing ``positions`` as ``boxsize``.
 
     check : bool, default=True
@@ -218,7 +218,7 @@ class CatalogMesh(BaseClass):
 
     def __init__(self, data_positions, data_weights=None, randoms_positions=None, randoms_weights=None,
                  shifted_positions=None, shifted_weights=None,
-                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=1.5, dtype='f8',
+                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., dtype='f8',
                  resampler='cic', interlacing=2, position_type='xyz', mpiroot=None, mpicomm=MPI.COMM_WORLD):
         """
         Initialize :class:`CatalogMesh`.
@@ -265,7 +265,7 @@ class CatalogMesh(BaseClass):
             If not ``None``, and mesh size ``nmesh`` is not ``None``, used to set ``boxsize`` as ``nmesh * cellsize``.
             If ``nmesh`` is ``None``, it is set as (the nearest integer(s) to) ``boxsize/cellsize``.
 
-        boxpad : float, default=1.5
+        boxpad : float, default=2.
             When ``boxsize`` is determined from ``positions``, take ``boxpad`` times the smallest box enclosing ``positions`` as ``boxsize``.
 
         dtype : string, dtype, default='f8'
@@ -302,6 +302,7 @@ class CatalogMesh(BaseClass):
         self._set_interlacing(interlacing)
 
     def __repr__(self):
+        """String representation of current mesh."""
         info = ['{}={}'.format(name, getattr(self,name)) for name in ['nmesh', 'boxsize', 'boxcenter', 'dtype']]
         return '{}({})'.format(self.__class__.__name__,', '.join(info))
 
@@ -341,7 +342,7 @@ class CatalogMesh(BaseClass):
                 self.log_warning('Provided interlacing is {}; setting it to 2.'.format(interlacing))
             self.interlacing = 2
 
-    def _set_box(self, nmesh=None, boxsize=None, cellsize=None, boxcenter=None, boxpad=1.5, check=True):
+    def _set_box(self, nmesh=None, boxsize=None, cellsize=None, boxcenter=None, boxpad=2., check=True):
         # Set :attr:`nmesh`, :attr:`boxsize` and :attr:`boxcenter`
         positions = [self.data_positions]
         if self.with_randoms: positions += [self.randoms_positions]

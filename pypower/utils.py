@@ -135,6 +135,7 @@ class BaseClass(object,metaclass=BaseMetaClass):
 
     def save(self, filename):
         self.log_info('Saving {}.'.format(filename))
+        mkdir(os.path.dirname(filename))
         np.save(filename, self.__getstate__(), allow_pickle=True)
 
     @classmethod

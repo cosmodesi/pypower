@@ -11,6 +11,7 @@ https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/convpower/fkp.p
 import time
 
 import numpy as np
+from scipy.interpolate import RectBivariateSpline
 
 from pmesh.pm import RealField, ComplexField, ParticleMesh
 from pmesh.window import FindResampler, ResampleWindow
@@ -350,7 +351,7 @@ def find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD):
         fx = fx2[ind] ** 0.5
         return fx[(fx >= xmin) & (fx <= xmax)]
 
-    xo = _make_array(x0, len(x), dtype='f8')
+    x0 = _make_array(x0, len(x), dtype='f8')
     fx = find_unique_local(x, x0)
     if mpicomm is not None:
         fx = np.concatenate(mpicomm.allgather(fx), axis=0)
@@ -360,9 +361,7 @@ def find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD):
 
     # now make edges around unique coordinates
     width = np.diff(fx)
-    edges = np.append(fx - width/2., [fx[-1] + width[-1] / 2.])
-    edges[0] = 0.
-
+    edges = np.concatenate([[0], fx[1:] - width/2., [fx[-1] + width[-1] / 2.]], axis=0)
     return edges
 
 
@@ -377,17 +376,17 @@ def _transform_rslab(rslab, boxsize):
     return toret
 
 
-class BasePowerStatistic(BaseClass):
+class BasePowerSpectrumStatistic(BaseClass):
     """
     Base template power statistic class.
     Specific power statistic should extend this class.
     """
     name = 'base'
-    _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'power_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm']
+    _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'power_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm', 'attrs']
 
     def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., power_direct_nonorm=None, attrs=None):
         r"""
-        Initialize :class:`BasePowerStatistic`.
+        Initialize :class:`BasePowerSpectrumStatistic`.
 
         Parameters
         ----------
@@ -412,7 +411,9 @@ class BasePowerStatistic(BaseClass):
         attrs : dict, default=None.
             Dictionary of other attributes.
         """
-        self.edges = tuple(np.asarray(edge, dtype='f8') for edge in edges)
+        if np.ndim(edges[0]) == 0: edges = (edges,)
+        if np.ndim(modes[0]) == 0: modes = (modes,)
+        self.edges = list(np.asarray(edge) for edge in edges)
         self.modes = np.asarray(modes)
         self.power_nonorm = np.asarray(power_nonorm)
         self.power_direct_nonorm = power_direct_nonorm
@@ -489,71 +490,114 @@ class BasePowerStatistic(BaseClass):
                 state[name] = getattr(self, name)
         return state
 
+    def deepcopy(self):
+        import copy
+        return copy.deepcopy(self)
+
 
 def get_power_statistic(statistic='wedge'):
-    """Return :class:`BasePowerStatistic` subclass corresponding to ``statistic`` (either 'wedge' or 'multipole')."""
+    """Return :class:`BasePowerSpectrumStatistic` subclass corresponding to ``statistic`` (either 'wedge' or 'multipole')."""
     if statistic == 'wedge':
         return WedgePowerSpectrum
     if statistic == 'multipole':
         return MultipolePowerSpectrum
-    return BasePowerStatistic
+    return BasePowerSpectrumStatistic
 
 
-class MetaPowerStatistic(type(BaseClass)):
+class MetaPowerSpectrumStatistic(type(BaseClass)):
 
-    """Metaclass to return correct power statistic."""
+    """Metaclass to return correct power spectrum statistic."""
 
     def __call__(cls, *args, statistic='wedge', **kwargs):
         return get_power_statistic(statistic=statistic)(*args, **kwargs)
 
 
-class PowerStatistic(metaclass=MetaPowerStatistic):
+class PowerSpectrumStatistic(BaseClass, metaclass=MetaPowerSpectrumStatistic):
 
-    """Entry point to power statistics."""
+    """Entry point to power spectrum statistics."""
 
     @classmethod
-    def load(cls, filename):
-        cls.log_info('Loading {}.'.format(filename))
-        state = np.load(filename, allow_pickle=True)[()]
+    def from_state(cls, state):
+        state = state.copy()
         name = state.pop('name')
         return get_power_statistic(statistic=name).from_state(state)
 
 
-class WedgePowerSpectrum(BasePowerStatistic):
+class WedgePowerSpectrum(BasePowerSpectrumStatistic):
 
     r"""Power spectrum binned in :math:`(k, \mu)`."""
 
     name = 'wedge'
 
     @property
+    def kavg(self):
+        """Mode-weighted average wavenumber."""
+        return np.nansum(self.k*self.nmodes, axis=1)/np.sum(self.nmodes, axis=1)
+
+    @property
     def mu(self):
-        """Cosine angle to line-of-sight of shape :attr:`shape` = (nk, nmu)."""
+        """Cosine angle to line-of-sight."""
         return self.modes[1]
 
     @property
+    def muavg(self):
+        r"""Mode-weighted average :math:`\mu`."""
+        return np.nansum(self.mu*self.nmodes, axis=0)/np.sum(self.nmodes, axis=0)
+
+    @property
     def muedges(self):
-        """Mu edges."""
+        r""":math:`\mu`-edges."""
         return self.edges[1]
 
-    def __call__(self, mu=None):
-        r"""Return :attr:`power`, restricted to the bin(s) corresponding to input :math:`\mu` if not ``None``."""
-        if mu is not None:
-            mu_indices = np.digitize(mu, self.edges[1], right=False) - 1
-        else:
-            mu_indices = Ellipsis
-        return self.power[:,mu_indices]
+    def __call__(self, k=None, mu=None, complex=True):
+        r"""
+        Return :attr:`power`, optionally performing linear interpolation over :math:`k` and :math:`\mu`.
+
+        Parameters
+        ----------
+        k : float, array, default=None
+            :math:`k` where to interpolate the power spectrum.
+            Defaults to :attr:`kavg`.
+
+        mu : float, array, default=None
+            :math:`\mu` where to interpolate the power spectrum.
+            Defaults to :attr:`muavg`.
+
+        complex : bool, default=True
+            Whether (``True``) to return the complex power spectrum,
+            or (``False``) return its real part only.
+
+        Returns
+        -------
+        toret : array
+            (Optionally interpolated) power spectrum.
+        """
+        tmp = self.power
+        if not complex: tmp = tmp.real
+        if k is None and mu is None:
+            return tmp
+        kavg, muavg = self.kavg, self.muavg
+        if k is None: k = kavg
+        if mu is None: mu = muavg
+        k, mu = np.asarray(k), np.asarray(mu)
+        toret = RectBivariateSpline(kavg, muavg, tmp.real, kx=1, ky=1, s=0)(k, mu, grid=True)
+        if complex:
+            toret = toret + 1j * RectBivariateSpline(kavg, muavg, tmp.imag, kx=1, ky=1, s=0)(k, mu, grid=True)
+        if k.ndim == 0 or mu.ndim == 0:
+            return toret.ravel()
+        return toret
 
 
-class MultipolePowerSpectrum(BasePowerStatistic):
+class MultipolePowerSpectrum(BasePowerSpectrumStatistic):
 
     """Power spectrum multipoles binned in :math:`k`."""
 
     name = 'multipole'
-    _attrs = BasePowerStatistic._attrs + ['ells']
+    _attrs = BasePowerSpectrumStatistic._attrs + ['ells']
 
     def __init__(self, edges, modes, power_nonorm, nmodes, ells, **kwargs):
         r"""
-        Initialize :class:`BasePowerStatistic`.
+        Initialize :class:`MultipolePowerSpectrum`.
 
         Parameters
         ----------
@@ -567,16 +611,21 @@ class MultipolePowerSpectrum(BasePowerStatistic):
             Power spectrum in each bin, *without* normalization.
 
         nmodes : array
-            Number of modes in each bin?
+            Number of modes in each bin.
 
         ells : tuple, list.
             Multipole orders.
 
         kwargs : dict
-            Other arguments for :attr:`BasePowerStatistic`.
+            Other arguments for :attr:`BasePowerSpectrumStatistic`.
         """
         self.ells = tuple(ells)
-        super(MultipolePowerSpectrum, self).__init__((edges,), (modes,), power_nonorm, nmodes, **kwargs)
+        super(MultipolePowerSpectrum, self).__init__(edges, modes, power_nonorm, nmodes, **kwargs)
+
+    @property
+    def kavg(self):
+        """Mode-weighted average wavenumber = :attr:`k`."""
+        return self.k
 
     @property
     def power(self):
@@ -586,19 +635,33 @@ class MultipolePowerSpectrum(BasePowerStatistic):
             power[self.ells.index(0)] -= self.shotnoise
         return power
 
-    def __call__(self, ell=None):
-        r"""Return :attr:`power`, restricted to the multipole(s) corresponding to input :math:`\ell` if not ``None``."""
-        isscalar = False
-        if ell is not None:
-            isscalar = np.ndim(ell) == 0
-            if isscalar: ell = [ell]
-            ills = [self.ells.index(el) for el in ell]
-        else:
-            ills = Ellipsis
-        power = self.power[ills,:]
-        if isscalar:
-            return power.flatten()
-        return power
+    def __call__(self, ell, k=None, complex=True):
+        r"""
+        Return :attr:`power`, optionally performing linear interpolation over :math:`k`.
+
+        Parameters
+        ----------
+        ell : int
+            Multipole order.
+
+        k : float, array, default=None
+            :math:`k` where to interpolate the power spectrum.
+            Defaults to :attr:`kavg` (no interpolation performed).
+
+        complex : bool, default=True
+            Whether (``True``) to return the complex power spectrum,
+            or (``False``) return its real part only if ``ell`` is even, imaginary part if ``ell`` is odd.
+
+        Returns
+        -------
+        toret : array
+            (Optionally interpolated) power spectrum.
+        """
+        tmp = self.power[self.ells.index(ell)]
+        if not complex: tmp = tmp.real if ell % 2 == 0 else tmp.imag
+        if k is None:
+            return tmp
+        return np.interp(k, self.k, tmp)
 
 
 def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.COMM_WORLD):
@@ -750,12 +813,12 @@ class MeshFFTPower(BaseClass):
         Estimated power spectrum multipoles.
 
     wedges : WedgePowerSpectrum
-        Estimated power spectrum wedges.
+        Estimated power spectrum wedges (if relevant).
     """
 
     def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los='firstpoint', boxcenter=None, compensations=None, wnorm=None, shotnoise=None):
         r"""
-        Initialize :class:`MeshFFTPower`.
+        Initialize :class:`MeshFFTPower`, i.e. estimate power spectrum.
 
         Warning
         -------
@@ -779,7 +842,7 @@ class MeshFFTPower(BaseClass):
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
 
-        los : string, array, default=None
+        los : string, array, default='firstpoint'
             If ``los`` is 'firstpoint' (resp. 'endpoint'), use local (varying) first point (resp. end point) line-of-sight.
             Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
             Else, a 3-vector.
@@ -799,16 +862,17 @@ class MeshFFTPower(BaseClass):
             Power spectrum normalization, to use instead of internal estimate obtained with :func:`normalization`.
 
         shotnoise : float, default=None
-            Power spectrum shot noise, to used instead of internal estimate, which is 0 in case of cross-correlation
+            Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
             or both ``mesh1`` and ``mesh2`` are :class:`pmesh.pm.RealField`,
             and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise`
-            result on ``mesh1`` by power spectrum normalization.
+            of ``mesh1`` by power spectrum normalization.
         """
         self._set_compensations(compensations)
 
         self.mesh1 = mesh1
         self.mesh2 = mesh2
         self.autocorr = mesh2 is None or mesh2 is mesh1
+        self.attrs = {}
 
         # Complex type is required for odd mutipoles
         requires_complex = los is None and any(ell % 2 == 1 for ell in ells)
@@ -843,8 +907,19 @@ class MeshFFTPower(BaseClass):
                         self.log_warning('Provided compensation is not the same as that of provided {} instance'.format(mesh.__class__.__name__))
                 else:
                     self.compensations[i] = compensation
+                self.attrs['sum_data_weights{:d}'.format(i+1)] = mesh.sum_data_weights
+                self.attrs['sum_randoms_weights{:d}'.format(i+1)] = mesh.sum_randoms_weights
+                self.attrs['resampler{:d}'.format(i+1)] = mesh.compensation['resampler']
+                self.attrs['interlacing{:d}'.format(i+1)] = mesh.interlacing
             else:
                 setattr(self, name, mesh)
+                self.attrs['sum_data_weights{:d}'.format(i+1)] = self.attrs['sum_randoms_weights{:d}'.format(i+1)] = mesh.csum()
+                self.attrs['resampler{:d}'.format(i+1)] = not self.compensations[i]['resampler']
+                self.attrs['interlacing{:d}'.format(i+1)] = not self.compensations[i]['shotnoise']
+
+        if self.autocorr:
+            for name in ['sum_data_weights', 'sum_randoms_weights', 'resampler', 'interlacing']:
+                self.attrs['{}2'.format(name)] = self.attrs['{}1'.format(name)]
 
         def enforce_dype(mesh):
             # Cast mesh to correct dtype
@@ -887,6 +962,7 @@ class MeshFFTPower(BaseClass):
             # Shot noise is non zero only if we can estimate it
             if self.autocorr and isinstance(mesh1, CatalogMesh):
                 self.shotnoise = mesh1.unnormalized_shotnoise()/self.wnorm
+        self.attrs.update(self._get_attrs())
         if self.mpicomm.rank == 0:
             self.log_info('Running power spectrum estimation.')
         self.run()
@@ -924,14 +1000,17 @@ class MeshFFTPower(BaseClass):
             kedges = {}
         if isinstance(kedges, dict):
             kmin = kedges.get('min', 0.)
-            kmax = kedges.get('max', np.pi/(self.boxsize/self.nmesh).max())
+            kmax = kedges.get('max', np.pi/(self.boxsize/self.nmesh).min())
             dk = kedges.get('step', None)
             if dk is None:
                 # find unique edges
-                k = self.mesh1.pm.create_coords(type='complex')
-                kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax, mpicomm=self.mpicomm)
+                k = [k.real for k in self.mesh1.pm.create_coords('complex')]
+                dk = 2 * np.pi / self.boxsize
+                kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax*(1+1e-6), mpicomm=self.mpicomm) # margin required for float32
             else:
-                kedges = np.arange(kmin, kmax*(1+1e-9), dk)
+                kedges = np.arange(kmin, kmax*(1+1e-6), dk)
+        if self.mpicomm.rank == 0:
+            self.log_info('Using {:d} k-bins between {:.3f} and {:.3f}.'.format(len(kedges) - 1, kedges[0], kedges[-1]))
         if muedges is None:
             muedges = np.linspace(-1, 1, 2, endpoint=True) # single :math:`\mu`-wedge
         self.edges = (np.asarray(kedges, dtype='f8'), np.asarray(muedges, dtype='f8'))
@@ -1013,13 +1092,13 @@ class MeshFFTPower(BaseClass):
     def _get_attrs(self):
         # Return some attributes, to be saved in :attr:`poles` and :attr:`wedges`
         state = {}
-        for name in ['nmesh', 'boxsize', 'boxcenter', 'los', 'compensations']:
+        for name in ['autocorr', 'nmesh', 'boxsize', 'boxcenter', 'los', 'los_type', 'compensations']:
             state[name] = getattr(self, name)
         return state
 
     def __getstate__(self):
         """Return this class state dictionary."""
-        state = self._get_attrs()
+        state = {'attrs':self.attrs, **self._get_attrs()}
         for name in ['wedges', 'poles']:
             if hasattr(self, name):
                 state[name] = getattr(self, name).__getstate__()
@@ -1027,7 +1106,7 @@ class MeshFFTPower(BaseClass):
 
     def __setstate__(self, state):
         """Set this class state."""
-        self.__dict__.update(state)
+        super(MeshFFTPower, self).__setstate__(state)
         for name in ['wedges', 'poles']:
             if name in state:
                 setattr(self, name, get_power_statistic(statistic=state[name].pop('name')).from_state(state[name]))
@@ -1073,8 +1152,7 @@ class MeshFFTPower(BaseClass):
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
 
         # Format the power results into :class:`WedgePowerSpectrum` instance
-        attrs = self._get_attrs()
-        kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':attrs}
+        kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
         k, mu, power, nmodes = (np.squeeze(result[ii]) for ii in [0,1,2,3])
         norm = self.nmesh.prod()**2
         power *= norm
@@ -1220,14 +1298,13 @@ class MeshFFTPower(BaseClass):
         poles = np.array([result[ells.index(ell)] for ell in self.ells])
         # Format the power results into :class:`PolePowerSpectrum` instance
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
-        attrs = self._get_attrs()
-        kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':attrs}
+        kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
         self.poles = MultipolePowerSpectrum(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
 
 
 class CatalogFFTPower(MeshFFTPower):
 
-    """Wrapper on :class:`MeshFFTPower` to start directly from positions and weights."""
+    """Wrapper on :class:`MeshFFTPower` to estimate power spectrum directly from positions and weights."""
 
     def __init__(self, data_positions1, data_positions2=None, randoms_positions1=None, randoms_positions2=None,
                 shifted_positions1=None, shifted_positions2=None,
@@ -1235,12 +1312,12 @@ class CatalogFFTPower(MeshFFTPower):
                 shifted_weights1=None, shifted_weights2=None,
                 D1D2_twopoint_weights=None, D1R2_twopoint_weights=None, D2R1_twopoint_weights=None, D1S2_twopoint_weights=None, D2S1_twopoint_weights=None,
                 edges=None, ells=(0, 2, 4), los=None,
-                nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=1.5, dtype='f8',
+                nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., dtype='f8',
                 resampler='cic', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
                 direct_engine='kdtree', direct_limits=(0., 2./60.), direct_limit_type='degree', periodic=False,
                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
-        Initialize :class:`CatalogFFTPower`.
+        Initialize :class:`CatalogFFTPower`, i.e. estimate power spectrum.
 
         Warning
         -------
@@ -1300,30 +1377,27 @@ class CatalogFFTPower(MeshFFTPower):
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
 
-        los : string, array, default=None
+        los : string, array, default='firstpoint'
             If ``los`` is 'firstpoint' (resp. 'endpoint'), use local (varying) first point (resp. end point) line-of-sight.
             Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
             Else, a 3-vector.
 
         nmesh : array, int, default=None
             Mesh size, i.e. number of mesh nodes along each axis.
-            If not provided, see ``value``.
 
         boxsize : float, default=None
-            Physical size of the box.
-            If not provided, see ``positions``.
+            Physical size of the box, defaults to maximum extent taken by all input positions, times ``boxpad``.
 
         boxcenter : array, float, default=None
-            Box center.
-            If not provided, see ``positions``.
+            Box center, defaults to center of the Cartesian box enclosing all input positions.
 
         cellsize : array, float, default=None
             Physical size of mesh cells.
             If not ``None``, and mesh size ``nmesh`` is not ``None``, used to set ``boxsize`` as ``nmesh * cellsize``.
             If ``nmesh`` is ``None``, it is set as (the nearest integer(s) to) ``boxsize/cellsize``.
 
-        boxpad : float, default=1.5
-            When ``boxsize`` is determined from ``positions``, take ``boxpad`` times the smallest box enclosing ``positions`` as ``boxsize``.
+        boxpad : float, default=2.
+            When ``boxsize`` is determined from input positions, take ``boxpad`` times the smallest box enclosing positions as ``boxsize``.
 
         dtype : string, dtype, default='f8'
             The data type to use for input positions and weights and the mesh.
@@ -1407,10 +1481,8 @@ class CatalogFFTPower(MeshFFTPower):
             Power spectrum normalization, to use instead of internal estimate obtained with :func:`normalization`.
 
         shotnoise : float, default=None
-            Power spectrum shot noise, to used instead of internal estimate, which is 0 in case of cross-correlation
-            or both ``mesh1`` and ``mesh2`` are :class:`pmesh.pm.RealField`,
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise`
-            result on ``mesh1`` by power spectrum normalization.
+            Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
+            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise by power spectrum normalization.
 
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scatted across all ranks.
@@ -1419,10 +1491,7 @@ class CatalogFFTPower(MeshFFTPower):
         mpicomm : MPI communicator, default=MPI.COMM_WORLD
             The MPI communicator.
         """
-        bpositions = []
-        weight_attrs = weight_attrs or {}
-
-        positions = {}
+        bpositions, positions = [], {}
         for name in ['data_positions1', 'data_positions2', 'randoms_positions1', 'randoms_positions2', 'shifted_positions1', 'shifted_positions2']:
             tmp = _format_positions(locals()[name], position_type=position_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
             if tmp is not None:
@@ -1430,17 +1499,7 @@ class CatalogFFTPower(MeshFFTPower):
             label = name.replace('data_positions','D').replace('randoms_positions','R').replace('shifted_positions','S')
             positions[label] = tmp
 
-        bweights, n_bitwise_weights = {}, {}
-        for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']:
-            label = name.replace('data_weights','D').replace('randoms_weights','R').replace('shifted_weights','S')
-            bweights[label], n_bitwise_weights[label] = _format_weights(locals()[name], weight_type=weight_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
-
-        with_shifted = positions['S1'] is not None
-        with_randoms = positions['R1'] is not None
-        autocorr = positions['D2'] is None
-        if autocorr and (positions['R2'] is not None or positions['S2'] is not None):
-            raise ValueError('randoms_positions2 or shifted_positions2 are provided, but not data_positions2')
-
+        weight_attrs = weight_attrs or {}
         weight_attrs = weight_attrs.copy()
         noffset = weight_attrs.get('noffset', 1)
         default_value = weight_attrs.get('default_value', 0)
@@ -1451,37 +1510,48 @@ class CatalogFFTPower(MeshFFTPower):
             if nrealizations is None: nrealizations = get_default_nrealizations(weights)
             return nrealizations
 
-        weights = {}
-        for name in bweights:
-            if n_bitwise_weights[name]:
-                bitwise_weight = bweights[name][:n_bitwise_weights[name]]
+        bweights, n_bitwise_weights, weights = {}, {}, {}
+        for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']:
+            label = name.replace('data_weights','D').replace('randoms_weights','R').replace('shifted_weights','S')
+            bweights[label], n_bitwise_weights[label] = _format_weights(locals()[name], weight_type=weight_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
+            if n_bitwise_weights[label]:
+                bitwise_weight = bweights[label][:n_bitwise_weights[label]]
                 nrealizations = get_nrealizations(bitwise_weight)
-                weights[name] = get_inverse_probability_weight(bitwise_weight, noffset=noffset, nrealizations=nrealizations, default_value=default_value)
-                if len(bweights[name]) > n_bitwise_weights[name]:
-                    weights[name] *= bweights[name][n_bitwise_weights[name]] # individual weights
-            elif len(bweights[name]):
-                weights[name] = bweights[name][0] # individual weights
+                weights[label] = get_inverse_probability_weight(bitwise_weight, noffset=noffset, nrealizations=nrealizations, default_value=default_value)
+                if len(bweights[label]) > n_bitwise_weights[label]:
+                    weights[label] *= bweights[label][n_bitwise_weights[label]] # individual weights
+            elif len(bweights[label]):
+                weights[label] = bweights[label][0] # individual weights
             else:
-                weights[name] = None
+                weights[label] = None
+
+        with_shifted = positions['S1'] is not None
+        with_randoms = positions['R1'] is not None
+        autocorr = positions['D2'] is None
+        if autocorr and (positions['R2'] is not None or positions['S2'] is not None):
+            raise ValueError('randoms_positions2 or shifted_positions2 are provided, but not data_positions2')
 
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=bpositions, boxpad=boxpad, mpicomm=mpicomm)
+        if not isinstance(resampler, tuple):
+            resampler = (resampler,)*2
+        if not isinstance(interlacing, tuple):
+            interlacing = (interlacing,)*2
 
         # Get catalog meshes
-        def get_mesh(data_positions, data_weights=None, randoms_positions=None, randoms_weights=None, shifted_positions=None, shifted_weights=None):
+        def get_mesh(data_positions, data_weights=None, randoms_positions=None, randoms_weights=None, shifted_positions=None, shifted_weights=None, **kwargs):
             return CatalogMesh(data_positions, data_weights=data_weights, randoms_positions=randoms_positions, randoms_weights=randoms_weights,
                                shifted_positions=shifted_positions, shifted_weights=shifted_weights,
-                               nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, resampler=resampler, interlacing=interlacing,
-                               position_type='pos', dtype=dtype, mpicomm=mpicomm)
+                               nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, position_type='pos', dtype=dtype, mpicomm=mpicomm, **kwargs)
 
         mesh1 = get_mesh(positions['D1'], data_weights=weights['D1'], randoms_positions=positions['R1'], randoms_weights=weights['R1'],
-                         shifted_positions=positions['S1'], shifted_weights=weights['S1'])
+                         shifted_positions=positions['S1'], shifted_weights=weights['S1'], resampler=resampler[0], interlacing=interlacing[0])
         mesh2 = None
         if not autocorr:
             mesh2 = get_mesh(positions['D2'], data_weights=weights['D2'], randoms_positions=positions['R2'], randoms_weights=weights['R2'],
-                             shifted_positions=positions['S2'], shifted_weights=weights['S2'])
+                             shifted_positions=positions['S2'], shifted_weights=weights['S2'], resampler=resampler[1], interlacing=interlacing[1])
         # Now, run power spectrum estimation
-        super(CatalogFFTPower,self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
+        super(CatalogFFTPower, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
 
 
         if self.ells:

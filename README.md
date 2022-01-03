@@ -1,6 +1,6 @@
 # pypower
 
-**pypower** is a wrapper for power spectrum estimation.
+**pypower** is a wrapper for power spectrum and associated window function estimation.
 
 A typical auto-correlation function estimation is as simple as:
 ```
