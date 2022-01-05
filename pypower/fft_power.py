@@ -121,21 +121,29 @@ def get_real_Ylm(ell, m):
 
 
 def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
-    """
+    r"""
     Project a 3D statistic on to the specified basis. The basis will be one of:
 
-    - 2D (`x`, `mu`) bins: `mu` is the cosine of the angle to the line-of-sight
-    - 2D (`x`, `ell`) bins: `ell` is the multipole number, which specifies
-      the Legendre polynomial when weighting different `mu` bins.
+    - 2D :math:`(x, \mu)` bins: :math:`\mu` is the cosine of the angle to the line-of-sight
+    - 2D :math:`(x, \ell)` bins: :math:`\ell` is the multipole number, which specifies
+      the Legendre polynomial when weighting different :math:`\mu` bins.
 
-    Taken from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py.
+    Adapted from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py.
 
     Notes
     -----
-    The 2D (`x`, `mu`) bins will be computed only if `poles` is specified.
+    The 2D :math:`(x, \ell)` bins will be computed only if ``ells`` is specified.
     See return types for further details.
-    The `mu` bins (between -1 and 1) are half-inclusive half-exclusive,
-    except the last bin is inclusive on both ends (to include `mu = 1.0`).
+    For both :math:`x` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end,
+    i.e. mode `mode` falls in bin `i` if ``bins[i] <= mode < bins[i+1]``.
+    However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
+    Therefore, with e.g. :math:`\mu`-edges ``[0.2, 0.4, 1.0]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 1.0`.
+    Similarly, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 0.8`.
+
+    Warning
+    -------
+    Integration over Legendre polynomials for multipoles is performed between the first and last :math:`\mu`-edges,
+    e.g. with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, integration is performed between :math:`\mu = 0.2` and :math:`\mu = 0.8`.
 
     Parameters
     ----------
@@ -143,38 +151,38 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
         The 3D array holding the statistic to be projected to the specified basis.
 
     edges : list of arrays, (2,)
-        List of arrays specifying the edges of the desired `x` bins and `mu` bins.
+        List of arrays specifying the edges of the desired :math:`x` bins and :math:`\mu` bins.
 
     los : array_like, default=(0, 0, 1)
-        The line-of-sight direction to use, which `mu` is defined with respect to.
+        The line-of-sight direction to use, which :math:`\mu` is defined with respect to.
 
     ells : tuple of ints, default=None
-        If provided, a list of integers specifying multipole numbers to project the 2d `(x, mu)` bins on to.
+        If provided, a list of integers specifying multipole numbers to project the 2D :math:`(x, \mu)` bins on to.
 
     Returns
     -------
     result : tuple
-        the 2D binned results; a tuple of ``(xmean2d, mumean2d, y2d, n2d)``, where:
+        The 2D binned results; a tuple of ``(xmean2d, mumean2d, y2d, n2d)``, where:
 
         - xmean2d : array_like, (nx, nmu)
-            the mean `x` value in each 2D bin
+            The mean :math:`x` value in each 2D bin
         - mumean2d : array_like, (nx, nmu)
-            the mean `mu` value in each 2D bin
+            The mean :math:`\mu` value in each 2D bin
         - y2d : array_like, (nx, nmu)
-            the mean `y3d` value in each 2D bin
+            The mean `y3d` value in each 2D bin
         - n2d : array_like, (nx, nmu)
-            the number of values averaged in each 2D bin
+            The number of values averaged in each 2D bin
 
     result_poles : tuple or `None`
-        the multipole results; if `ells` supplied it is a tuple of ``(xmean1d, poles, n1d)``,
+        The multipole results; if `ells` supplied it is a tuple of ``(xmean1d, poles, n1d)``,
         where:
 
         - xmean1d : array_like, (nx,)
-            the mean `x` value in each 1D multipole bin
+            The mean :math:`x` value in each 1D multipole bin
         - poles : array_like, (nell, nx)
-            the mean multipoles value in each 1D bin
+            The mean multipoles value in each 1D bin
         - n1d : array_like, (nx,)
-            the number of values averaged in each 1D bin
+            The number of values averaged in each 1D bin
     """
     comm = y3d.pm.comm
     x3d = y3d.x
@@ -219,26 +227,26 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
         if len(x2slab.flat) == 0: continue
 
         # get the bin indices for x on the slab
-        dig_x = np.digitize(x2slab.real.flat, x2edges)
+        dig_x = np.digitize(x2slab.real.flat, x2edges, right=False)
 
         # get the bin indices for mu on the slab
         mu = sum(xx*ll for xx,ll in zip(xslab, los))
         xslab = x2slab**0.5
         nonzero = xslab != 0.
         mu[nonzero] /= xslab[nonzero]
-        dig_mu = np.digitize(mu.real.flat, muedges)
+        dig_mu = np.digitize(mu.real.flat, muedges, right=False) # this is bins[i-1] <= x < bins[i]
+        dig_mu[mu.real.flat == muedges[-1]] = nmu # last mu inclusive
 
         if hermitian_symmetric:
-            # get the indices that have positive freq along symmetry axis = -1
-            tmp = x3d[-1][0] > 0.
             nonsingular = np.ones(xslab.shape, dtype='?')
-            nonsingular[...] = tmp
+            # get the indices that have positive freq along symmetry axis = -1
+            nonsingular[...] = x3d[-1][0] > 0.
             hermitian_weights = np.ones_like(xslab.real)
             hermitian_weights[nonsingular] = 2.
         else:
             hermitian_weights = 1.
         # make the multi-index
-        multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx+2,nmu+2))
+        multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx+2, nmu+2))
 
         # sum up x in each bin (accounting for negative freqs)
         xslab[:] *= hermitian_weights
@@ -289,26 +297,26 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
 
     # add the last 'internal' mu bin (mu == 1) to the last visible mu bin
     # this makes the last visible mu bin inclusive on both ends.
-    ysum[..., -2] += ysum[..., -1]
-    musum[:, -2] += musum[:, -1]
-    xsum[:, -2] += xsum[:, -1]
-    nsum[:, -2] += nsum[:, -1]
+    #ysum[..., -2] += ysum[..., -1]
+    #musum[:, -2] += musum[:, -1]
+    #xsum[:, -2] += xsum[:, -1]
+    #nsum[:, -2] += nsum[:, -1]
 
     # reshape and slice to remove out of bounds points
     sl = slice(1, -1)
     with np.errstate(invalid='ignore', divide='ignore'):
 
         # 2D binned results
-        y2d = (ysum[0,...] / nsum)[sl,sl] # ell=0 is first index
-        xmean2d  = (xsum / nsum)[sl,sl]
+        y2d = (ysum[0,...] / nsum)[sl, sl] # ell=0 is first index
+        xmean2d  = (xsum / nsum)[sl, sl]
         mumean2d = (musum / nsum)[sl, sl]
-        n2d = nsum[sl,sl]
+        n2d = nsum[sl, sl]
 
         # 1D multipole results (summing over mu (last) axis)
         if do_poles:
-            n1d = nsum[sl,sl].sum(axis=-1)
-            xmean1d = xsum[sl,sl].sum(axis=-1) / n1d
-            poles = ysum[:, sl,sl].sum(axis=-1) / n1d
+            n1d = nsum[sl, sl].sum(axis=-1)
+            xmean1d = xsum[sl, sl].sum(axis=-1) / n1d
+            poles = ysum[:, sl, sl].sum(axis=-1) / n1d
             poles = poles[[unique_ells.index(ell) for ell in ells],...]
 
     # return y(x,mu) + (possibly empty) multipoles
@@ -822,7 +830,10 @@ class MeshFFTPower(BaseClass):
 
         Warning
         -------
-        :math:'\mu'-binning includes 1 (so specifying ``[0, 0.2, 0.5]`` as muedges will return wedges for ``[0, 0.2, 1]``)
+        In case line-of-sight is not local, one can provide :math:`\mu`-edges. In this case, integration over Legendre polynomials for multipoles
+        is performed between the first and last :math:`\mu`-edges.
+        For example, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, integration is performed between :math:`\mu = 0.2` and :math:`\mu = 0.8`.
+        In all other cases, integration is performed between :math:`\mu = -1.0` and :math:`\mu = 1.0`.
 
         Parameters
         ----------
@@ -834,10 +845,14 @@ class MeshFFTPower(BaseClass):
 
         edges : tuple, array, default=None
             If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
-            Else, one can also provide :math:`\mu-edges` (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
+            Else, one can also provide :math:`\mu`-edges (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
             ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :amth:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
             'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
+            For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``bins[i] <= x < bins[i+1]``.
+            However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
+            Therefore, with e.g. :math:`\mu`-edges ``[0.2, 0.4, 1.0]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 1.0`.
+            Similarly, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 0.8`.
 
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
@@ -1321,7 +1336,10 @@ class CatalogFFTPower(MeshFFTPower):
 
         Warning
         -------
-        :math:'\mu'-binning includes 1 (so specifying ``[0, 0.2, 0.5]`` as muedges will return wedges for ``[0, 0.2, 1]``)
+        In case line-of-sight is not local, one can provide :math:`\mu`-edges. In this case, integration over Legendre polynomials for multipoles
+        is performed between the first and last :math:`\mu`-edges.
+        For example, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, integration is performed between :math:`\mu = 0.2` and :math:`\mu = 0.8`.
+        In all other cases, integration is performed between :math:`\mu = -1.0` and :math:`\mu = 1.0`.
 
         Note
         ----
@@ -1369,10 +1387,14 @@ class CatalogFFTPower(MeshFFTPower):
 
         edges : tuple, array, default=None
             If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
-            Else, one can also provide :math:`\mu-edges` (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
+            Else, one can also provide :math:`\mu`-edges (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
             ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :amth:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
             'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
+            For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``bins[i] <= x < bins[i+1]``.
+            However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
+            Therefore, with e.g. :math:`\mu`-edges ``[0.2, 0.4, 1.0]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 1.0`.
+            Similarly, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 0.8`.
 
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
@@ -1579,6 +1601,8 @@ class CatalogFFTPower(MeshFFTPower):
                     if label12 == 'D1R2': label2 = 'R1'
                     if label12 == 'D1S2': label2 = 'S1'
                 if (n_bitwise_weights[label1] and n_bitwise_weights[label2]) or twopoint_weights[label12]:
+                    if self.los_type == 'global':
+                        raise NotImplementedError('mu-wedge direct computation not handled yet')
                     power = DirectPowerEngine(self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions[label2], weights2=bweights[label2], ells=ells,
                                               limits=direct_limits, limit_type=direct_limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights[label12],
                                               weight_attrs=weight_attrs, los=los, boxsize=self.boxsize if periodic else None, position_type='pos', mpicomm=self.mpicomm).power_nonorm

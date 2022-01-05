@@ -86,12 +86,12 @@ def test_mesh_power():
     dtype = 'f8'
     data = Catalog.load_fits(data_fn)
 
-    def get_ref_power(data):
+    def get_ref_power(data, dtype=dtype):
         from nbodykit.lab import FFTPower
         mesh = data.to_nbodykit().to_mesh(position='Position', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
         return FFTPower(mesh, mode='2d', poles=ells, Nmu=len(muedges) - 1, los=[1,0,0], dk=dk, kmin=kedges[0], kmax=kedges[-1]+1e-9)
 
-    def get_mesh_power(data, los, edges=(kedges, muedges)):
+    def get_mesh_power(data, los=los, edges=(kedges, muedges), dtype=dtype):
         mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
         return MeshFFTPower(mesh, ells=ells, los=los, edges=edges)
 
@@ -104,15 +104,18 @@ def test_mesh_power():
         mesh2 = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos')
         return MeshFFTPower(mesh1, mesh2=mesh2, ells=ells, los=los, edges=kedges)
 
-    ref_power = get_ref_power(data)
-    ref_kedges = ref_power.power.edges['k']
+    ref_power = {dt: get_ref_power(data, dtype=dt) for dt in ['f4', 'f8']}
+    ref_kedges = ref_power['f8'].power.edges['k']
     #ref_norm = ref_power.attrs['norm']
 
     list_options = []
     list_options.append({'los':[1,0,0], 'edges':(ref_kedges, muedges)})
     list_options.append({'los':'x', 'edges':({'min':ref_kedges[0],'max':ref_kedges[-1],'step':ref_kedges[1] - ref_kedges[0]}, muedges)})
+    list_options.append({'los':'x', 'edges':(ref_kedges, muedges), 'dtype':'f4'})
+    list_options.append({'los':'x', 'edges':(ref_kedges, muedges[:-1]), 'dtype':'f4'})
     for options in list_options:
         result = get_mesh_power(data, **options)
+        ref = ref_power[options.get('dtype', 'f8')]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             fn = result.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
@@ -121,16 +124,18 @@ def test_mesh_power():
 
         power = result.wedges
         for imu, mu in enumerate(power.muavg):
-            assert np.allclose(power(mu=mu) + power.shotnoise, ref_power.power['power'][:,imu], atol=1e-6, rtol=3e-3)
+            assert np.allclose(power(mu=mu) + power.shotnoise, ref.power['power'][:,imu], atol=1e-6, rtol=3e-3)
 
-        power = result.poles
-        #norm = power.wnorm
-        for ell in ells:
-            #print((power(ell=ell).real + (ell == 0)*power.shotnoise) / ref_power.poles['power_{}'.format(ell)].real)
-            #assert np.allclose(power(ell=ell).real + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)].real, atol=1e-6, rtol=3e-3)
-            # Exact if offset = 0. in to_mesh()
-            assert np.allclose(power(ell=ell) + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)], atol=1e-6, rtol=5e-3)
+        if power.edges[1][-1] == 1.:
+            power = result.poles
+            #norm = power.wnorm
+            for ell in ells:
+                #print((power(ell=ell).real + (ell == 0)*power.shotnoise) / ref_power.poles['power_{}'.format(ell)].real)
+                #assert np.allclose(power(ell=ell).real + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)].real, atol=1e-6, rtol=3e-3)
+                # Exact if offset = 0. in to_mesh()
+                assert np.allclose(power(ell=ell) + (ell == 0)*power.shotnoise, ref.poles['power_{}'.format(ell)], atol=1e-6, rtol=5e-3)
 
+    power = get_mesh_power(data).poles
     power_compensation = get_mesh_power_compensation(data).poles
     for ill, ell in enumerate(ells):
         assert np.allclose(power_compensation.power_nonorm[ill]/power_compensation.wnorm, power.power_nonorm[ill]/power.wnorm)
@@ -167,8 +172,8 @@ def test_normalization():
     resampler = 'tsc'
     interlacing = False
     boxcenter = np.array([3000.,0.,0.])[None,:]
-    dtype = 'f8'
     los = None
+    dtype = 'f8'
     data = Catalog.load_fits(data_fn)
     randoms = Catalog.load_fits(randoms_fn)
     for catalog in [data, randoms]:
@@ -190,9 +195,9 @@ def test_catalog_power():
     resampler = 'tsc'
     interlacing = 2
     boxcenter = np.array([3000.,0.,0.])[None,:]
+    los = None
     dtype = 'f8'
     cdtype = 'c16'
-    los = None
     data = Catalog.load_fits(data_fn)
     randoms = Catalog.load_fits(randoms_fn)
     for catalog in [data, randoms]:
