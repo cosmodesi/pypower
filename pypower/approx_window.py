@@ -1,14 +1,13 @@
-r"""
-Implementation of (approximate) window function estimation and correction.
+"""
+Implementation of (approximate) window function estimation and convolution.
 Typically, the window function will be estimated through :class:`CatalogFFTWindow`,
-and wide-angle and window function matrices using :class:`PowerSpectrumOddWideAngleMatrix`
-and :class:`PowerSpectrumWindowMatrix`, respectively, following https://arxiv.org/abs/2106.06324.
+and window function matrices using :class:`PowerSpectrumOddWideAngleMatrix`,
+following https://arxiv.org/abs/2106.06324.
 """
 
 import math
 from fractions import Fraction
 import logging
-from dataclasses import dataclass
 
 import numpy as np
 from scipy import special
@@ -19,6 +18,7 @@ from . import mpi, utils
 from .fft_power import BasePowerSpectrumStatistic, MeshFFTPower, CatalogMesh,\
                        _make_array, _format_positions, _format_weights,\
                        get_default_nrealizations, get_inverse_probability_weight, _get_box
+from .wide_angle import Projection, BaseMatrix
 
 
 def weights_trapz(x):
@@ -306,9 +306,8 @@ def power_to_correlation_window(fourier_window, sep=None):
         kk, ss = np.meshgrid(k, sep, indexing='ij')
         ks = kk*ss
         integrand = wk[:,None] * 1. / (2.*np.pi)**3 * special.spherical_jn(proj.ell, ks)
-        prefactor = (1j) ** proj.ell # this is definition of the Hankel transform
-        if proj.ell % 2 == 1: prefactor *= -1j # we provide the imaginary part of odd power spectra, so let's multiply by (-i)^ell
-        prefactor = np.real(prefactor)
+        # prefactor is i^ell, but we provide the imaginary part of odd power spectra, so (-1)^(ell//2)
+        prefactor = (-1) ** (proj.ell // 2)
         window.append(prefactor * np.sum(volume[:,None]*integrand, axis=0))
 
     return CorrelationFunctionWindow(sep, window, fourier_window.projs.copy())
@@ -350,10 +349,10 @@ class CatalogFFTWindow(MeshFFTPower):
 
         projs : list, default=None
             List of :class:`Projection` instances or (multipole, wide-angle order) tuples.
-            If ``None``, and ``power_ref`` is provided, set the list of projections
+            If ``None``, and ``power_ref`` is provided, the list of projections is set
             to be able to compute window convolution of theory power spectrum multipoles of orders ``power_ref.ells``.
 
-        power_ref : CatalogFFTPower, default=None
+        power_ref : MultipolePowerSpectrum, default=None
             "Reference" power spectrum estimation, e.g. of the actual data.
             It is used to set default values for ``projs``, ``los``, ``boxsize``, ``boxcenter``, ``nmesh``,
             ``interlacing``, ``resampler`` and ``wnorm`` if those are ``None``.
@@ -432,7 +431,7 @@ class CatalogFFTWindow(MeshFFTPower):
             rescaled to the input random weights --- which yields a correct normalization of the window function
             for the power spectrum estimation ``power_ref``.
             If ``power_ref`` provided, use internal estimate obtained with :func:`normalization` --- which is wrong
-            (the normalieation :attr:`poles.wnorm` can be reset a posteriori using the above recipe).
+            (the normalization :attr:`poles.wnorm` can be reset a posteriori using the above recipe).
 
         shotnoise : float, default=None
             Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
@@ -462,9 +461,10 @@ class CatalogFFTWindow(MeshFFTPower):
             if projs is None:
                 ellmax = max(power_ref.ells)
                 with_odd = int(any(ell % 2 for ell in power_ref.ells))
-                projs = [(ell, 0) for ell in range(0, 2*ellmax+1, 2 - with_odd)]
+                projs = [(ell, 0) for ell in range(0, 2*ellmax + 1, 2 - with_odd)]
                 if los is None or isinstance(los, str) and los in ['firstpoint', 'endpoint']:
-                    projs += [(ell, 1) for ell in range(1 - with_odd, 2*ellmax+1, 2 - with_odd)]
+                    projs += [(ell, 1) for ell in range(1 - with_odd, 2*ellmax + 1, 2 - with_odd)]
+
         if projs is None:
             raise ValueError('If no reference power spectrum "power_ref" provided, provide list of projections "projs".')
         projs = [Projection(proj) for proj in projs]
@@ -484,8 +484,7 @@ class CatalogFFTWindow(MeshFFTPower):
             label = name.replace('randoms_positions','R')
             positions[label] = tmp
 
-        weight_attrs = weight_attrs or {}
-        weight_attrs = weight_attrs.copy()
+        weight_attrs = (weight_attrs or {}).copy()
         noffset = weight_attrs.get('noffset', 1)
         default_value = weight_attrs.get('default_value', 0)
         weight_attrs.update(noffset=noffset, default_value=default_value)
@@ -520,28 +519,26 @@ class CatalogFFTWindow(MeshFFTPower):
         if not isinstance(interlacing, tuple):
             interlacing = (interlacing,)*2
 
-        if power_ref is not None and wnorm is None:
+        if wnorm is None and power_ref is not None:
             wsum = [mpicomm.allreduce(sum(weights['R1']))]*2
             if not autocorr: wsum[1] = mpicomm.allreduce(sum(weights['R2']))
             ialpha2 = np.prod([wsum[ii]/power_ref.attrs[name] for ii, name in enumerate(['sum_data_weights1', 'sum_data_weights2'])])
             wnorm = ialpha2 * power_ref.wnorm
 
+        def get_mesh(data_positions, data_weights=None, **kwargs):
+            return CatalogMesh(data_positions, data_weights=data_weights,
+                               nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter,
+                               position_type='pos', dtype=dtype, mpicomm=mpicomm, **kwargs)
+
+        # Get catalog meshes
+        mesh1 = get_mesh(positions['R1'], data_weights=weights['R1'], resampler=resampler[0], interlacing=interlacing[0])
+
         window = []
-
         for wa_order, ells in ells_for_wa_order.items():
-            # Get catalog meshes
-            def get_mesh(data_positions, data_weights=None, **kwargs):
-                return CatalogMesh(data_positions, data_weights=data_weights,
-                                   nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter,
-                                   position_type='pos', dtype=dtype, mpicomm=mpicomm, **kwargs)
-
-            mesh1 = get_mesh(positions['R1'], data_weights=weights['R1'], resampler=resampler[0], interlacing=interlacing[0])
             mesh2 = None
-
             if wa_order == 0:
                 if not autocorr:
                     mesh2 = get_mesh(positions['R2'], data_weights=weights['R2'], resampler=resampler[1], interlacing=interlacing[1])
-
             else:
                 label = 'R1' if autocorr else 'R2'
                 weights2 = np.ones_like(positions[label], shape=len(positions[label])) if weights[label] is None else weights[label]
@@ -552,383 +549,12 @@ class CatalogFFTWindow(MeshFFTPower):
             window.append(PowerSpectrumWindow.from_power(self.poles, wa_order=wa_order))
 
         self.poles = PowerSpectrumWindow.concatenate(*window, axis=0)
+        del self.ells
 
-
-@dataclass(frozen=True)
-class Projection(BaseClass):
-    """
-    Class representing a "projection", i.e. multipole and wide-angle expansion order.
-
-    Attributes
-    ----------
-    ell : int
-        Multipole order.
-
-    wa_order : int, None
-        Wide-angle order.
-    """
-    def __init__(self, ell, wa_order='default', default_wa_order=0):
-        """
-        Initialize :class:`Projection`.
-
-        Parameters
-        ----------
-        ell : int
-            Multipole order.
-
-        wa_order : int, None, default='default'
-            Wide-angle order.
-            If 'default', defaults to ``default_wa_order``.
-
-        default_wa_order : int, default=0
-            Default wide-angle order to use if ``wa_order`` is 'default'.
-        """
-        if isinstance(ell, self.__class__):
-            self.__dict__.update(ell.__dict__)
-            return
-        if isinstance(ell, (tuple, list)):
-            ell, wa_order = ell
-        self.__dict__['ell'] = ell
-        self.__dict__['wa_order'] = default_wa_order if wa_order == 'default' else wa_order
-
-    def clone(self, **kwargs):
-        """Clone current projection, optionally updating ``ell`` and ``wa_order`` (using ``kwargs``)."""
-        return self.__class__(**{**self.__getstate__(), **kwargs})
-
-    def __getstate__(self):
-        """Return this class state dictionary."""
-        state = {}
-        for name in ['ell', 'wa_order']:
-            if hasattr(self, name):
-                state[name] = getattr(self, name)
-        return state
-
-    def __repr__(self):
-        """String representation of current projection."""
-        return '{}(ell={}, wa_order={})'.format(self.__class__.__name__, self.ell, self.wa_order)
-
-    def latex(self, inline=False):
-        """
-        Return latex string for current projection.
-        If ``inline`` is ``True``, add surrounding dollar $ signs.
-        """
-        if self.wa_order is None:
-            toret = r'\ell = {:d}'.format(self.ell)
-        else:
-            toret = r'(\ell, n) = ({:d}, {:d})'.format(self.ell, self.wa_order)
-        if inline:
-            toret = '${}$'.format(toret)
-        return toret
-
-    def __hash__(self):
-        return hash((self.ell, self.wa_order))
-
-    def __eq__(self, other):
-        """Is current projection equal to ``other``?"""
-        try:
-            return self.ell == other.ell and self.wa_order == other.wa_order
-        except AttributeError:
-            return False
-
-    def __gt__(self, other):
-        """Is current projection greater than ``other``?"""
-        return (self.ell > other.ell) or (self.wa_order is not None and other.wa_order is None) or (other.wa_order is not None and self.wa_order > other.wa_order)
-
-    def __lt__(self, other):
-        """Is current projection less than ``other``?"""
-        return (self.ell < other.ell) or (other.wa_order is not None and self.wa_order is None) or (self.wa_order is not None and self.wa_order < other.wa_order)
-
-
-class BaseMatrix(BaseClass):
-    """
-    Base class to represent a linear transform of the theory model,
-    from input projections :attr:`projsin` to output projections :attr:`projsout`.
-
-    Attributes
-    ----------
-    matrix : array
-        2D array representing linear transform.
-
-    xin : list
-        List of input "theory" coordinates.
-
-    xout : list
-        List of output "theory" coordinates.
-
-    projsin : list
-        List of input "theory" projections.
-
-    projsout : list
-        List of output projections.
-    """
-    def __getstate__(self):
-        """Return this class state dictionary."""
-        state = {}
-        for key in ['xin', 'xout', 'matrix']:
-            state[key] = getattr(self, key)
-        for key in ['projsin', 'projsout']:
-            state[key] = [proj.__getstate__() for proj in getattr(self, key)]
-        return state
-
-    def __setstate__(self, state):
-        """Set this class state dictionary."""
-        super(BaseMatrix, self).__setstate__(state)
-        for key in ['projsin', 'projsout']:
-            setattr(self, key, [Projection.from_state(state) for state in getattr(self, key)])
-
-    def dot(self, array, unpack=False):
-        """
-        Apply linear transform to input array.
-        If ``unpack`` is ``True``, return "unpacked" array,
-        i.e. a list of arrays corresponding to ``projsout``.
-        """
-        array = self.matrix.dot(np.asarray(array).flat)
-        if unpack:
-            toret = []
-            nout = 0
-            for xout in self.xout:
-                sl = slice(nout, nout+len(xout))
-                toret.append(array[sl])
-                nout = sl.stop
-            return toret
-        return array
-
-    @property
-    def dtype(self):
-        return self.matrix.dtype
-
-    @property
-    def shape(self):
-        return self.matrix.shape
-
-    @property
-    def ndim(self):
-        return len(self.shape)
-
-    def pack(self, matrix):
-        """
-        Set :attr:`matrix` from "unpacked" matrix, i.e. from a list of lists of matrices,
-        where block for output projection ``projout`` and input projection ``projin``
-        is obtained through ``matrix[self.projsout.index(projout)][self.projsin.index(projin)]``.
-        See :meth:`unpacked`.
-        """
-        self.matrix = np.bmat(matrix).A
-
-    def unpacked(self):
-        """
-        Return unpacked matrix, a list of lists of matrices
-        where block for output projection ``projout`` and input projection ``projin``
-        is obtained through ``matrix[self.projsout.index(projout)][self.projsin.index(projin)]``.
-        """
-        matrix = []
-        nout = 0
-        for xout in self.xout:
-            slout = slice(nout, nout+len(xout))
-            line = []
-            nin = 0
-            for xin in self.xin:
-                slin = slice(nin, nin+len(xin))
-                line.append(self.matrix[slout, slin])
-                nin = slin.stop
-            nout = slout.stop
-            matrix.append(line)
-        return matrix
-
-    def select_projs(self, projsin=None, projsout=None, xin=None, xout=None):
-        """
-        Restrict current instance to provided projections.
-
-        Parameters
-        ----------
-        projsin : list, default=None
-            List of input projections to restrict to.
-            Defaults to :attr:`projsin`.
-            If one projection is not in :attr:`projsin`, add a new column to :attr:`matrix`,
-            setting a diagonal matrix where input and output projection match (if the case);
-            see ``xin``.
-
-        projsout : list, default=None
-            List of output projections to restrict to.
-            Defaults to :attr:`projsout`.
-            If one projection is not in :attr:`projsout`, add a new row to :attr:`matrix`,
-            setting a diagonal matrix where input and output projection match (if the case);
-            see ``xout``.
-
-        xin : array, default=None
-            In case a new column must be added to :attr:`matrix`, width of that column,
-            i.e. length of input coordinates for that projection.
-
-        xout : array, default=None
-            In case a new row must be added to :attr:`matrix`, width of that row,
-            i.e. length of output coordinates for that projection.
-        """
-        old_matrix = self.unpacked()
-        old_projsin, old_projsout = self.projsin, self.projsout
-
-        def _get_projs(projs):
-            if not isinstance(projs, list): projs = [projs]
-            return [Projection(proj) for proj in projs]
-
-        self.projsin = _get_projs(projsin if projsin is not None else old_projsin)
-        self.projsout = _get_projs(projsout if projsout is not None else old_projsout)
-
-        if xin is None: xin = self.xin[0]
-        if xout is None: xout = self.xout[0]
-        old_xin, old_xout = self.xin, self.xout
-        self.xin, self.xout = [], []
-        for proj in self.projsin:
-            if proj in old_projsin:
-                tmp = old_xin[old_projsin.index(proj)]
-            else:
-                tmp = xin
-            self.xin.append(tmp)
-
-        for proj in self.projsout:
-            if proj in old_projsout:
-                tmp = old_xout[old_projsout.index(proj)]
-            else:
-                tmp = xout
-            self.xout.append(tmp)
-
-        self.matrix = []
-        for iout, projout in enumerate(self.projsout):
-            line = []
-            for iin, projin in enumerate(self.projsin):
-                if projout in old_projsout and projin in old_projsin:
-                    tmp = old_matrix[old_projsout.index(projout)][old_projsin.index(projin)]
-                else:
-                    shape = (len(self.xout[iout]), len(self.xin[iin]))
-                    if projout == projin:
-                        if shape[1] != shape[0]:
-                            raise ValueError('Cannot set diagonal matrix for ({}, {}) as expected shape is {}'.format(projin, projout, shape))
-                        tmp = np.eye(shape[0], dtype=self.dtype)
-                    else:
-                        tmp = np.zeros(shape, dtype=self.dtype)
-                line.append(tmp)
-            self.matrix.append(line)
-        self.matrix = np.bmat(self.matrix).A
-
-    def select_x(self, xinlim=None, xoutlim=None, projsin=None, projsout=None):
-        """
-        Restrict current instance to provided coordinate limits.
-
-        Parameters
-        ----------
-        xinlim : tuple, default=None
-            Restrict input coordinates to these (min, max) limits.
-            Defaults to ``(-np.inf, np.inf)``.
-
-        xoutlim : tuple, default=None
-            Restrict output coordinates to these (min, max) limits.
-            Defaults to ``(-np.inf, np.inf)``.
-
-        projsin : list, default=None
-            List of input projections to apply limits to.
-            Defaults to :attr:`projsin`.
-
-        projsout : list, default=None
-            List of output projections to apply limits to.
-            Defaults to :attr:`projsout`.
-        """
-        if xinlim is None: xinlim = (-np.inf, np.inf)
-        if xoutlim is None: xoutlim = (-np.inf, np.inf)
-
-        def _get_projs(projs):
-            if not isinstance(projs, list): projs = [projs]
-            return set([Projection(proj) for proj in projs])
-
-        projsin = _get_projs(projsin if projsin is not None else self.projsin)
-        projsout = _get_projs(projsout if projsout is not None else self.projsout)
-
-        self.matrix = self.unpacked()
-
-        maskin, maskout = [], []
-        for proj in projsin:
-            index = self.projsin.index(proj)
-            maskin.append((self.xin[index] >= xinlim[0]) & (self.xin[index] <= xinlim[1]))
-            self.xin[index] = self.xin[index][maskin[-1]]
-
-        for proj in projsout:
-            index = self.projsout.index(proj)
-            maskout.append((self.xout[index] >= xoutlim[0]) & (self.xout[index] <= xoutlim[1]))
-            self.xout[index] = self.xout[index][maskout[-1]]
-
-        for iout, projout in enumerate(projsout):
-            indexout = self.projsout.index(projout)
-            for iin, projin in enumerate(projsin):
-                indexin = self.projsin.index(projin)
-                self.matrix[indexout][indexin] = self.matrix[indexout][indexin][np.ix_(maskout[iout], maskin[iin])]
-        self.matrix = np.bmat(self.matrix).A
-
-    def rebin_x(self, factorin=1, factorout=1, projsin=None, projsout=None, statistic=None):
-        """
-        Rebin current instance.
-
-        Parameters
-        ----------
-        factorin : int, default=1
-            Rebin matrix along input coordinates by this factor.
-
-        factorout : int, default=1
-            Rebin matrix along output coordinates by this factor.
-
-        projsin : list, default=None
-            List of input projections to apply rebinning to.
-            Defaults to :attr:`projsin`.
-
-        projsout : list, default=None
-            List of output projections to apply rebinning to.
-            Defaults to :attr:`projsout`.
-
-        statistic : string, callable, default=None
-            Operation to apply when performing rebinning.
-            Defaults to average along input coordinates and sum along output coordinates.
-        """
-        if statistic is None:
-            self.rebin_x(factorin=1, factorout=factorout, projsin=projsin, projsout=projsout, statistic=np.mean)
-            self.rebin_x(factorin=factorin, factorout=1, projsin=projsin, projsout=projsout, statistic=np.sum)
-            return
-
-        def _get_projs(projs):
-            if not isinstance(projs, list): projs = [projs]
-            return set([Projection(proj) for proj in projs])
-
-        projsin = _get_projs(projsin if projsin is not None else self.projsin)
-        projsout = _get_projs(projsout if projsout is not None else self.projsout)
-
-        self.matrix = self.unpacked()
-
-        for proj in projsin:
-            index = self.projsin.index(proj)
-            self.xin[index] = self.xin[index][::factorin]
-
-        for proj in projsout:
-            index = self.projsout.index(proj)
-            self.xout[index] = self.xout[index][::factorout]
-
-        for projout in projsout:
-            indexout = self.projsout.index(projout)
-            for projin in projsin:
-                indexin = self.projsin.index(projin)
-                new_shape = tuple(s//f for s,f in zip(self.matrix[indexout][indexin].shape, (factorout, factorin)))
-                self.matrix[indexout][indexin] = utils.rebin(self.matrix[indexout][indexin], new_shape, statistic=statistic)
-        self.matrix = np.bmat(self.matrix).A
-
-    @staticmethod
-    def join(*others):
-        """
-        Join input matrices, i.e. dot them,
-        optionally selecting input and output projections such that they match.
-        """
-        new = BaseMatrix.copy(others[-1])
-        for first, second in zip(others[-2::-1], others[::-1]):
-            first = first.copy()
-            first.select_projs(projsout=second.projsin)
-            if first.shape[0] != second.shape[-1]:
-                raise ValueError('Input matrices do not have same shape')
-            new.matrix = new.matrix.dot(first.matrix)
-            new.projsin = first.projsin.copy()
-            new.xin = first.xin.copy()
+    @classmethod
+    def concatenate(cls, *others, axis=0):
+        new = others[0].copy()
+        new.poles = others[0].concatenate(*[other.poles for other in others], axis=axis)
         return new
 
 
@@ -1001,7 +627,7 @@ class CorrelationFunctionWindowMatrix(BaseMatrix):
         if isinstance(window, PowerSpectrumWindow):
             window = window.to_real(sep=sep)
 
-        matrix = []
+        self.projmatrix = []
         for projout in self.projsout:
             line = []
             for projin in self.projsin:
@@ -1016,19 +642,21 @@ class CorrelationFunctionWindowMatrix(BaseMatrix):
                         proj = projin.clone(ell=ell)
                         tmp += coeff*window(proj, sep, default_zero=self.default_zero)
                 line.append(tmp)
-            matrix.append(line)
-        self.projmatrix = np.array(matrix)
+            self.projmatrix.append(line)
+        self.projmatrix = np.array(self.projmatrix)
 
     @property
     def matrix(self):
-        """
-        Return 2D array of shape ``(len(self.projsout)*len(self.x),len(self.projsin)*len(self.x))``
-        corresponding to :attr:`projmatrix`.
-        """
-        return np.bmat([[np.diag(tmp) for tmp in line] for line in self.projmatrix]).A
+        if getattr(self, '_matrix', None) is None:
+            self._matrix = np.bmat([[np.diag(tmp) for tmp in line] for line in self.projmatrix]).A
+        return self._matrix
 
-    @classmethod
-    def propose_out(cls, projsin, sum_wa=True):
+    @matrix.setter
+    def matrix(self, matrix):
+        self._matrix = matrix
+
+    @staticmethod
+    def propose_out(projsin, sum_wa=True):
         """
         Propose output projections given proposed input projections ``projsin``.
         If ``sum_wa`` is ``True`` (typically always the case), return projections with :attr:`Projection.wa_order` set to ``None``
@@ -1154,9 +782,9 @@ class PowerSpectrumWindowMatrix(BaseMatrix):
                 # tmp is j_{\ell}(ks) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
                 tmp = special.spherical_jn(projout.ell, self.xout[iout][:,None]*self.sep) * self.corrmatrix[iout, iin] # matrix has dimensions (kout,s)
                 #from hankl import P2xi, xi2P
-                fflog = CorrelationToPower(self.sep, ell=projin.ell, q=self.q, xy=self.xy, lowring=False) # prefactor is 4 \pi (-i)^{\ell^{\prime}}
+                fftlog = CorrelationToPower(self.sep, ell=projin.ell, q=self.q, xy=self.xy, lowring=False) # prefactor is 4 \pi (-i)^{\ell^{\prime}}
                 # tmp is 4 \pi (-i)^{\ell^{\prime}} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
-                xin, tmp = fflog(tmp) # matrix has dimensions (kout, k)
+                xin, tmp = fftlog(tmp) # matrix has dimensions (kout, k)
                 assert np.allclose(xin, self.k)
                 prefactor = 1./(2.*np.pi**2) * (-1j)**projout.ell * (-1)**projin.ell # now prefactor 2 / \pi (-i)^{\ell} i^{\ell^{\prime}}
                 if projout.ell % 2 == 1: prefactor *= -1j # we provide the imaginary part of odd power spectra, so let's multiply by (-i)^{\ell}
@@ -1170,17 +798,9 @@ class PowerSpectrumWindowMatrix(BaseMatrix):
                 #print(projout.ell,projin.ell,self.xin.min(),self.xin.max(),self.kout[iout].min(),self.kout[iout].max(),tmp.min(),tmp.max())
                 line.append(tmp)
             self.matrix.append(line)
-
         self.matrix = np.bmat(self.matrix).A
 
-    @classmethod
-    def propose_out(cls, projsin, sum_wa=True):
-        """
-        Propose output projections given proposed input projections ``projsin``.
-        If ``sum_wa`` is ``True`` (typically always the case), return projections with :attr:`Projection.wa_order` set to ``None``
-        (all wide-angle orders have been summed).
-        """
-        return CorrelationFunctionWindowMatrix.propose_out(cls, projsin, sum_wa=sum_wa)
+    propose_out = CorrelationFunctionWindowMatrix.propose_out
 
 
 def wigner3j_square(ellout, ellin, prefactor=True):
@@ -1257,198 +877,3 @@ def wigner3j_square(ellout, ellin, prefactor=True):
         qvals.append(q)
 
     return qvals[::-1], coeffs[::-1]
-
-
-def odd_wide_angle_coefficients(ell, wa_order=1, los='firstpoint'):
-    r"""
-    Compute coefficients of odd wide-angle expansion, i.e.:
-
-    .. math::
-
-        \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right)}, - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right)}
-
-    See https://fr.overleaf.com/read/hpgbwqzmtcxn.
-    A minus sign is applied on both factors if ``los`` is 'endpoint'.
-
-    Parameters
-    ----------
-    ell : int
-        Multipole order.
-
-    wa_order : int, default=1
-        Wide-angle expansion order.
-        So far only order 1 is supported.
-
-    los : string
-        Choice of line-of-sight, either:
-
-        - 'firstpoint': the separation vector starts at the end of the line-of-sight
-        - 'endpoint': the separation vector ends at the end of the line-of-sight.
-
-    Returns
-    -------
-    ells : list
-        List of multipole orders of correlation function.
-
-    coeffs : list
-        List of coefficients to apply to correlation function multipoles corresponding to output ``ells``.
-    """
-    if wa_order != 1:
-        raise ValueError('Only wide-angle order 1 supported')
-
-    if los not in ('firstpoint', 'endpoint'):
-        raise ValueError('Only "firstpoint" and "endpoint" line-of-sight supported')
-
-    def coefficient(ell):
-        return ell*(ell+1)/2./(2*ell+1)
-
-    sign = (-1)**(los == 'endpoint')
-    if ell == 1:
-        return [ell + 1], [sign * coefficient(ell+1)]
-    return [ell-1, ell+1], [- sign * coefficient(ell-1), sign * coefficient(ell+1)]
-
-
-class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
-    """
-    Class computing matrix for wide-angle expansion.
-    Adapted from https://github.com/fbeutler/pk_tools/blob/master/wide_angle_tools.py
-    """
-    def __init__(self, k, projsin, projsout=None, d=1., wa_orders=1, los='firstpoint', sum_wa=True):
-        """
-        Initialize :class:`PowerSpectrumOddWideAngle`.
-
-        Parameters
-        ----------
-        k : array
-            Input (and ouput) wavenumbers.
-
-        projsin : list
-            Input projections.
-
-        projsout : list, default=None
-            Output projections. Defaults to ``propose_out(projsin, wa_orders=wa_orders)``.
-
-        d : float, default=1
-            Distance at the effective redshift. Use :math:`1` if already included in window functions.
-
-        wa_orders : int, list
-            Wide-angle expansion orders.
-            So far order 1 only is supported.
-
-        los : string
-            Choice of line-of-sight, either:
-
-            - 'firstpoint': the separation vector starts at the end of the line-of-sight
-            - 'endpoint': the separation vector ends at the end of the line-of-sight.
-
-        sum_wa : bool, default=True
-            Whether to perform summation over wide-angle orders.
-            Must be ``False`` if coupling to the window function is to be accounted for.
-        """
-        self.d = d
-        self.wa_orders = wa_orders
-        if np.ndim(wa_orders) == 0:
-            self.wa_orders = [wa_orders]
-        if not np.allclose(self.wa_orders,[1]):
-            raise NotImplementedError('Only wide-angle order wa_order = 1 supported')
-        self.los = los.lower()
-        self.sum_wa = sum_wa
-
-        self.projsin = [Projection(proj) for proj in projsin]
-        if projsout is None:
-            self.projsout = self.propose_out(projsin, wa_orders=self.wa_orders)
-        else:
-            self.projsout = [Projection(proj) for proj in projsout]
-        if any(proj.wa_order is None for proj in self.projsin):
-            raise ValueError('Input projections must have wide-angle order wa_order specified')
-        if not self.sum_wa and any(proj.wa_order is None for proj in self.projsout):
-            raise ValueError('Output projections must have wide-angle order wa_order specified')
-        k = np.asarray(k)
-        self.xin = [k.copy() for _ in self.projsin]
-        self.xout = [k.copy() for _ in self.projsout]
-
-        self.setup()
-
-    def setup(self):
-        r"""
-        Set up transform, i.e. compute matrix:
-
-        .. math::
-
-            M_{\ell\ell^{\prime}}^{(n,n^{\prime})}(k) =
-            \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} \delta_{\ell,\ell - 1} \delta_{n^{\prime},0} \left[ - \frac{\ell - 1}{k} + \partial_{k} \right]
-            - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} \delta_{\ell,\ell + 1} \delta_{n^{\prime},0} \left[ \frac{\ell + 2}{k} + k \partial_{k} \right]
-
-        if :math:`\ell` is odd and :math:`n = 1`, else:
-
-        .. math::
-
-            M_{\ell\ell^{\prime}}^{(0,n^{\prime})}(k) = \delta_{\ell,ell^{\prime}} \delta_{n^{\prime},0}
-
-        with :math:`\ell` multipole order corresponding to ``projout.ell`` and :math:`\ell^{\prime}` to ``projin.ell``,
-        :math:`n` wide angle order corresponding to ``projout.wa_order`` and :math:`n^{\prime}` to ``projin.wa_order``.
-        If :attr:`sum_wa` is ``True``, or output ``projout.wa_order`` is ``None``, sum over :math:`n` (only if no window convolution is accounted for).
-        Derivatives :math:`\partial_{k}` are computed with finite differences, see arXiv:2106.06324 eq. 3.3.
-        """
-        k = self.xin[0]
-        eye = np.eye(len(k), dtype=k.dtype)
-        self.matrix = []
-        for projout in self.projsout:
-            line = []
-            sum_wa = self.sum_wa and projout.wa_order is None
-            if projout.ell % 2 == 0: # even pole :math:`\ell`
-                for projin in self.projsin:
-                    if projin.ell == projout.ell and (sum_wa or projin.wa_order == projout.wa_order):
-                        tmp = eye
-                    else:
-                        tmp = 0.*eye
-                    line.append(tmp)
-            else:
-                line = [0.*eye for projin in self.projsin]
-                if sum_wa:
-                    wa_orders = self.wa_orders # sum over :math:`n`
-                else:
-                    wa_orders = [projout.wa_order] # projout.wa_order is 1
-                for wa_order in wa_orders:
-                    ells,coeffs = odd_wide_angle_coefficients(projout.ell, wa_order=wa_order, los=self.los)
-                    for iprojin,projin in enumerate(self.projsin):
-                        if projin.wa_order == 0 and projin.ell in ells:
-                            # \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
-                            # or - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} (if projin.ell == projout.ell + 1)
-                            coeff = coeffs[ells.index(projin.ell)]/self.d
-                            if projin.ell == projout.ell + 1:
-                                coeff_spherical_bessel = projin.ell + 1
-                            else:
-                                coeff_spherical_bessel = -projin.ell
-                            # K 'diag' terms arXiv:2106.06324 eq. 3.3, 3.4 and 3.5
-                            # tmp is - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} \frac{\ell - 1}{k} (if projin.ell == projout.ell - 1)
-                            # or \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} \frac{\ell + 2}{k} (if projin.ell == projout.ell + 1)
-                            tmp = np.diag(coeff_spherical_bessel * coeff / k)
-                            deltak = 2. * np.diff(k)
-                            # derivative :math:`\partial_{k}`
-                            tmp += np.diag(coeff / deltak, k=1) - np.diag(coeff / deltak, k=-1)
-
-                            # taking care of corners
-                            tmp[0,0] -= 2.*coeff / deltak[0]
-                            tmp[0,1] = 2.*coeff / deltak[0]
-                            tmp[-1,-1] += 2.*coeff / deltak[-1]
-                            tmp[-1,-2] = -2.*coeff / deltak[-1]
-                            line[iprojin] += tmp
-            self.matrix.append(line)
-        self.matrix = np.bmat(self.matrix).A # (out,in)
-
-    @classmethod
-    def propose_out(cls, projsin, wa_orders=1):
-        """Propose output projections (i.e. multipoles at wide-angle order > 0) that can be computed given proposed input projections ``projsin``."""
-        if np.ndim(wa_orders) == 0:
-            wa_orders = [wa_orders]
-
-        projsin = [Projection(proj) for proj in projsin]
-        ellsin = [proj.ell for proj in projsin if proj.wa_order == 0] # only consider input wa_order = 0 multipoles
-        projsout = []
-        for wa_order in wa_orders:
-            for ellout in range(1, max(ellsin), 2):
-                if all(ell in ellsin for ell in odd_wide_angle_coefficients(ellout, wa_order=wa_order)[0]): # check input multipoles are provided
-                    projsout.append(Projection(ell=ellout, wa_order=wa_order))
-
-        return projsout

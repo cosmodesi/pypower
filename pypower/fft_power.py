@@ -24,7 +24,7 @@ from .direct_power import _make_array, _format_positions, _format_weights, get_d
 def get_real_Ylm(ell, m):
     """
     Return a function that computes the real spherical harmonic of order (ell, m).
-    Mostly taken from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/convpower/fkp.py.
+    Adapted from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/convpower/fkp.py.
 
     Note
     ----
@@ -111,7 +111,7 @@ def get_real_Ylm(ell, m):
 
     try: import numexpr
     except ImportError: numexpr = None
-    Ylm = sp.lambdify((xhat, yhat, zhat), expr, modules='numexpr' if numexpr is not None else 'numpy')
+    Ylm = sp.lambdify((xhat, yhat, zhat), expr, modules='numexpr' if numexpr is not None else ['scipy', 'numpy'])
 
     # Attach some meta-data
     Ylm.expr = expr
@@ -120,7 +120,7 @@ def get_real_Ylm(ell, m):
     return Ylm
 
 
-def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
+def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
     r"""
     Project a 3D statistic on to the specified basis. The basis will be one of:
 
@@ -129,6 +129,13 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
       the Legendre polynomial when weighting different :math:`\mu` bins.
 
     Adapted from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py.
+
+    Notes
+    -----
+    In single precision (float32/complex64) nbodykit's implementation is fairly imprecise
+    due to incorrect binning of :math:`x` and :math:`\mu` modes.
+    Here we cast mesh coordinates to the maximum precision of input ``edges``,
+    which makes computation much more accurate in single precision.
 
     Notes
     -----
@@ -187,6 +194,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
     comm = y3d.pm.comm
     x3d = y3d.x
     hermitian_symmetric = y3d.compressed
+    if antisymmetric: hermitian_symmetric *= -1
 
     from scipy.special import legendre
 
@@ -195,7 +203,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
     x2edges = xedges**2
     nx = len(xedges) - 1
     nmu = len(muedges) - 1
-
+    xdtype = max(xedges.dtype, muedges.dtype)
     # always make sure first ell value is monopole, which
     # is just (x, mu) projection since legendre of ell=0 is 1
     ells = ells or []
@@ -220,74 +228,65 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None):
     for islab in range(x3d[0].shape[0]):
         # the square of coordinate mesh norm
         # (either Fourier space k or configuraton space x)
-        xslab = (x3d[0][islab],) + tuple(x3d[i] for i in range(1,3))
+        xslab = (x3d[0][islab].real.astype(xdtype),) + tuple(x3d[i].real.astype(xdtype) for i in range(1,3))
         x2slab = sum(xx**2 for xx in xslab)
 
         # if empty, do nothing
         if len(x2slab.flat) == 0: continue
 
         # get the bin indices for x on the slab
-        dig_x = np.digitize(x2slab.real.flat, x2edges, right=False)
+        dig_x = np.digitize(x2slab.flat, x2edges, right=False)
 
         # get the bin indices for mu on the slab
-        mu = sum(xx*ll for xx,ll in zip(xslab, los))
+        mu = sum(xx*ll for xx, ll in zip(xslab, los))
         xslab = x2slab**0.5
         nonzero = xslab != 0.
         mu[nonzero] /= xslab[nonzero]
-        dig_mu = np.digitize(mu.real.flat, muedges, right=False) # this is bins[i-1] <= x < bins[i]
-        dig_mu[mu.real.flat == muedges[-1]] = nmu # last mu inclusive
 
-        if hermitian_symmetric:
+        if hermitian_symmetric == 0:
+            hermitian_weights = 1.
+            mus = [mu]
+        else:
             nonsingular = np.ones(xslab.shape, dtype='?')
             # get the indices that have positive freq along symmetry axis = -1
             nonsingular[...] = x3d[-1][0] > 0.
-            hermitian_weights = np.ones_like(xslab.real)
-            hermitian_weights[nonsingular] = 2.
-        else:
-            hermitian_weights = 1.
-        # make the multi-index
-        multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx+2, nmu+2))
+            mus = [mu, -mu]
 
-        # sum up x in each bin (accounting for negative freqs)
-        xslab[:] *= hermitian_weights
-        xsum.flat += np.bincount(multi_index, weights=xslab.real.flat, minlength=xsum.size)
+        # accounting for negative frequencies
+        for imu, mu in enumerate(mus):
+            # make the multi-index
+            dig_mu = np.digitize(mu.flat, muedges, right=False) # this is bins[i-1] <= x < bins[i]
+            dig_mu[mu.real.flat == muedges[-1]] = nmu # last mu inclusive
 
-        # count number of modes in each bin (accounting for negative freqs)
-        nslab = np.ones_like(xslab.real) * hermitian_weights
-        nsum.flat += np.bincount(multi_index, weights=nslab.flat, minlength=nsum.size)
+            multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx+2, nmu+2))
 
-        # compute multipoles by weighting by Legendre(ell, mu)
-        for ill, ell in enumerate(unique_ells):
+            if hermitian_symmetric and imu:
+                multi_index = multi_index[nonsingular.flat]
+                xslab = xslab[nonsingular] # it will be recomputed
+                mu = mu[nonsingular]
 
-            # weight the input 3D array by the appropriate Legendre polynomial
-            weightedy3d = legpoly[ill](mu.real) * y3d[islab,...]
+            # sum up x in each bin
+            xsum.flat += np.bincount(multi_index, weights=xslab.flat, minlength=xsum.size)
+            # sum up mu in each bin
+            musum.flat += np.bincount(multi_index, weights=mu.flat, minlength=musum.size)
+            # count number of modes in each bin
+            nsum.flat += np.bincount(multi_index, minlength=nsum.size)
 
-            # add conjugate for this kx, ky, kz, corresponding to
-            # the (-kx, -ky, -kz) --> need to make mu negative for conjugate
-            # Below is identical to the sum of
-            # Leg(ell)(+mu) * y3d[:, nonsingular]    (kx, ky, kz)
-            # Leg(ell)(-mu) * y3d[:, nonsingular].conj()  (-kx, -ky, -kz)
-            # or
-            # weighted_y3d[:, nonsingular] += (-1)**ell * weighted_y3d[:, nonsingular].conj()
-            # but numerically more accurate.
-            if hermitian_symmetric:
+            # compute multipoles by weighting by Legendre(ell, mu)
+            for ill, ell in enumerate(unique_ells):
 
-                if ell % 2: # odd, real part cancels
-                    weightedy3d.real[nonsingular] = 0.
-                    weightedy3d.imag[nonsingular] *= 2.
-                else:  # even, imag part cancels
-                    weightedy3d.real[nonsingular] *= 2.
-                    weightedy3d.imag[nonsingular] = 0.
+                weightedy3d = (2.*ell + 1.) * legpoly[ill](mu)
 
-            # sum up the weighted y in each bin
-            weightedy3d *= (2.*ell + 1.)
-            ysum[ill,...].real.flat += np.bincount(multi_index, weights=weightedy3d.real.flat, minlength=nsum.size)
-            if np.iscomplexobj(ysum):
-                ysum[ill,...].imag.flat += np.bincount(multi_index, weights=weightedy3d.imag.flat, minlength=nsum.size)
+                if hermitian_symmetric and imu:
+                    # weight the input 3D array by the appropriate Legendre polynomial
+                    weightedy3d = hermitian_symmetric * (weightedy3d * y3d[islab][nonsingular[0]]).conj() # hermitian_symmetric is 1 or -1
+                else:
+                    weightedy3d = weightedy3d * y3d[islab, ...]
 
-        # sum up the absolute mag of mu in each bin (accounting for negative freqs)
-        mu[:] *= hermitian_weights
-        musum.flat += np.bincount(multi_index, weights=mu.real.flat, minlength=musum.size)
+                # sum up the weighted y in each bin
+                ysum[ill,...].real.flat += np.bincount(multi_index, weights=weightedy3d.real.flat, minlength=nsum.size)
+                if np.iscomplexobj(ysum):
+                    ysum[ill,...].imag.flat += np.bincount(multi_index, weights=weightedy3d.imag.flat, minlength=nsum.size)
 
     # sum binning arrays across all ranks
     xsum = comm.allreduce(xsum)
@@ -377,10 +376,10 @@ def _transform_rslab(rslab, boxsize):
     # We do not use the same conventions as pmesh:
     # rslab < 0 is sent back to [boxsize/2, boxsize]
     toret = []
-    for ii,r in enumerate(rslab):
-        mask = r < 0.
-        r[mask] += boxsize[ii]
-        toret.append(r)
+    for ii, rr in enumerate(rslab):
+        mask = rr < 0.
+        rr[mask] += boxsize[ii]
+        toret.append(rr)
     return toret
 
 
@@ -408,7 +407,7 @@ class BasePowerSpectrumStatistic(BaseClass):
             Power spectrum in each bin, *without* normalization.
 
         nmodes : array
-            Number of modes in each bin?
+            Number of modes in each bin.
 
         wnorm : float, default=1.
             Power spectrum normalization.
@@ -416,7 +415,7 @@ class BasePowerSpectrumStatistic(BaseClass):
         shotnoise_nonorm : float, default=0.
             Shot noise, *without* normalization.
 
-        attrs : dict, default=None.
+        attrs : dict, default=None
             Dictionary of other attributes.
         """
         if np.ndim(edges[0]) == 0: edges = (edges,)
@@ -810,7 +809,7 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
 class MeshFFTPower(BaseClass):
     """
     Class that computes power spectrum from input mesh(es), using global or local line-of-sight, following https://arxiv.org/abs/1704.02357.
-    In effect, this merge nbodykit's implementation of the global line-of-sight (periodic) algorithm of:
+    In effect, this class merges nbodykit's implementation of the global line-of-sight (periodic) algorithm of:
     https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py
     with the local line-of-sight algorithm of:
     https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/convpower/fkp.py
@@ -883,24 +882,49 @@ class MeshFFTPower(BaseClass):
             of ``mesh1`` by power spectrum normalization.
         """
         self._set_compensations(compensations)
+        self._set_los(los)
+        self._set_ells(ells)
+        self._set_mesh(mesh1, mesh2=mesh2, boxcenter=boxcenter)
+        self._set_edges(edges)
+        self.wnorm = wnorm
+        if wnorm is None:
+            self.wnorm = normalization(mesh1, mesh2)
+        self.shotnoise = shotnoise
+        if shotnoise is None:
+            self.shotnoise = 0.
+            # Shot noise is non zero only if we can estimate it
+            if self.autocorr and isinstance(mesh1, CatalogMesh):
+                self.shotnoise = mesh1.unnormalized_shotnoise()/self.wnorm
+        self.attrs.update(self._get_attrs())
+        if self.mpicomm.rank == 0:
+            self.log_info('Running power spectrum estimation.')
+        self.run()
 
+    def _set_compensations(self, compensations):
+        # Set :attr:`compensations`
+        if compensations is None: compensations = [None]*2
+        if not isinstance(compensations, (tuple, list)):
+            compensations = [compensations]*2
+
+        def _format_compensation(compensation):
+            if isinstance(compensation, dict):
+                return compensation
+            resampler = None
+            for name in ['ngp', 'cic', 'tsc', 'pcs']:
+                if name in compensation:
+                    resampler = name
+            if resampler is None:
+                raise ValueError('Specify resampler in compensation')
+            shotnoise = 'shotnoise' in compensation or 'sn' in compensation
+            return {'resampler':resampler, 'shotnoise':shotnoise}
+
+        self.compensations = [_format_compensation(compensation) if compensation is not None else None for compensation in compensations]
+
+    def _set_mesh(self, mesh1, mesh2=None, boxcenter=None):
         self.mesh1 = mesh1
         self.mesh2 = mesh2
         self.autocorr = mesh2 is None or mesh2 is mesh1
         self.attrs = {}
-
-        # Complex type is required for odd mutipoles
-        requires_complex = los is None and any(ell % 2 == 1 for ell in ells)
-
-        def get_dtype(mesh):
-            if requires_complex and not mesh.dtype.name.startswith('complex'):
-                dtype = np.dtype('c{:d}'.format(mesh.dtype.itemsize*2))
-                if mesh.mpicomm.rank == 0:
-                    self.log_warning('Odd multipoles are requested but input {} '\
-                                     'has floating type; switching to {} as mandatory for odd multipoles.'.format(mesh.__class__.__name__, dtype))
-            else:
-                dtype = mesh.dtype
-            return dtype
 
         for i in range(1 if self.autocorr else 2):
             name = 'mesh{:d}'.format(i+1)
@@ -908,7 +932,7 @@ class MeshFFTPower(BaseClass):
             if isinstance(mesh, CatalogMesh):
                 if mesh.mpicomm.rank == 0:
                     self.log_info('Painting catalog {:d} to mesh {}.'.format(i+1, str(mesh)))
-                setattr(self, name, mesh.to_mesh(dtype=get_dtype(mesh)))
+                setattr(self, name, mesh.to_mesh())
                 if mesh.mpicomm.rank == 0:
                     self.log_info('Done painting catalog {:d} to mesh.'.format(i+1))
                 if boxcenter is not None:
@@ -936,21 +960,8 @@ class MeshFFTPower(BaseClass):
             for name in ['sum_data_weights', 'sum_randoms_weights', 'resampler', 'interlacing']:
                 self.attrs['{}2'.format(name)] = self.attrs['{}1'.format(name)]
 
-        def enforce_dype(mesh):
-            # Cast mesh to correct dtype
-            dtype = get_dtype(mesh)
-            toret = mesh
-            if dtype != mesh.dtype:
-                pm = ParticleMesh(BoxSize=mesh.pm.BoxSize, Nmesh=mesh.pm.Nmesh, dtype=dtype, comm=mesh.pm.comm)
-                toret = pm.create(type='real')
-                toret[...] = mesh[...]
-            return toret
-
-        self.mesh1 = enforce_dype(self.mesh1)
         if self.autocorr:
             self.mesh2 = self.mesh1
-        else:
-            self.mesh2 = enforce_dype(self.mesh2)
         self.boxcenter = _make_array(boxcenter if boxcenter is not None else 0., 3, dtype='f8')
 
         if isinstance(mesh1, CatalogMesh) and isinstance(mesh2, CatalogMesh):
@@ -962,46 +973,7 @@ class MeshFFTPower(BaseClass):
             raise ValueError('Mismatch in input mesh sizes')
         if self.mesh2.pm.comm is not self.mesh1.pm.comm:
             raise ValueError('Communicator mismatch between input meshes')
-
-        self._set_edges(edges)
-        self._set_los(los)
-        swap = self.los_type == 'firstpoint'
-        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1 # swap meshes + complex conjugaison at the end of run()
-        self._set_ells(ells)
-        self.wnorm = wnorm
-        if wnorm is None:
-            self.wnorm = normalization(mesh1, mesh2)
-        self.shotnoise = shotnoise
-        if shotnoise is None:
-            self.shotnoise = 0.
-            # Shot noise is non zero only if we can estimate it
-            if self.autocorr and isinstance(mesh1, CatalogMesh):
-                self.shotnoise = mesh1.unnormalized_shotnoise()/self.wnorm
-        self.attrs.update(self._get_attrs())
-        if self.mpicomm.rank == 0:
-            self.log_info('Running power spectrum estimation.')
-        self.run()
-        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1
-
-    def _set_compensations(self, compensations):
-        # Set :attr:`compensations`
-        if compensations is None: compensations = [None]*2
-        if not isinstance(compensations, (tuple, list)):
-            compensations = [compensations]*2
-
-        def _format_compensation(compensation):
-            if isinstance(compensation, dict):
-                return compensation
-            resampler = None
-            for name in ['ngp', 'cic', 'tsc', 'pcs']:
-                if name in compensation:
-                    resampler = name
-            if resampler is None:
-                raise ValueError('Specify resampler in compensation')
-            shotnoise = 'shotnoise' in compensation or 'sn' in compensation
-            return {'resampler':resampler, 'shotnoise':shotnoise}
-
-        self.compensations = [_format_compensation(compensation) if compensation is not None else None for compensation in compensations]
+        self.pm = self.mesh1.pm
 
     def _set_edges(self, edges):
         # Set :attr:`edges`
@@ -1033,7 +1005,7 @@ class MeshFFTPower(BaseClass):
     def _set_ells(self, ells):
         # Set :attr:`ells`
         if ells is None:
-            if self.los is None:
+            if self.los_type != 'global':
                 raise ValueError('Specify non-empty list of ells')
             self.ells = None
         else:
@@ -1073,17 +1045,17 @@ class MeshFFTPower(BaseClass):
     @property
     def mpicomm(self):
         """Current MPI communicator."""
-        return self.mesh1.pm.comm
+        return self.pm.comm
 
     @property
     def boxsize(self):
         """Physical box size."""
-        return self.mesh1.pm.BoxSize
+        return self.pm.BoxSize
 
     @property
     def nmesh(self):
         """Mesh size."""
-        return self.mesh1.pm.Nmesh
+        return self.pm.Nmesh
 
     def _compensate(self, cfield, *compensations):
         if self.mpicomm.rank == 0:
@@ -1099,10 +1071,13 @@ class MeshFFTPower(BaseClass):
                 slab[...] /= window(*kc)
 
     def run(self):
+        swap = self.los_type == 'firstpoint'
+        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1 # swap meshes + complex conjugaison at the end of run()
         if self.los_type == 'global': # global (fixed) line-of-sight
             self._run_global_los()
         else: # local (varying) line-of-sight
             self._run_local_los()
+        del self.mesh2, self.mesh1
 
     def _get_attrs(self):
         # Return some attributes, to be saved in :attr:`poles` and :attr:`wedges`
@@ -1241,7 +1216,7 @@ class MeshFFTPower(BaseClass):
             Aell = ComplexField(self.mesh2.pm)
 
             # Spherical harmonic kernels (for ell > 0)
-            Ylms = [[get_real_Ylm(ell,m) for m in range(-ell, ell+1)] for ell in nonzeroells]
+            Ylms = [[get_real_Ylm(ell, m) for m in range(-ell, ell+1)] for ell in nonzeroells]
 
             # Offset the box coordinate mesh ([-BoxSize/2, BoxSize]) back to the original (x,y,z) coords
             offset = self.boxcenter - self.boxsize/2.
@@ -1253,12 +1228,12 @@ class MeshFFTPower(BaseClass):
             xgrid = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))]
             #xgrid = [xx.astype('f8') + offset[ii] for ii, xx in enumerate(self.mesh1.slabs.optx)]
             xnorm = np.sqrt(sum(xx**2 for xx in xgrid))
-            xgrid = [x/xnorm for x in xgrid]
+            xgrid = [xx/xnorm for xx in xgrid]
 
             # The Fourier-space grid
             kgrid = [kk.real.astype('f8') for kk in A0_1.slabs.optx]
             knorm = np.sqrt(sum(kk**2 for kk in kgrid)); knorm[knorm==0.] = np.inf
-            kgrid = [k/knorm for k in kgrid]
+            kgrid = [kk/knorm for kk in kgrid]
 
         for ill, ell in enumerate(nonzeroells):
 
@@ -1297,7 +1272,7 @@ class MeshFFTPower(BaseClass):
                 Aell[islab,...] = A0_1[islab] * Aell[islab].conj()
 
             # Project on to 1d k-basis (averaging over mu=[-1,1])
-            proj_result = project_to_basis(Aell, self.edges)[0]
+            proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2))[0]
             result.append(4 * np.pi * np.squeeze(proj_result[2]))
             k, nmodes = proj_result[0], proj_result[-1]
 
@@ -1521,8 +1496,7 @@ class CatalogFFTPower(MeshFFTPower):
             label = name.replace('data_positions','D').replace('randoms_positions','R').replace('shifted_positions','S')
             positions[label] = tmp
 
-        weight_attrs = weight_attrs or {}
-        weight_attrs = weight_attrs.copy()
+        weight_attrs = (weight_attrs or {}).copy()
         noffset = weight_attrs.get('noffset', 1)
         default_value = weight_attrs.get('default_value', 0)
         weight_attrs.update(noffset=noffset, default_value=default_value)

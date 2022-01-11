@@ -228,6 +228,8 @@ def rebin(ndarray, new_shape, statistic=np.sum):
      [342 350 358 366 374]]
 
     """
+    if ndarray.ndim == 1 and np.ndim(new_shape) == 0:
+        new_shape = [new_shape]
     if ndarray.ndim != len(new_shape):
         raise ValueError('Input array dim is {}, but requested output one is {}'.format(ndarray.ndim, len(new_shape)))
 
