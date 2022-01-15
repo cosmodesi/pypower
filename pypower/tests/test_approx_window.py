@@ -1,4 +1,5 @@
 import os
+import tempfile
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -6,23 +7,19 @@ from matplotlib import pyplot as plt
 from cosmoprimo import Cosmology
 from mockfactory import Catalog
 
-from pypower import CorrelationFunctionWindow, PowerSpectrumWindow, Projection,\
-                    BaseMatrix, PowerSpectrumWindowMatrix, PowerSpectrumOddWideAngleMatrix, CatalogFFTPower, CatalogFFTWindow, setup_logging
+from pypower import CorrelationFunctionWindowMultipole, PowerSpectrumWindowMultipole, Projection,\
+                    BaseMatrix, CorrelationFunctionWindowMultipoleMatrix, PowerSpectrumWindowMultipoleMatrix,\
+                    CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix, CatalogFFTPower, CatalogFFTWindowMultipole, setup_logging
 from pypower.approx_window import wigner3j_square
 
 from test_fft_power import data_fn, randoms_fn
-
-
-base_dir = os.path.dirname(os.path.realpath(__file__))
-plot_dir = os.path.join(base_dir, '_plots')
-window_fn = os.path.join(plot_dir, 'window_function.npy')
 
 
 def test_wigner():
     assert wigner3j_square(ellout=3, ellin=4, prefactor=True)[0] == [1, 3, 5, 7]
 
 
-def test_window_matrix():
+def test_power_spectrum_window_matrix():
     ellsin = (0, 1, 2, 3, 4)
     wa_orders = [0, 1]
     ellsout = ellsin
@@ -55,10 +52,10 @@ def test_window_matrix():
     sep = np.geomspace(swin[0], swin[-1], 1024*16)
     kin = 1./sep[::-1]/(sep[1]/sep[0])
 
-    wm = PowerSpectrumWindowMatrix(kout, projsin, projsout=projsout, window=window, k=kin, kinlim=None, sep=sep, sum_wa=False)
+    wm = PowerSpectrumWindowMultipoleMatrix(kout, projsin, projsout=projsout, window=window, k=kin, kinlim=None, sep=sep, sum_wa=False)
     kin = wm.xin[0]
     mask = (kin > 0.001) & (kin < 1.)
-    test = wm.matrix
+    test = wm.value.T
 
     from create_Wll import create_W
     ref = create_W(kout, swin, dwindow)
@@ -67,7 +64,7 @@ def test_window_matrix():
     from pypower.approx_window import weights_trapz
 
     for wa_order in wa_orders:
-        fig,lax = plt.subplots(len(ellsout), len(ellsin), figsize=(10,8))
+        fig,lax = plt.subplots(len(ellsout), len(ellsin), figsize=(12, 10))
         for illout,ellout in enumerate(ellsout):
             for illin,ellin in enumerate(ellsin):
                 iprojout = projsout.index(Projection(ell=ellout, wa_order=wa_order))
@@ -107,13 +104,23 @@ def test_window():
             projs.append(Projection(ell=ell, wa_order=wa_order))
     nmodes = np.ones_like(k, dtype='i4')
     boxsize = np.array([1000.]*3, dtype='f8')
-    window = PowerSpectrumWindow(edges, k, y, nmodes, projs, attrs={'boxsize':boxsize})
-    window.save(window_fn)
-    test = PowerSpectrumWindow.load(window_fn)
+    window = PowerSpectrumWindowMultipole(edges, k, y, nmodes, projs, attrs={'boxsize':boxsize})
+    window2 = PowerSpectrumWindowMultipole(edges, k, [yy/2. for yy in y], 2.*nmodes, projs, attrs={'boxsize':boxsize})
+    window = PowerSpectrumWindowMultipole.concatenate_x(window, window2)
+    assert np.allclose(window.power_nonorm[0], y[0]/2.)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        window.save(fn)
+        test = PowerSpectrumWindowMultipole.load(fn)
     assert np.allclose(test(projs[0], k), window.power_nonorm[0])
+
     window_real = window.to_real()
-    window_real.save(window_fn)
-    test = CorrelationFunctionWindow.load(window_fn)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        window_real.save(fn)
+        test = CorrelationFunctionWindowMultipole.load(fn)
     assert np.allclose(test(projs[0], 1./k[::-1]), window_real.corr[0])
 
 
@@ -136,13 +143,26 @@ def test_fft_window():
 
     poles = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
                             boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype=dtype).poles
-    window = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, position_type='pos', dtype=dtype).poles
-    window.save(window_fn)
-    test = PowerSpectrumWindow.load(window_fn)
-    assert np.allclose(test(test.projs[0], test.k), window.power[0])
+    edges = {'step':0.01}
+    window1 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', dtype=dtype).poles
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
+        window1.save(fn)
+        window = PowerSpectrumWindowMultipole.load(fn)
+        assert np.allclose(window.power[0], window1.power[0], equal_nan=True)
+
+    windowp1 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, projs=window.projs[:2], position_type='pos', dtype=dtype).poles
+    windowp2 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, projs=window.projs[2:], position_type='pos', dtype=dtype).poles
+    windowc = window1.concatenate_proj(windowp1, windowp2)
+    assert np.allclose(windowc.power, window1.power)
+
+    window2 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', boxsize=1000., dtype=dtype).poles
+    windowc = window.concatenate_x(window1, window2)
+    assert windowc.k[-1] > window1.k[-1]
 
 
-def get_window_matrix(projsin, projsout=(0, 2, 4)):
+def get_correlation_function_window():
     sep = np.linspace(1e-4, 1e3, 1000)
     win = np.exp(-(sep/100.)**2)
 
@@ -153,20 +173,37 @@ def get_window_matrix(projsin, projsout=(0, 2, 4)):
             if ell > 0: y_ *= np.random.uniform()/10.
             y.append(y_)
             projs.append(Projection(ell=ell, wa_order=wa_order))
-    window = CorrelationFunctionWindow(sep, y, projs)
+    return CorrelationFunctionWindowMultipole(sep, y, projs)
 
-    sep = np.geomspace(sep[0], sep[-1], 1024)
-    kinlim = (1e-3, 1e1)
-    kout = np.linspace(0., 0.3, 60)
-    return PowerSpectrumWindowMatrix(kout, projsin, projsout=projsout, window=window, sep=sep, kinlim=kinlim)
+
+def test_correlation_function_window_matrix():
+
+    window = get_correlation_function_window()
+    ells = [0, 2, 4]
+    projsin = ells + PowerSpectrumOddWideAngleMatrix.propose_out(ells, wa_orders=1)
+    wm = CorrelationFunctionWindowMultipoleMatrix(np.linspace(0., 1., 10), projsin, projsout=ells, window=window)
+    kwargs = {'d':1000., 'wa_orders':1, 'los':'firstpoint'}
+    wa = CorrelationFunctionOddWideAngleMatrix(wm.xin[0], ells, projsout=wm.projsin, **kwargs)
+    matrix = BaseMatrix.join(wa, wm)
+    wm.resum_input_odd_wide_angle(**kwargs)
+    assert np.allclose(matrix.value, wm.value)
+    assert len(matrix.xin) == len(matrix.projsin) == len(ells)
+    assert len(matrix.xout) == len(matrix.projsout) == len(ells)
 
 
 def test_window_convolution():
-
+    window = get_correlation_function_window()
     ells = [0, 2, 4]
-    wm = get_window_matrix(ells + PowerSpectrumOddWideAngleMatrix.propose_out(ells, wa_orders=1))
-    wa = PowerSpectrumOddWideAngleMatrix(wm.xin[0], ells, projsout=wm.projsin, d=1000., wa_orders=1, los='firstpoint')
+    sep = np.geomspace(window.sep[0], window.sep[-1], 1024)
+    kinlim = (1e-3, 1e1)
+    kout = np.linspace(0., 0.3, 60)
+    projsin = ells + PowerSpectrumOddWideAngleMatrix.propose_out(ells, wa_orders=1)
+    wm = PowerSpectrumWindowMultipoleMatrix(kout, projsin, projsout=ells, window=window, sep=sep, kinlim=kinlim)
+    kwargs = {'d':1000., 'wa_orders':1, 'los':'firstpoint'}
+    wa = PowerSpectrumOddWideAngleMatrix(wm.xin[0], ells, projsout=wm.projsin, **kwargs)
     matrix = BaseMatrix.join(wa, wm)
+    wm.resum_input_odd_wide_angle(**kwargs)
+    assert np.allclose(matrix.value, wm.value)
     assert len(matrix.xin) == len(matrix.projsin) == len(ells)
     assert len(matrix.xout) == len(matrix.projsout) == len(ells)
     matrix.rebin_x(factorout=2)
@@ -198,8 +235,12 @@ if __name__ == '__main__':
 
     setup_logging()
 
+    test_window_convolution()
+    exit()
+
     test_wigner()
-    test_window_matrix()
     test_window()
     test_fft_window()
+    test_power_spectrum_window_matrix()
+    test_correlation_function_window_matrix()
     test_window_convolution()

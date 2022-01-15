@@ -1,6 +1,6 @@
 """
 Implementation of (approximate) window function estimation and convolution.
-Typically, the window function will be estimated through :class:`CatalogFFTWindow`,
+Typically, the window function will be estimated through :class:`CatalogFFTWindowMultipole`,
 and window function matrices using :class:`PowerSpectrumOddWideAngleMatrix`,
 following https://arxiv.org/abs/2106.06324.
 """
@@ -18,7 +18,7 @@ from . import mpi, utils
 from .fft_power import BasePowerSpectrumStatistic, MeshFFTPower, CatalogMesh,\
                        _make_array, _format_positions, _format_weights,\
                        get_default_nrealizations, get_inverse_probability_weight, _get_box
-from .wide_angle import Projection, BaseMatrix
+from .wide_angle import Projection, BaseMatrix, CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix
 
 
 def weights_trapz(x):
@@ -26,7 +26,7 @@ def weights_trapz(x):
     return np.concatenate([[x[1]-x[0]],x[2:]-x[:-2],[x[-1]-x[-2]]])/2.
 
 
-class PowerSpectrumWindow(BasePowerSpectrumStatistic):
+class PowerSpectrumWindowMultipole(BasePowerSpectrumStatistic):
 
     """Power spectrum window function multipoles."""
 
@@ -35,7 +35,7 @@ class PowerSpectrumWindow(BasePowerSpectrumStatistic):
 
     def __init__(self, edges, modes, power_nonorm, nmodes, projs, wnorm=1., shotnoise_nonorm=0., **kwargs):
         r"""
-        Initialize :class:`PowerSpectrumWindow`.
+        Initialize :class:`PowerSpectrumWindowMultipole`.
 
         Parameters
         ----------
@@ -43,7 +43,7 @@ class PowerSpectrumWindow(BasePowerSpectrumStatistic):
             Edges used to bin window function measurement.
 
         modes : array
-            Mean "wavevector" (e.g. :math:`(k, \mu)`) in each bin.
+            Mean "wavenumber" (:math:`k`) in each bin.
 
         power_nonorm : array
             Power spectrum in each bin, *without* normalization.
@@ -64,7 +64,7 @@ class PowerSpectrumWindow(BasePowerSpectrumStatistic):
             Other arguments for :attr:`BasePowerSpectrumStatistic`.
         """
         self.projs = [Projection(proj) for proj in projs]
-        super(PowerSpectrumWindow, self).__init__(edges, modes, power_nonorm, nmodes, wnorm=wnorm, shotnoise_nonorm=shotnoise_nonorm, **kwargs)
+        super(PowerSpectrumWindowMultipole, self).__init__(edges, modes, power_nonorm, nmodes, wnorm=wnorm, shotnoise_nonorm=shotnoise_nonorm, **kwargs)
         if np.ndim(self.shotnoise_nonorm) == 0:
             self.shotnoise_nonorm = _make_array(0., len(self.power_nonorm), dtype='f8')
             for iproj, proj in enumerate(self.projs):
@@ -121,19 +121,19 @@ class PowerSpectrumWindow(BasePowerSpectrumStatistic):
     @classmethod
     def from_power(cls, power, wa_order=0):
         """
-        Build window function from input :class:`MultipolePowerSpectrum`.
+        Build window function from input :class:`PowerSpectrumMultipole`.
 
         Parameters
         ----------
-        power : MultipolePowerSpectrum
-            Power spectrum measurement to convert into :class:`PowerSpectrumWindow`.
+        power : PowerSpectrumMultipole
+            Power spectrum measurement to convert into :class:`PowerSpectrumWindowMultipole`.
 
         wa_order : int, default=0
             Wide-angle order used for input power spectrum measurement.
 
         Returns
         -------
-        window : PowerSpectrumWindow
+        window : PowerSpectrumWindowMultipole
         """
         state = power.__getstate__()
         state.pop('name', None)
@@ -141,39 +141,67 @@ class PowerSpectrumWindow(BasePowerSpectrumStatistic):
         return cls(**state)
 
     @classmethod
-    def concatenate(cls, *others, axis=0):
+    def concatenate_x(cls, *others, select='nmodes'):
         """
-        Concatenate input window functions, along axis.
+        Concatenate input window functions, along k-coordinates.
+        If several input windows have value for a given k-bin, choose the one with largest number of modes.
 
         Parameters
         ----------
-        others : list of PowerSpectrumWindow
+        others : list of PowerSpectrumWindowMultipole
             List of window functions to be concatenated.
 
-        axis : int, default=0
-            Axis along which to concatenate window functions:
-            0 to concatenate projections;
-            1 to concatenate k modes.
+        select : string, default='nmodes'
+            How to select input windows for each k (if several);
+            'nmodes': select window with highest number of modes.
 
         Returns
         -------
-        new : PowerSpectrumWindow
+        new : PowerSpectrumWindowMultipole
         """
-        axis = axis % 2
         new = others[0].deepcopy()
-        if axis == 0:
-            new.projs = []
-            for other in others: new.projs += other.projs
-            names = ['power_nonorm', 'power_direct_nonorm', 'wnorm', 'shotnoise_nonorm']
-        else:
-            new.projs = others[0].projs.copy()
-            names = ['power_nonorm', 'power_direct_nonorm', 'modes', 'nmodes']
+        names = ['power_nonorm', 'power_direct_nonorm', 'nmodes']
+        # First set common edges
+        for other in others[1:]:
+            mid = (other.edges[0][:-1] + other.edges[0][1:])/2.
+            mask_low, mask_high = np.flatnonzero(mid < new.edges[0][0]), np.flatnonzero(mid > new.edges[0][-1])
+            new.edges[0] = np.concatenate([other.edges[0][mask_low], new.edges[0], other.edges[0][mask_high + 1]], axis=0)
+            for name in names:
+                setattr(new, name, np.concatenate([getattr(other, name)[...,mask_low], getattr(new, name), getattr(other, name)[...,mask_high]], axis=-1))
+            new.modes[0] = np.concatenate([other.modes[0][...,mask_low], new.modes[0], other.modes[0][...,mask_high]], axis=-1)
+
+        tedges = list(zip(new.edges[0][:-1], new.edges[0][1:]))
+        for other in others[1:]:
+            for iother, tedge in enumerate(zip(other.edges[0][:-1], other.edges[0][1:])):
+                if tedge in tedges: # search for k-bin in other
+                    inew = tedges.index(tedge)
+                    if other.nmodes[iother] > new.nmodes[inew]:
+                        for name in names:
+                            getattr(new, name)[...,inew] = getattr(other, name)[...,iother] # replace by value in window with highest number of modes
+                        new.modes[0][...,inew] = other.modes[0][inew]
+        return new
+
+    @classmethod
+    def concatenate_proj(cls, *others):
+        """
+        Concatenate input window functions, along projections.
+
+        Parameters
+        ----------
+        others : list of PowerSpectrumWindowMultipole
+            List of window functions to be concatenated.
+
+        Returns
+        -------
+        new : PowerSpectrumWindowMultipole
+        """
+        new = others[0].deepcopy()
+        new.projs = []
+        for other in others: new.projs += other.projs
+        names = ['power_nonorm', 'power_direct_nonorm', 'wnorm', 'shotnoise_nonorm']
         for name in names:
-            tmp = []
-            for other in others: tmp.append(getattr(other, name))
-            setattr(new, name, np.concatenate(tmp, axis=axis))
-        if axis != 0:
-            new.edges[0] = np.concatenate([others[0].edges[0]] + [other.edges[0][1:] for other in others[1:]], axis=0)
+            tmp = [getattr(other, name) for other in others]
+            setattr(new, name, np.concatenate(tmp, axis=0))
         return new
 
     def to_real(self, sep=None):
@@ -187,23 +215,23 @@ class PowerSpectrumWindow(BasePowerSpectrumStatistic):
 
         Returns
         -------
-        window : CorrelationFunctionWindow
+        window : CorrelationFunctionWindowMultipole
         """
         return power_to_correlation_window(self, sep=sep)
 
     def __getstate__(self):
         """Return this class state dictionary."""
-        state = super(PowerSpectrumWindow, self).__getstate__()
+        state = super(PowerSpectrumWindowMultipole, self).__getstate__()
         state['projs'] = [proj.__getstate__() for proj in self.projs]
         return state
 
     def __setstate__(self, state):
         """Set this class state dictionary."""
-        super(PowerSpectrumWindow, self).__setstate__(state)
+        super(PowerSpectrumWindowMultipole, self).__setstate__(state)
         self.projs = [Projection.from_state(state) for state in self.projs]
 
 
-class CorrelationFunctionWindow(BaseClass):
+class CorrelationFunctionWindowMultipole(BaseClass):
 
     """Correlation window function multipoles."""
 
@@ -211,7 +239,7 @@ class CorrelationFunctionWindow(BaseClass):
 
     def __init__(self, sep, corr, projs):
         r"""
-        Initialize :class:`CorrelationFunctionWindow`.
+        Initialize :class:`CorrelationFunctionWindowMultipole`.
 
         Parameters
         ----------
@@ -270,7 +298,7 @@ class CorrelationFunctionWindow(BaseClass):
 
     def __setstate__(self, state):
         """Set this class state dictionary."""
-        super(CorrelationFunctionWindow, self).__setstate__(state)
+        super(CorrelationFunctionWindowMultipole, self).__setstate__(state)
         self.projs = [Projection.from_state(state) for state in self.projs]
 
 
@@ -280,7 +308,7 @@ def power_to_correlation_window(fourier_window, sep=None):
 
     Parameters
     ----------
-    fourier_window : PowerSpectrumWindow
+    fourier_window : PowerSpectrumWindowMultipole
         Power spectrum window function.
 
     sep : array, default=None
@@ -288,7 +316,7 @@ def power_to_correlation_window(fourier_window, sep=None):
 
     Returns
     -------
-    window : CorrelationFunctionWindow
+    window : CorrelationFunctionWindowMultipole
         Correlation window function.
     """
     k = fourier_window.k
@@ -310,10 +338,10 @@ def power_to_correlation_window(fourier_window, sep=None):
         prefactor = (-1) ** (proj.ell // 2)
         window.append(prefactor * np.sum(volume[:,None]*integrand, axis=0))
 
-    return CorrelationFunctionWindow(sep, window, fourier_window.projs.copy())
+    return CorrelationFunctionWindowMultipole(sep, window, fourier_window.projs.copy())
 
 
-class CatalogFFTWindow(MeshFFTPower):
+class CatalogFFTWindowMultipole(MeshFFTPower):
 
     """Wrapper on :class:`MeshFFTPower` to estimate window function from input random positions and weigths."""
 
@@ -324,7 +352,7 @@ class CatalogFFTWindow(MeshFFTPower):
                 resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
-        Initialize :class:`CatalogFFTWindow`, i.e. estimate power spectrum window.
+        Initialize :class:`CatalogFFTWindowMultipole`, i.e. estimate power spectrum window.
 
         Parameters
         ----------
@@ -352,7 +380,7 @@ class CatalogFFTWindow(MeshFFTPower):
             If ``None``, and ``power_ref`` is provided, the list of projections is set
             to be able to compute window convolution of theory power spectrum multipoles of orders ``power_ref.ells``.
 
-        power_ref : MultipolePowerSpectrum, default=None
+        power_ref : PowerSpectrumMultipole, default=None
             "Reference" power spectrum estimation, e.g. of the actual data.
             It is used to set default values for ``projs``, ``los``, ``boxsize``, ``boxcenter``, ``nmesh``,
             ``interlacing``, ``resampler`` and ``wnorm`` if those are ``None``.
@@ -533,7 +561,7 @@ class CatalogFFTWindow(MeshFFTPower):
         # Get catalog meshes
         mesh1 = get_mesh(positions['R1'], data_weights=weights['R1'], resampler=resampler[0], interlacing=interlacing[0])
 
-        window = []
+        poles = []
         for wa_order, ells in ells_for_wa_order.items():
             mesh2 = None
             if wa_order == 0:
@@ -545,10 +573,10 @@ class CatalogFFTWindow(MeshFFTPower):
                 d = utils.distance(positions[label].T)
                 mesh2 = get_mesh(positions[label], data_weights=weights2/d**wa_order, resampler=resampler[1], interlacing=interlacing[1])
             # Now, run power spectrum estimation
-            super(CatalogFFTWindow, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
-            window.append(PowerSpectrumWindow.from_power(self.poles, wa_order=wa_order))
+            super(CatalogFFTWindowMultipole, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
+            poles.append(PowerSpectrumWindowMultipole.from_power(self.poles, wa_order=wa_order))
 
-        self.poles = PowerSpectrumWindow.concatenate(*window, axis=0)
+        self.poles = PowerSpectrumWindowMultipole.concatenate_proj(*poles)
         del self.ells
 
     @classmethod
@@ -558,7 +586,7 @@ class CatalogFFTWindow(MeshFFTPower):
         return new
 
 
-class CorrelationFunctionWindowMatrix(BaseMatrix):
+class CorrelationFunctionWindowMultipoleMatrix(BaseMatrix):
     """
     Class computing matrix for window product in configuration space.
 
@@ -567,9 +595,9 @@ class CorrelationFunctionWindowMatrix(BaseMatrix):
     projmatrix : array
         Array of shape ``(len(self.projsout), len(self.projsin), len(self.x))``.
     """
-    def __init__(self, sep, projsin, projsout=None, window=None, sum_wa=True, default_zero=False):
+    def __init__(self, sep, projsin, projsout=None, window=None, sum_wa=True, default_zero=False, attrs=None):
         """
-        Initialize :class:`CorrelationFunctionWindowMatrix`.
+        Initialize :class:`CorrelationFunctionWindowMultipoleMatrix`.
 
         Parameters
         ----------
@@ -582,9 +610,9 @@ class CorrelationFunctionWindowMatrix(BaseMatrix):
         projsout : list, default=None
             Output projections. Defaults to ``propose_out(projsin, sum_wa=sum_wa)``.
 
-        window : CorrelationFunctionWindow, PowerSpectrumWindow
+        window : CorrelationFunctionWindowMultipole, PowerSpectrumWindowMultipole
             Window function to convolve power spectrum with.
-            If a :class:`PowerSpectrumWindow` instance is provided, it is transformed to configuration space.
+            If a :class:`PowerSpectrumWindowMultipole` instance is provided, it is transformed to configuration space.
 
         sum_wa : bool, default=True
             Whether to perform summation over output wide-angle orders.
@@ -593,8 +621,13 @@ class CorrelationFunctionWindowMatrix(BaseMatrix):
         default_zero : bool, default=False
             If a given projection is not provided in window function, set to 0.
             Else an :class:`IndexError` is raised.
+
+        attrs : dict, default=None
+            Dictionary of other attributes.
         """
         self.window = window
+        self.attrs = {}
+        if hasattr(window, 'attrs'): self.attrs.update(window.attrs)
         self.sum_wa = sum_wa
         self.default_zero = default_zero
 
@@ -604,8 +637,8 @@ class CorrelationFunctionWindowMatrix(BaseMatrix):
         else:
             self.projsout = [Projection(proj, default_wa_order=None if self.sum_wa else 0) for proj in projsout]
 
-        sep = np.asarray(sep)
-        self.xin, self.xout = [sep.copy() for _ in self.projsin], [sep.copy() for _ in self.projsout]
+        self._set_xw(xin=sep, xout=sep)
+        self.attrs = attrs or {}
         self.setup()
 
     def setup(self):
@@ -624,14 +657,14 @@ class CorrelationFunctionWindowMatrix(BaseMatrix):
         ellsin, ellsout = [proj.ell for proj in self.projsin], [proj.ell for proj in self.projsout]
         window = self.window
         sep = self.xin[0]
-        if isinstance(window, PowerSpectrumWindow):
+        if isinstance(window, PowerSpectrumWindowMultipole):
             window = window.to_real(sep=sep)
 
-        self.projmatrix = []
-        for projout in self.projsout:
+        self.projvalue = []
+        for projin in self.projsin:
             line = []
-            for projin in self.projsin:
-                tmp = np.zeros_like(sep)
+            for projout in self.projsout:
+                block = np.zeros_like(sep)
                 if not self.sum_wa and (projin.wa_order is None or projout.wa_order is None):
                     raise ValueError('Input and output projections should both have wide-angle order wa_order specified')
                 sum_wa = self.sum_wa and projout.wa_order is None
@@ -640,20 +673,20 @@ class CorrelationFunctionWindowMatrix(BaseMatrix):
                     # sum over L = ell, coeff is C_{\ell \ell^{\prime} L}, window is Q_{L}
                     for ell, coeff in zip(ellsw, coeffs):
                         proj = projin.clone(ell=ell)
-                        tmp += coeff*window(proj, sep, default_zero=self.default_zero)
-                line.append(tmp)
-            self.projmatrix.append(line)
-        self.projmatrix = np.array(self.projmatrix)
+                        block += coeff*window(proj, sep, default_zero=self.default_zero)
+                line.append(block)
+            self.projvalue.append(line)
+        self.projvalue = np.array(self.projvalue) # (in, out)
 
     @property
-    def matrix(self):
-        if getattr(self, '_matrix', None) is None:
-            self._matrix = np.bmat([[np.diag(tmp) for tmp in line] for line in self.projmatrix]).A
-        return self._matrix
+    def value(self):
+        if getattr(self, '_value', None) is None:
+            self._value = np.bmat([[np.diag(tmp) for tmp in line] for line in self.projvalue]).A
+        return self._value
 
-    @matrix.setter
-    def matrix(self, matrix):
-        self._matrix = matrix
+    @value.setter
+    def value(self, value):
+        self._value = value
 
     @staticmethod
     def propose_out(projsin, sum_wa=True):
@@ -668,14 +701,26 @@ class CorrelationFunctionWindowMatrix(BaseMatrix):
             projsout = [Projection(ell=ell, wa_order=None) for ell in ellsout]
         return projsout
 
+    def resum_input_odd_wide_angle(self, **kwargs):
+        """
+        Resum odd wide-angle orders. By default, line-of-sight is chosen as that save in :attr:`attrs` (``attrs['los_type']``).
+        To override, use input ``kwargs`` which will be passed to :attr:`CorrelationFunctionOddWideAngleMatrix`.
+        """
+        projsin = [proj for proj in self.projsin if proj.wa_order == 0.]
+        if projsin == self.projsin: return
+        from .wide_angle import CorrelationFunctionOddWideAngleMatrix
+        if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
+        matrix = CorrelationFunctionOddWideAngleMatrix([0.], projsin, projsout=self.projsin, **kwargs).value
+        self.prod_proj(matrix, axes=('in', -1), projs=projsin)
 
-class PowerSpectrumWindowMatrix(BaseMatrix):
+
+class PowerSpectrumWindowMultipoleMatrix(BaseMatrix):
 
     """Class computing matrix for window convolution in Fourier space."""
 
-    def __init__(self, kout, projsin, projsout=None, k=None, kinlim=(1e-4, 1.), sep=None, window=None, xy=1, q=0, sum_wa=True, default_zero=False):
+    def __init__(self, kout, projsin, projsout=None, k=None, kinlim=(1e-4, 1.), sep=None, window=None, xy=1, q=0, sum_wa=True, default_zero=False, attrs=None):
         """
-        Initialize :class:`PowerSpectrumWindowMatrix`.
+        Initialize :class:`PowerSpectrumWindowMultipoleMatrix`.
 
         Parameters
         ----------
@@ -699,9 +744,9 @@ class PowerSpectrumWindowMatrix(BaseMatrix):
             Separations for Hankel transforms; must be log-spaced.
             If ``None``, use ``k`` and ``xy`` instead to determine :attr:`sep`.
 
-        window : CorrelationFunctionWindow, PowerSpectrumWindow
+        window : CorrelationFunctionWindowMultipole, PowerSpectrumWindowMultipole
             Window function to convolve power spectrum with.
-            If a :class:`PowerSpectrumWindow` instance is provided, it is transformed to configuration space.
+            If a :class:`PowerSpectrumWindowMultipole` instance is provided, it is transformed to configuration space.
 
         xy : float, default=1
             If one of ``k`` or ``sep`` is ``None``, set it following e.g. ``xy/sep[::-1]``.
@@ -716,6 +761,9 @@ class PowerSpectrumWindowMatrix(BaseMatrix):
         default_zero : bool, default=False
             If a given projection is not provided in window function, set to 0.
             Else an :class:`IndexError` is raised.
+
+        attrs : dict, default=None
+            Dictionary of other attributes.
         """
         self.xy = 1.
 
@@ -737,6 +785,8 @@ class PowerSpectrumWindowMatrix(BaseMatrix):
         self.q = q
 
         self.window = window
+        self.attrs = {}
+        if hasattr(window, 'attrs'): self.attrs.update(window.attrs)
         self.sum_wa = sum_wa
         self.default_zero = default_zero
 
@@ -746,10 +796,8 @@ class PowerSpectrumWindowMatrix(BaseMatrix):
         else:
             self.projsout = [Projection(proj, default_wa_order=None if self.sum_wa else 0) for proj in projsout]
 
-        if np.ndim(kout[0]) == 0:
-            kout = [kout]*len(projsout)
-        self.xout = [np.asarray(x) for x in kout]
-        self.xin = [self.k.copy()]*len(self.projsin)
+        self._set_xw(xin=self.k, xout=kout)
+        self.attrs = attrs or {}
         self.setup()
 
     def setup(self):
@@ -773,34 +821,47 @@ class PowerSpectrumWindowMatrix(BaseMatrix):
 
         Note that we do not include :math:`k^{-n}` as this factor is included in :class:`PowerSpectrumOddWideAngleMatrix`.
         """
-        self.corrmatrix = CorrelationFunctionWindowMatrix(self.sep, self.projsin, projsout=self.projsout, window=self.window, sum_wa=self.sum_wa, default_zero=self.default_zero).projmatrix
+        self.corrmatrix = CorrelationFunctionWindowMultipoleMatrix(self.sep, self.projsin, projsout=self.projsout, window=self.window, sum_wa=self.sum_wa, default_zero=self.default_zero).projvalue
 
-        self.matrix = []
-        for iout, projout in enumerate(self.projsout):
+        self.value = []
+        for iin, projin in enumerate(self.projsin):
             line = []
-            for iin, projin in enumerate(self.projsin):
+            for iout, projout in enumerate(self.projsout):
                 # tmp is j_{\ell}(ks) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
-                tmp = special.spherical_jn(projout.ell, self.xout[iout][:,None]*self.sep) * self.corrmatrix[iout, iin] # matrix has dimensions (kout,s)
+                block = special.spherical_jn(projout.ell, self.xout[iout][:,None]*self.sep) * self.corrmatrix[iin, iout] # matrix has dimensions (kout,s)
                 #from hankl import P2xi, xi2P
                 fftlog = CorrelationToPower(self.sep, ell=projin.ell, q=self.q, xy=self.xy, lowring=False) # prefactor is 4 \pi (-i)^{\ell^{\prime}}
                 # tmp is 4 \pi (-i)^{\ell^{\prime}} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
-                xin, tmp = fftlog(tmp) # matrix has dimensions (kout, k)
+                xin, block = fftlog(block) # matrix has dimensions (kout, k)
                 assert np.allclose(xin, self.k)
                 prefactor = 1./(2.*np.pi**2) * (-1j)**projout.ell * (-1)**projin.ell # now prefactor 2 / \pi (-i)^{\ell} i^{\ell^{\prime}}
                 if projout.ell % 2 == 1: prefactor *= -1j # we provide the imaginary part of odd power spectra, so let's multiply by (-i)^{\ell}
                 if projin.ell % 2 == 1: prefactor *= 1j # we take in the imaginary part of odd power spectra, so let's multiply by i^{\ell^{\prime}}
                 # tmp is dk^{\prime} k^{\prime 2} \frac{2}{\pi} (-1)^{\ell} (-1)^{\ell^{\prime}} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
-                tmp = np.real(prefactor * tmp) * weights_trapz(xin**3) / 3. # everything should be real now
+                block = np.real(prefactor * block) * weights_trapz(xin**3) / 3. # everything should be real now
+                block = block.T # matrix has dimensions (k, kout)
                 if self.kinlim is not None:
                     mask = (xin >= self.kinlim[0]) & (xin <= self.kinlim[-1])
                     self.xin[iin] = xin[mask]
-                    tmp = tmp[:,mask]
+                    block = block[mask,:]
                 #print(projout.ell,projin.ell,self.xin.min(),self.xin.max(),self.kout[iout].min(),self.kout[iout].max(),tmp.min(),tmp.max())
-                line.append(tmp)
-            self.matrix.append(line)
-        self.matrix = np.bmat(self.matrix).A
+                line.append(block)
+            self.value.append(line)
+        self.value = np.bmat(self.value).A # (in, out)
 
-    propose_out = CorrelationFunctionWindowMatrix.propose_out
+    propose_out = CorrelationFunctionWindowMultipoleMatrix.propose_out
+
+    def resum_input_odd_wide_angle(self, **kwargs):
+        """
+        Resum odd wide-angle orders. By default, line-of-sight is chosen as that save in :attr:`attrs` (``attrs['los_type']``).
+        To override, use input ``kwargs`` which will be passed to :attr:`PowerSpectrumOddWideAngleMatrix`.
+        """
+        projsin = [proj for proj in self.projsin if proj.wa_order == 0.]
+        if projsin == self.projsin: return
+        from .wide_angle import CorrelationFunctionOddWideAngleMatrix
+        if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
+        matrix = PowerSpectrumOddWideAngleMatrix(self.xin[0], projsin=projsin, projsout=self.projsin, **kwargs)
+        self.__dict__.update(self.join(matrix, self).__dict__)
 
 
 def wigner3j_square(ellout, ellin, prefactor=True):

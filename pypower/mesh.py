@@ -21,7 +21,7 @@ def _get_resampler(resampler):
 
 def _get_resampler_name(resampler):
     # Translate input :class:`ResampleWindow` instance to string
-    conversions = {'nearest':'ngp', 'tunedcic':'cic', 'tunedtsc':'tsc', 'tunedpcs':'pcs'}
+    conversions = {'nearest':'ngp', 'tunednnb':'ngp', 'tunedcic':'cic', 'tunedtsc':'tsc', 'tunedpcs':'pcs'}
     return conversions[resampler.kind]
 
 
@@ -507,13 +507,17 @@ class CatalogMesh(BaseClass):
             shifts = shifts[1:]
             out = out.r2c()
             for shift in shifts:
-                transform = pm.affine.shift(shift)
+                transform = pm.affine.shift(shift) # this shifts particle positions by ``shift`` before painting to mesh
                 # paint to two shifted meshes
                 mesh_shifted = pm.create(type='real', value=0.)
                 for p, w in zip(positions, weights): paint(p, w, mesh_shifted, transform=transform)
                 mesh_shifted = mesh_shifted.r2c()
                 for k, s1, s2 in zip(out.slabs.x, out.slabs, mesh_shifted.slabs):
                     kc = sum(k[i] * cellsize[i] for i in range(3))
+                    # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r)
+                    # shifting by "shift * cellsize" we compute F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r - shift * cellsize)
+                    # i.e. F(k) = e^{- i shift * kc} 1/N^3 e^{-ikr} F(r)
+                    # Hence compensation below
                     s1[...] = s1[...] + s2[...] * np.exp(shift * 1j * kc)
             if compensate:
                 self._compensate(out)

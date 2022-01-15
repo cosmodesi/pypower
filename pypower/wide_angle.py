@@ -108,6 +108,7 @@ class BaseMatrix(BaseClass):
     ----------
     matrix : array
         2D array representing linear transform.
+        First axis is input, second is output.
 
     xin : list
         List of input "theory" coordinates.
@@ -124,13 +125,13 @@ class BaseMatrix(BaseClass):
     weightsin = None
     weightsout = None
 
-    def __init__(self, matrix, xin, xout, projsin, projsout, weightsin=None, weightsout=None, attrs=None):
+    def __init__(self, value, xin, xout, projsin, projsout, weightsin=None, weightsout=None, attrs=None):
         """
         Initialize :class:`BaseMatrix`.
 
         Parameters
         ----------
-        matrix : array
+        value : array
             2D array representing linear transform.
 
         xin : array, list
@@ -156,34 +157,35 @@ class BaseMatrix(BaseClass):
         attrs : dict, default=None
             Dictionary of other attributes.
         """
-        self.matrix = np.asarray(matrix)
-        if self.matrix.ndim != 2:
-            raise ValueError('Input matrix must be 2D, not {}D.'.format(self.matrix.ndim))
+        self.value = np.asarray(value)
+        if self.value.ndim != 2:
+            raise ValueError('Input matrix must be 2D, not {}D.'.format(self.value.ndim))
         self.projsin = [Projection(proj) for proj in projsin]
         self.projsout = [Projection(proj) for proj in projsout]
+        self._set_xw(shape=self.value.shape, xin=xin, xout=xout, weightsin=weightsin, weightsout=weightsout)
+        self.attrs = attrs or {}
 
-        for iaxis, axis in enumerate(['out', 'in']):
+    def _set_xw(self, shape=None, **kwargs):
+        for iaxis, axis in enumerate(['in', 'out']):
             projsname = 'projs{}'.format(axis)
             projs = getattr(self, projsname)
             for name in ['x', 'weights']:
                 name = '{}{}'.format(name, axis)
-                arrays = locals()[name]
+                arrays = kwargs.get(name, None)
                 if arrays is not None:
                     if np.ndim(arrays[0]) == 0: arrays = [np.asarray(arrays) for proj in projs]
                     else: arrays = [np.asarray(array) for array in arrays]
                     setattr(self, name, arrays)
                     if len(arrays) != len(projs):
-                        raise ValueError('Input {} should be a list of arrays of same length as {}'.format(name, projname))
+                        raise ValueError('Input {} should be a list of arrays of same length as {}'.format(name, projsname))
                     size = sum(len(array) for array in arrays)
-                    if size != self.matrix.shape[iaxis]:
-                        raise ValueError('Given input {} and {}, input matrix should be of size {:d} along axis {:d}'.format(name, projname, size, axis))
-        self.attrs = attrs or {}
-
+                    if shape is not None and size != shape[iaxis]:
+                        raise ValueError('Given input {} and {}, input matrix should be of size {:d} along axis {:d}'.format(name, projsname, size, iaxis))
 
     def __getstate__(self):
         """Return this class state dictionary."""
         state = {}
-        for key in ['matrix', 'xin', 'xout', 'weightsin', 'weightsout', 'attrs']:
+        for key in ['value', 'xin', 'xout', 'weightsin', 'weightsout', 'attrs']:
             if hasattr(self, key): state[key] = getattr(self, key)
         for key in ['projsin', 'projsout']:
             state[key] = [proj.__getstate__() for proj in getattr(self, key)]
@@ -201,7 +203,7 @@ class BaseMatrix(BaseClass):
         If ``unpack`` is ``True``, return "unpacked" array,
         i.e. a list of arrays corresponding to ``projsout``.
         """
-        array = self.matrix.dot(np.asarray(array).flat)
+        array = np.dot(np.asarray(array).flat, self.value)
         if unpack:
             toret = []
             nout = 0
@@ -214,11 +216,11 @@ class BaseMatrix(BaseClass):
 
     @property
     def dtype(self):
-        return self.matrix.dtype
+        return self.value.dtype
 
     @property
     def shape(self):
-        return self.matrix.shape
+        return self.value.shape
 
     @property
     def ndim(self):
@@ -231,26 +233,30 @@ class BaseMatrix(BaseClass):
         is obtained through ``matrix[self.projsout.index(projout)][self.projsin.index(projin)]``.
         See :meth:`unpacked`.
         """
-        self.matrix = np.bmat(matrix).A
+        self.value = np.bmat(matrix).A
 
-    def unpacked(self):
+    def unpacked(self, axis=None):
         """
         Return unpacked matrix, a list of lists of matrices
         where block for output projection ``projout`` and input projection ``projin``
         is obtained through ``matrix[self.projsout.index(projout)][self.projsin.index(projin)]``.
         """
         matrix = []
-        nout = 0
-        for xout in self.xout:
-            slout = slice(nout, nout+len(xout))
+        nin = 0
+        for xin in self.xin:
+            slin = slice(nin, nin + len(xin))
             line = []
-            nin = 0
-            for xin in self.xin:
-                slin = slice(nin, nin+len(xin))
-                line.append(self.matrix[slout, slin])
-                nin = slin.stop
-            nout = slout.stop
+            nout = 0
+            for xout in self.xout:
+                slout = slice(nout, nout+len(xout))
+                line.append(self.value[slin, slout])
+                nout = slout.stop
+            nin = slin.stop
             matrix.append(line)
+        if axis == 'in':
+            matrix = [np.concatenate(m, axis=-1) for m in matrix]
+        if axis == 'out':
+            matrix = [np.concatenate([matrix[iin][iout] for iin in range(len(self.xin))], axis=0) for iout in range(len(self.xout))]
         return matrix
 
     def select_projs(self, projsin=None, projsout=None, **kwargs):
@@ -303,14 +309,14 @@ class BaseMatrix(BaseClass):
                             new.append(kwargs.get(name, old[0]))
                     setattr(self, name, new)
 
-        self.matrix = []
-        for iout, projout in enumerate(self.projsout):
+        self.value = []
+        for iin, projin in enumerate(self.projsin):
             line = []
-            for iin, projin in enumerate(self.projsin):
-                if projout in old_projs['out'] and projin in old_projs['in']:
-                    tmp = old_matrix[old_projs['out'].index(projout)][old_projs['in'].index(projin)]
+            for iout, projout in enumerate(self.projsout):
+                if projin in old_projs['in'] and projout in old_projs['out']:
+                    tmp = old_matrix[old_projs['in'].index(projin)][old_projs['out'].index(projout)]
                 else:
-                    shape = (len(self.xout[iout]), len(self.xin[iin]))
+                    shape = (len(self.xin[iin]), len(self.xout[iout]))
                     if projout == projin:
                         if shape[1] != shape[0]:
                             raise ValueError('Cannot set diagonal matrix for ({}, {}) as expected shape is {}'.format(projin, projout, shape))
@@ -318,8 +324,8 @@ class BaseMatrix(BaseClass):
                     else:
                         tmp = np.zeros(shape, dtype=self.dtype)
                 line.append(tmp)
-            self.matrix.append(line)
-        self.matrix = np.bmat(self.matrix).A
+            self.value.append(line)
+        self.value = np.bmat(self.value).A
 
     def select_x(self, xinlim=None, xoutlim=None, projsin=None, projsout=None):
         """
@@ -343,7 +349,7 @@ class BaseMatrix(BaseClass):
             List of output projections to apply limits to.
             Defaults to :attr:`projsout`.
         """
-        self.matrix = self.unpacked() # unpack first, as based on :attr:`xin`, :attr:`xout`
+        self.value = self.unpacked() # unpack first, as based on :attr:`xin`, :attr:`xout`
 
         inprojs, masks = {}, {}
         for axis in ['in', 'out']:
@@ -373,13 +379,13 @@ class BaseMatrix(BaseClass):
                         selfii = selfprojs.index(proj)
                         arrays[selfii] = arrays[selfii][masks[axis][ii]]
 
-        for iout, projout in enumerate(inprojs['out']):
-            selfiout = self.projsout.index(projout)
-            for iin, projin in enumerate(inprojs['in']):
-                selfiin = self.projsin.index(projin)
-                self.matrix[selfiout][selfiin] = self.matrix[selfiout][selfiin][np.ix_(masks['out'][iout], masks['in'][iin])]
+        for iin, projin in enumerate(inprojs['in']):
+            selfiin = self.projsin.index(projin)
+            for iout, projout in enumerate(inprojs['out']):
+                selfiout = self.projsout.index(projout)
+                self.value[selfiin][selfiout] = self.value[selfiin][selfiout][np.ix_(masks['in'][iin], masks['out'][iout])]
 
-        self.matrix = np.bmat(self.matrix).A
+        self.value = np.bmat(self.value).A
 
     def rebin_x(self, factorin=1, factorout=1, projsin=None, projsout=None, statistic=None):
         """
@@ -411,7 +417,7 @@ class BaseMatrix(BaseClass):
             self.rebin_x(factorin=factorin, factorout=1, projsin=projsin, projsout=projsout, statistic=np.sum)
             return
 
-        self.matrix = self.unpacked() # unpack first, as based on :attr:`xin`, :attr:`xout`
+        self.value = self.unpacked() # unpack first, as based on :attr:`xin`, :attr:`xout`
 
         inprojs, old_weights, new_weights = {}, {}, {}
         for axis in ['in', 'out']:
@@ -441,19 +447,19 @@ class BaseMatrix(BaseClass):
                 else:
                     arrays[selfii] = utils.rebin(arrays[selfii], len(arrays[selfii])//factor, statistic=np.mean)
 
-        for iout, projout in enumerate(inprojs['out']):
-            selfiout = self.projsout.index(projout)
-            for iin, projin in enumerate(inprojs['in']):
-                selfiin = self.projsin.index(projin)
-                tmp = self.matrix[selfiout][selfiin]
-                new_shape = tuple(s//f for s,f in zip(tmp.shape, (factorout, factorin)))
+        for iin, projin in enumerate(inprojs['in']):
+            selfiin = self.projsin.index(projin)
+            for iout, projout in enumerate(inprojs['out']):
+                selfiout = self.projsout.index(projout)
+                tmp = self.value[selfiin][selfiout]
+                new_shape = tuple(s//f for s,f in zip(tmp.shape, (factorin, factorout)))
                 oweights, nweights = 1., 1.
-                for iaxis, (axis, ii) in enumerate(zip(['out', 'in'], [iout, iin])):
+                for iaxis, (axis, ii) in enumerate(zip(['in', 'out'], [iin, iout])):
                     if axis in old_weights:
                         oweights = oweights * np.expand_dims(old_weights[axis][ii], axis=1-iaxis)
                         nweights = nweights * np.expand_dims(new_weights[axis][ii], axis=1-iaxis)
-                self.matrix[selfiout][selfiin] = utils.rebin(self.matrix[selfiout][selfiin]*oweights, new_shape, statistic=statistic)/nweights
-        self.matrix = np.bmat(self.matrix).A
+                self.value[selfiin][selfiout] = utils.rebin(self.value[selfiin][selfiout]*oweights, new_shape, statistic=statistic)/nweights
+        self.value = np.bmat(self.value).A
 
     @classmethod
     def concatenate_proj(cls, *others, axis='in'):
@@ -476,14 +482,14 @@ class BaseMatrix(BaseClass):
         """
         new = others[0].copy()
         axis = axis.lower()
-        iaxis = ['out', 'in'].index(axis)
+        iaxis = ['in', 'out'].index(axis)
         for name in ['projs', 'x', 'weights']:
             name = '{}{}'.format(name, axis)
             if getattr(others[0], name) is not None:
                 arrays = []
                 for other in others: arrays += getattr(other, name)
                 setattr(new, name, arrays)
-        new.matrix = np.concatenate([other.matrix for other in others], axis=iaxis)
+        new.value = np.concatenate([other.value for other in others], axis=iaxis)
         return new
 
     @classmethod
@@ -507,7 +513,7 @@ class BaseMatrix(BaseClass):
         """
         new = others[0].copy()
         axis = axis.lower()
-        iaxis = ['out', 'in'].index(axis)
+        iaxis = ['in', 'out'].index(axis)
         for name in ['x', 'weights']:
             name = '{}{}'.format(name, axis)
             if getattr(new, name) is not None:
@@ -515,14 +521,14 @@ class BaseMatrix(BaseClass):
                 for ii in range(len(getattr(new, name))):
                     arrays.append(np.concatenate([getattr(other, name)[ii] for other in others], axis=0))
                 setattr(new, name, arrays)
-        new.matrix = []
+        new.value = []
         others = [other.unpacked() for other in others]
-        for iout, projout in enumerate(new.projsout):
+        for iin, projin in enumerate(new.projsin):
             line = []
-            for iin, projin in enumerate(new.projsin):
-                line.append(np.concatenate([m[iout][iin] for m in others], axis=iaxis))
-            new.matrix.append(line)
-        new.matrix = np.bmat(new.matrix).A
+            for iout, projout in enumerate(new.projsout):
+                line.append(np.concatenate([m[iin][iout] for m in others], axis=iaxis))
+            new.value.append(line)
+        new.value = np.bmat(new.value).A
         return new
 
     @staticmethod
@@ -535,9 +541,9 @@ class BaseMatrix(BaseClass):
         for first, second in zip(others[-2::-1], others[::-1]):
             first = first.copy()
             first.select_projs(projsout=second.projsin)
-            if first.shape[0] != second.shape[-1]:
+            if first.shape[1] != second.shape[0]:
                 raise ValueError('Input matrices do not have same shape')
-            new.matrix = new.matrix.dot(first.matrix)
+            new.value = first.value @ new.value
             for name in ['projs', 'x', 'weights']:
                 name = '{}in'.format(name)
                 tmp = getattr(first, name)
@@ -547,6 +553,7 @@ class BaseMatrix(BaseClass):
 
     def __copy__(self):
         new = super(BaseMatrix, self).__copy__()
+        new.attrs = self.attrs.copy()
         for axis in ['in', 'out']:
             for name in ['projs', 'x', 'weights']:
                 name = '{}{}'.format(name, axis)
@@ -554,6 +561,97 @@ class BaseMatrix(BaseClass):
                 if tmp is not None: tmp = tmp.copy()
                 setattr(new, name, tmp)
         return new
+
+    @property
+    def nx(self):
+        """Tuple of list of length of input and output coordinates."""
+        return ([len(x) for x in self.xin], [len(x) for x in self.xout])
+
+    @property
+    def nprojs(self):
+        """Number of input, output projections."""
+        return (len(self.projsin), len(self.projsout))
+
+    def prod_proj(self, array, axes=('in', 0)):
+        """
+        Multiply current matrix by input ``array`` along input ``axes``, projection-wise,
+        i.e. a same operation is applied for all coordinates of a given (input projection, output projection) block.
+
+        Parameters
+        ----------
+        array : 1D or 2D array
+            Array to multiply matrix with.
+
+        axes : string, tuple
+            Tuple of axes to sum over (axis in current matrix ("in" or "out")), axis in input ``array``).
+            If ``array`` is 1D, one can just provide the axis in current matrix ("in" or "out").
+        """
+        array = np.asarray(array)
+        if array.ndim == 1:
+            if np.ndim(axes) == 0: axes = (axes, 0)
+            array = np.diag(array)
+        elif array.ndim != 2:
+            raise ValueError('Input array should be 1D or 2D')
+        axes = tuple(axes)
+        if len(axes) != 2:
+            raise ValueError('Please provide a tuple for axes to sum over: (axis in self - in or out, axis in input array)')
+        unpacked = self.unpacked(axis=axes[0])
+        shape = (len(unpacked),)*2
+        if array.shape != shape:
+            raise ValueError('Input array should be a square matrix of shape {}'.format(shape))
+        matrix = []
+        for iout in range(shape[0]):
+            tmp = sum(c * unpacked[iin] for iin, c in enumerate(np.take(array, iout, axis=axes[1] % 2 - 1)))
+            matrix.append(tmp)
+        self.value = np.concatenate(matrix, axis=['in', 'out'].index(axes[0]))
+
+    def prod_proj(self, array, axes=('in', 0), projs=None):
+        """
+        Multiply current matrix by input ``array`` along input ``axes``, projection-wise,
+        i.e. a same operation is applied for all coordinates of a given (input projection, output projection) block.
+
+        Parameters
+        ----------
+        array : 1D or 2D array
+            Array to multiply matrix with.
+
+        axes : string, tuple
+            Tuple of axes to sum over (axis in current matrix ("in" or "out")), axis in input ``array``).
+            If ``array`` is 1D, one can just provide the axis in current matrix ("in" or "out").
+        """
+        array = np.asarray(array)
+        if array.ndim == 1:
+            if np.ndim(axes) == 0: axes = (axes, 0)
+            array = np.diag(array)
+        elif array.ndim != 2:
+            raise ValueError('Input array should be 1D or 2D')
+        axes = tuple(axes)
+        if len(axes) != 2:
+            raise ValueError('Please provide a tuple for axes to sum over: (axis in self - in or out, axis in input array)')
+        unpacked = self.unpacked(axis=axes[0])
+        projsname = 'projs{}'.format(axes[0])
+        if projs is None: projs = getattr(self, projsname)
+        else: projs = [Projection(proj) for proj in projs]
+        iaxis = ['in', 'out'].index(axes[0])
+        if not all(nx == self.nx[iaxis][0] for nx in self.nx[iaxis]):
+            raise ValueError('Coordinates do not have same length along input axis {}'.format(axes[0]))
+        reverse = axes[1] % 2 == 0 # we want to sum over second axis of array
+        if reverse: array = array.T
+        shape = (len(projs), len(unpacked))
+        if array.shape != shape:
+            raise ValueError('Given input projs, input array is expected to be a matrix of shape {}'.format(shape[::-1] if reverse else shape))
+        matrix = []
+        for iout in range(shape[0]):
+            tmp = sum(c * unpacked[iin] for iin, c in enumerate(array[iout]))
+            matrix.append(tmp)
+        self.value = np.concatenate(matrix, axis=iaxis)
+        setattr(self, projsname, projs)
+        for name in ['x', 'weights']:
+            name = '{}{}'.format(name, axes[0])
+            tmp = getattr(self, name)
+            if tmp is not None and len(tmp) != len(projs):
+                tmp = [tmp[0].copy() for _ in projs]
+            setattr(self, name, tmp)
 
 
 def odd_wide_angle_coefficients(ell, wa_order=1, los='firstpoint'):
@@ -607,14 +705,16 @@ def odd_wide_angle_coefficients(ell, wa_order=1, los='firstpoint'):
 
 class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
 
-    def __init__(self, sep, projsin, projsout=None, d=1., wa_orders=1, los='firstpoint'):
+    """Class computing matrix for odd wide-angle expansion of the correlation function."""
+
+    def __init__(self, sep, projsin, projsout=None, d=1., wa_orders=1, los='firstpoint', attrs=None):
         """
-        Initialize :class:`PowerSpectrumOddWideAngleMatrix`.
+        Initialize :class:`CorrelationFunctionOddWideAngleMatrix`.
 
         Parameters
         ----------
         k : array
-            Input (and ouput) wavenumbers.
+            Input (and ouput) separations.
 
         projsin : list
             Input projections.
@@ -635,6 +735,9 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
 
             - 'firstpoint': the separation vector starts at the end of the line-of-sight
             - 'endpoint': the separation vector ends at the end of the line-of-sight.
+
+        attrs : dict, default=None
+            Dictionary of other attributes.
         """
         self.d = d
         self.wa_orders = wa_orders
@@ -651,9 +754,8 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
             self.projsout = [Projection(proj) for proj in projsout]
         if any(proj.wa_order is None for proj in self.projsin):
             raise ValueError('Input projections must have wide-angle order wa_order specified')
-        sep = np.asarray(sep)
-        self.xin = [sep.copy() for _ in self.projsin]
-        self.xout = [sep.copy() for _ in self.projsout]
+        self._set_xw(xin=sep, xout=sep)
+        self.attrs = attrs or {}
         self.setup()
 
     def setup(self):
@@ -677,37 +779,32 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
         If output ``projout.wa_order`` is ``None``, sum over :math:`n` (correct only if no window convolution is accounted for).
         """
         sep = self.xin[0]
-        eye = np.ones(len(k), dtype=sep.dtype)
-        self.projmatrix = []
-        for projout in self.projsout:
+        eye = np.ones(len(sep), dtype=sep.dtype)
+        self.projvalue = []
+        for projin in self.projsin:
             line = []
-            sum_wa = projout.wa_order is None
-            if projout.ell % 2 == 0: # even pole :math:`\ell`
-                for projin in self.projsin:
-                    if projin.ell == projout.ell and (sum_wa or projin.wa_order == projout.wa_order):
-                        tmp = eye
-                    else:
-                        tmp = 0.*eye
-                    line.append(tmp)
-            else:
-                line = [0.*eye for projin in self.projsin]
-                if sum_wa:
-                    wa_orders = self.wa_orders # sum over :math:`n`
+            for iprojout, projout in enumerate(self.projsout):
+                block = 0.*eye
+                if projout.ell % 2 == 0: # even pole :math:`\ell`
+                    if projout.ell == projin.ell and (projout.wa_order is None or projout.wa_order == projin.wa_order):
+                        block = eye
                 else:
-                    wa_orders = [projout.wa_order] # projout.wa_order is 1
-                for wa_order in wa_orders:
-                    ells, coeffs = odd_wide_angle_coefficients(projout.ell, wa_order=wa_order, los=self.los)
-                    for iprojin,projin in enumerate(self.projsin):
+                    if projout.wa_order is None:
+                        wa_orders = self.wa_orders # sum over :math:`n`
+                    else:
+                        wa_orders = [projout.wa_order] # projout.wa_order is 1
+                    for wa_order in wa_orders:
+                        ells, coeffs = odd_wide_angle_coefficients(projout.ell, wa_order=wa_order, los=self.los)
                         if projin.wa_order == 0 and projin.ell in ells:
                             # \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
                             # or - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} (if projin.ell == projout.ell + 1)
                             coeff = coeffs[ells.index(projin.ell)]/self.d
                             # tmp is - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
                             # or \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} (if projin.ell == projout.ell + 1)
-                            tmp = coeff * eye
-                            line[iprojin] += tmp
-            self.projmatrix.append(line)
-        self.projmatrix = np.array(self.projmatrix)
+                            block += coeff * eye
+                line.append(block)
+            self.projvalue.append(line)
+        self.projvalue = np.array(self.projvalue) # (in, out)
 
     @staticmethod
     def propose_out(projsin, wa_orders=1):
@@ -726,22 +823,22 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
         return projsout
 
     @property
-    def matrix(self):
-        if getattr(self, '_matrix', None) is None:
-            self._matrix = np.bmat([[np.diag(tmp) for tmp in line] for line in self.projmatrix]).A
-        return self._matrix
+    def value(self):
+        if getattr(self, '_value', None) is None:
+            self._value = np.bmat([[np.diag(tmp) for tmp in line] for line in self.projvalue]).A
+        return self._value
 
-    @matrix.setter
-    def matrix(self, matrix):
-        self._matrix = matrix
+    @value.setter
+    def value(self, value):
+        self._value = value
 
 
 class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
     """
-    Class computing matrix for wide-angle expansion.
+    Class computing matrix for odd wide-angle expansion of the power spectrum.
     Adapted from https://github.com/fbeutler/pk_tools/blob/master/wide_angle_tools.py
     """
-    def __init__(self, k, projsin, projsout=None, d=1., wa_orders=1, los='firstpoint'):
+    def __init__(self, k, projsin, projsout=None, d=1., wa_orders=1, los='firstpoint', attrs=None):
         """
         Initialize :class:`PowerSpectrumOddWideAngleMatrix`.
 
@@ -769,8 +866,11 @@ class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
 
             - 'firstpoint': the separation vector starts at the end of the line-of-sight
             - 'endpoint': the separation vector ends at the end of the line-of-sight.
+
+        attrs : dict, default=None
+            Dictionary of other attributes.
         """
-        CorrelationFunctionOddWideAngleMatrix.__init__(self, k, projsin, projsout=projsout, d=d, wa_orders=wa_orders, los=los)
+        CorrelationFunctionOddWideAngleMatrix.__init__(self, k, projsin, projsout=projsout, d=d, wa_orders=wa_orders, los=los, attrs=attrs)
 
     def setup(self):
         r"""
@@ -795,30 +895,28 @@ class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
         """
         k = self.xin[0]
         eye = np.eye(len(k), dtype=k.dtype)
-        self.matrix = []
-        for projout in self.projsout:
+        self.value = []
+
+        for projin in self.projsin:
             line = []
-            sum_wa = projout.wa_order is None
-            if projout.ell % 2 == 0: # even pole :math:`\ell`
-                for projin in self.projsin:
-                    if projin.ell == projout.ell and (sum_wa or projin.wa_order == projout.wa_order):
-                        tmp = eye
-                    else:
-                        tmp = 0.*eye
-                    line.append(tmp)
-            else:
-                line = [0.*eye for projin in self.projsin]
-                if sum_wa:
-                    wa_orders = self.wa_orders # sum over :math:`n`
+            for iprojout, projout in enumerate(self.projsout):
+                block = 0.*eye
+                if projout.ell % 2 == 0: # even pole :math:`\ell`
+                    if projout.ell == projin.ell and (projout.wa_order is None or projout.wa_order == projin.wa_order):
+                        block = eye
                 else:
-                    wa_orders = [projout.wa_order] # projout.wa_order is 1
-                for wa_order in wa_orders:
-                    ells,coeffs = odd_wide_angle_coefficients(projout.ell, wa_order=wa_order, los=self.los)
-                    for iprojin,projin in enumerate(self.projsin):
+                    if projout.wa_order is None:
+                        wa_orders = self.wa_orders # sum over :math:`n`
+                    else:
+                        wa_orders = [projout.wa_order] # projout.wa_order is 1
+                    for wa_order in wa_orders:
+                        ells, coeffs = odd_wide_angle_coefficients(projout.ell, wa_order=wa_order, los=self.los)
                         if projin.wa_order == 0 and projin.ell in ells:
                             # \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
                             # or - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} (if projin.ell == projout.ell + 1)
                             coeff = coeffs[ells.index(projin.ell)]/self.d
+                            # tmp is - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
+                            # or \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} (if projin.ell == projout.ell + 1)
                             if projin.ell == projout.ell + 1:
                                 coeff_spherical_bessel = projin.ell + 1
                             else:
@@ -836,8 +934,9 @@ class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
                             tmp[0,1] = 2.*coeff / deltak[0]
                             tmp[-1,-1] += 2.*coeff / deltak[-1]
                             tmp[-1,-2] = -2.*coeff / deltak[-1]
-                            line[iprojin] += tmp
-            self.matrix.append(line)
-        self.matrix = np.bmat(self.matrix).A # (out, in)
+                            block += tmp.T # (in, out)
+                line.append(block)
+            self.value.append(line)
+        self.value = np.bmat(self.value).A # (in, out)
 
     propose_out = CorrelationFunctionOddWideAngleMatrix.propose_out

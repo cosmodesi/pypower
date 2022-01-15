@@ -64,6 +64,9 @@ def test_power_statistic():
         power.save(fn)
         test = PowerSpectrumStatistic.load(fn)
         assert np.all(test.power == power.power)
+    power2 = power.copy()
+    power2.modes[0] = 1.
+    assert np.all(power.modes[0] == test.power[0])
 
 
 def test_find_edges():
@@ -106,7 +109,7 @@ def test_mesh_power():
 
     def check_wedges(power, ref_power):
         for imu, mu in enumerate(power.muavg):
-            assert np.allclose(power(mu=mu) + power.shotnoise, ref_power['power'][:,imu], atol=1e-6, rtol=3e-3)
+            assert np.allclose(power(mu=mu) + power.shotnoise, ref_power['power'][:,imu].conj(), atol=1e-6, rtol=3e-3)
             assert np.allclose(power.k[:,imu], ref_power['k'][:,imu], atol=1e-6, rtol=3e-3)
             assert np.allclose(power.nmodes[:,imu], ref_power['modes'][:,imu], atol=1e-6, rtol=3e-3)
 
@@ -114,7 +117,7 @@ def test_mesh_power():
         for ell in power.ells:
             #assert np.allclose(power(ell=ell).real + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)].real, atol=1e-6, rtol=3e-3)
             # Exact if offset = 0. in to_mesh()
-            assert np.allclose(power(ell=ell) + (ell == 0)*power.shotnoise, ref_power['power_{}'.format(ell)], atol=1e-2, rtol=5e-3)
+            assert np.allclose(power(ell=ell) + (ell == 0)*power.shotnoise, ref_power['power_{}'.format(ell)].conj(), atol=1e-2, rtol=5e-3)
             assert np.allclose(power.k, ref_power['k'], atol=1e-6, rtol=5e-3)
             assert np.allclose(power.nmodes, ref_power['modes'], atol=1e-6, rtol=5e-3)
 
@@ -126,7 +129,7 @@ def test_mesh_power():
         list_options = []
         list_options.append({'los':los, 'edges':(ref_kedges, muedges)})
         list_options.append({'los':[1. if ax == los else 0. for ax in 'xyz'], 'edges':(ref_kedges, muedges)})
-        list_options.append({'los':los, 'edges':({'min':ref_kedges[0],'max':ref_kedges[-1],'step':ref_kedges[1] - ref_kedges[0]}, muedges)})
+        list_options.append({'los':los, 'edges':({'min':ref_kedges[0], 'max':ref_kedges[-1], 'step':ref_kedges[1] - ref_kedges[0]}, muedges)})
         list_options.append({'los':los, 'edges':(ref_kedges, muedges), 'dtype':'f4'})
         list_options.append({'los':los, 'edges':(ref_kedges, muedges[:-1]), 'dtype':'f4'})
         list_options.append({'los':los, 'edges':(ref_kedges, muedges[:-1]), 'dtype':'c8'})
@@ -236,7 +239,8 @@ def test_catalog_power():
         ref_norm = ref_power.attrs['randoms.norm']
         for ell in power.ells:
             # precision is 1e-7 if offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize
-            ref = ref_power.poles['power_{}'.format(ell)].conj() # change of line-of-sight convention to endpoint
+            ref = ref_power.poles['power_{}'.format(ell)]
+            if power.attrs['los_type'] == 'endpoint': ref = ref.conj()
             assert np.allclose((power(ell=ell) + (ell == 0)*power.shotnoise)*norm/ref_norm, ref, atol=1e-6, rtol=5e-2)
             assert np.allclose(power.k, ref_power.poles['k'], atol=1e-6, rtol=5e-3)
             assert np.allclose(power.nmodes, ref_power.poles['modes'], atol=1e-6, rtol=5e-3)
@@ -319,11 +323,40 @@ def test_mpi():
             assert np.allclose(power(ell=ell), ref_power(ell=ell))
 
 
+def test_interlacing():
+
+    from matplotlib import pyplot as plt
+    boxsize = 1000.
+    nmesh = 128
+    kedges = {'min':0., 'step':0.005}
+    ells = (0,)
+    resampler = 'ngp'
+    boxcenter = np.array([3000.,0.,0.])[None,:]
+
+    data = Catalog.load_fits(data_fn)
+    randoms = Catalog.load_fits(randoms_fn)
+    for catalog in [data, randoms]:
+        catalog['Position'] += boxcenter
+        catalog['Weight'] = catalog.ones()
+
+    def run(interlacing=2):
+        return CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
+                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los='firstpoint', edges=kedges, position_type='pos').poles
+
+    for interlacing, linestyle in zip([False, 2, 3, 4], ['-', '--', ':', '-.']):
+        power = run(interlacing=interlacing)
+        for ill, ell in enumerate(power.ells):
+            plt.plot(power.k, power.k * power(ell=ell).real, color='C{:d}'.format(ill), linestyle=linestyle, label='interlacing = {}'.format(interlacing))
+    plt.legend()
+    plt.show()
+
+
 if __name__ == '__main__':
 
     setup_logging()
     #save_lognormal()
 
+    #test_interlacing()
     test_power_statistic()
     test_find_edges()
     test_mesh_power()

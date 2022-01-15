@@ -12,12 +12,11 @@ import time
 
 import numpy as np
 from scipy.interpolate import RectBivariateSpline
+from pmesh.pm import RealField, ComplexField
 
-from pmesh.pm import RealField, ComplexField, ParticleMesh
-from pmesh.window import FindResampler, ResampleWindow
 from .utils import BaseClass
 from . import mpi, utils
-from .mesh import _get_resampler, _get_resampler_name, _get_compensation_window, _get_box, CatalogMesh
+from .mesh import _get_compensation_window, _get_box, CatalogMesh
 from .direct_power import _make_array, _format_positions, _format_weights, get_default_nrealizations, get_inverse_probability_weight, get_direct_power_engine
 
 
@@ -368,7 +367,7 @@ def find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD):
 
     # now make edges around unique coordinates
     width = np.diff(fx)
-    edges = np.concatenate([[0], fx[1:] - width/2., [fx[-1] + width[-1] / 2.]], axis=0)
+    edges = np.concatenate([[xmin], fx[1:] - width/2., [min(fx[-1] + width[-1] / 2., xmax)]], axis=0)
     return edges
 
 
@@ -421,7 +420,7 @@ class BasePowerSpectrumStatistic(BaseClass):
         if np.ndim(edges[0]) == 0: edges = (edges,)
         if np.ndim(modes[0]) == 0: modes = (modes,)
         self.edges = list(np.asarray(edge) for edge in edges)
-        self.modes = np.asarray(modes)
+        self.modes = list(np.asarray(mode) for mode in modes)
         self.power_nonorm = np.asarray(power_nonorm)
         self.power_direct_nonorm = power_direct_nonorm
         if power_direct_nonorm is None:
@@ -485,7 +484,7 @@ class BasePowerSpectrumStatistic(BaseClass):
         self.power_nonorm = np.asarray([utils.rebin(power*nmodes, new_shape, statistic=np.sum)/self.nmodes for power in self.power_nonorm])
         self.power_direct_nonorm.shape = (-1,) + self.shape
         self.power_direct_nonorm = np.asarray([utils.rebin(power, new_shape, statistic=np.sum)/np.prod(factor) for power in self.power_direct_nonorm])
-        self.edges = tuple(edges[::f] for edges, f in zip(self.edges, factor))
+        self.edges = [edges[::f] for edges, f in zip(self.edges, factor)]
         self.power_nonorm.shape = self.shape
         self.power_direct_nonorm.shape = self.shape
 
@@ -497,6 +496,12 @@ class BasePowerSpectrumStatistic(BaseClass):
                 state[name] = getattr(self, name)
         return state
 
+    def __copy__(self):
+        new = super(PowerSpectrumStatistic, self).__copy__()
+        for name in ['edges', 'modes', 'attrs']:
+            setattr(new, getattr(new, name).copy())
+        return new
+
     def deepcopy(self):
         import copy
         return copy.deepcopy(self)
@@ -505,9 +510,9 @@ class BasePowerSpectrumStatistic(BaseClass):
 def get_power_statistic(statistic='wedge'):
     """Return :class:`BasePowerSpectrumStatistic` subclass corresponding to ``statistic`` (either 'wedge' or 'multipole')."""
     if statistic == 'wedge':
-        return WedgePowerSpectrum
+        return PowerSpectrumWedge
     if statistic == 'multipole':
-        return MultipolePowerSpectrum
+        return PowerSpectrumMultipole
     return BasePowerSpectrumStatistic
 
 
@@ -530,7 +535,7 @@ class PowerSpectrumStatistic(BaseClass, metaclass=MetaPowerSpectrumStatistic):
         return get_power_statistic(statistic=name).from_state(state)
 
 
-class WedgePowerSpectrum(BasePowerSpectrumStatistic):
+class PowerSpectrumWedge(BasePowerSpectrumStatistic):
 
     r"""Power spectrum binned in :math:`(k, \mu)`."""
 
@@ -595,7 +600,7 @@ class WedgePowerSpectrum(BasePowerSpectrumStatistic):
         return toret
 
 
-class MultipolePowerSpectrum(BasePowerSpectrumStatistic):
+class PowerSpectrumMultipole(BasePowerSpectrumStatistic):
 
     """Power spectrum multipoles binned in :math:`k`."""
 
@@ -604,7 +609,7 @@ class MultipolePowerSpectrum(BasePowerSpectrumStatistic):
 
     def __init__(self, edges, modes, power_nonorm, nmodes, ells, **kwargs):
         r"""
-        Initialize :class:`MultipolePowerSpectrum`.
+        Initialize :class:`PowerSpectrumMultipole`.
 
         Parameters
         ----------
@@ -627,7 +632,7 @@ class MultipolePowerSpectrum(BasePowerSpectrumStatistic):
             Other arguments for :attr:`BasePowerSpectrumStatistic`.
         """
         self.ells = tuple(ells)
-        super(MultipolePowerSpectrum, self).__init__(edges, modes, power_nonorm, nmodes, **kwargs)
+        super(PowerSpectrumMultipole, self).__init__(edges, modes, power_nonorm, nmodes, **kwargs)
 
     @property
     def kavg(self):
@@ -816,10 +821,10 @@ class MeshFFTPower(BaseClass):
 
     Attributes
     ----------
-    poles : MultipolePowerSpectrum
+    poles : PowerSpectrumMultipole
         Estimated power spectrum multipoles.
 
-    wedges : WedgePowerSpectrum
+    wedges : PowerSpectrumWedge
         Estimated power spectrum wedges (if relevant).
     """
 
@@ -1025,10 +1030,10 @@ class MeshFFTPower(BaseClass):
             self.los = None
         elif isinstance(los, str):
             los = los.lower()
-            allowed_los = ['endpoint', 'firstpoint', 'x', 'y', 'z']
+            allowed_los = ['firstpoint', 'endpoint', 'x', 'y', 'z']
             if los not in allowed_los:
                 raise ValueError('los should be one of {}'.format(allowed_los))
-            if los in ['midpoint', 'endpoint', 'firstpoint']:
+            if los in ['firstpoint', 'endpoint']:
                 self.los_type = los
                 self.los = None
             else:
@@ -1059,9 +1064,10 @@ class MeshFFTPower(BaseClass):
 
     def _compensate(self, cfield, *compensations):
         if self.mpicomm.rank == 0:
-            self.log_info('Applying compensations {}.'.format(compensations))
+            self.log_debug('Applying compensations {}.'.format(compensations))
         # Apply compensation window for particle-assignment scheme
-        windows = [_get_compensation_window(**compensation) for compensation in compensations]
+        windows = [_get_compensation_window(**compensation) for compensation in compensations if compensation is not None]
+        if not windows: return
         #from nbodykit.source.mesh.catalog import CompensateCIC
         #cfield.apply(func=CompensateCIC, kind='circular', out=Ellipsis)
         cellsize = self.boxsize/self.nmesh
@@ -1071,8 +1077,6 @@ class MeshFFTPower(BaseClass):
                 slab[...] /= window(*kc)
 
     def run(self):
-        swap = self.los_type == 'firstpoint'
-        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1 # swap meshes + complex conjugaison at the end of run()
         if self.los_type == 'global': # global (fixed) line-of-sight
             self._run_global_los()
         else: # local (varying) line-of-sight
@@ -1113,25 +1117,22 @@ class MeshFFTPower(BaseClass):
         start = time.time()
         # Calculate the 3d power spectrum, slab-by-slab to save memory
         # FFT 1st density field and apply the resampler transfer kernel
-        cfield1 = self.mesh1.r2c()
+        cfield1 = self.mesh1.r2c() # pmesh r2c convention is 1/N^3 e^{-ikr}
         #print(cfield1.value.sum(), cfield1.value.dtype, cfield1.value.shape)
-        if self.compensations[0] is not None:
-            self._compensate(cfield1, self.compensations[0])
+        self._compensate(cfield1, self.compensations[0])
 
         if self.autocorr:
             cfield2 = cfield1
         else:
             cfield2 = self.mesh2.r2c()
-            if self.compensations[1] is not None:
-                self._compensate(cfield2, self.compensations[1])
+            self._compensate(cfield2, self.compensations[1])
 
+        # cfield1 * cfield2.conj()
         for i, c1, c2 in zip(cfield1.slabs.i, cfield1.slabs, cfield2.slabs):
             c1[...] = c1 * c2.conj()
             mask_zero = True
             for ii in i: mask_zero = mask_zero & (ii == 0)
             c1[mask_zero] = 0.
-
-        #cfield1[:] *= self.boxsize.prod()
 
         #from nbodykit.algorithms.fftpower import project_to_basis
         #result, result_poles = project_to_basis(cfield1, self.edges, poles=[], los=self.los)
@@ -1141,20 +1142,24 @@ class MeshFFTPower(BaseClass):
         if rank == 0:
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
 
-        # Format the power results into :class:`WedgePowerSpectrum` instance
+        # Format the power results into :class:`PowerSpectrumWedge` instance
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
         k, mu, power, nmodes = (np.squeeze(result[ii]) for ii in [0,1,2,3])
-        norm = self.nmesh.prod()**2
-        power *= norm
-        self.wedges = WedgePowerSpectrum(modes=(k,mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
+        # Correct pmesh convention here: assuming F(r) is real, F*(k) = 1/N^3 \sum_{r} e^{ikr} F(r)
+        power = self.nmesh.prod()**2 * power.conj()
+        self.wedges = PowerSpectrumWedge(modes=(k,mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PolePowerSpectrum` instance
             k, power, nmodes = (np.squeeze(result_poles[ii]) for ii in [0,1,2])
-            power *= norm
-            self.poles = MultipolePowerSpectrum(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
+            # Correct pmesh convention here: assuming F(r) is real, F*(k) = 1/N^3 \sum_{r} e^{ikr} F(r)
+            power = self.nmesh.prod()**2 * power.conj()
+            self.poles = PowerSpectrumMultipole(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def _run_local_los(self):
+
+        swap = self.los_type == 'endpoint'
+        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1 # swap meshes + complex conjugaison at the end of run()
 
         rank = self.mpicomm.rank
 
@@ -1162,16 +1167,15 @@ class MeshFFTPower(BaseClass):
         if nonzeroells[0] == 0: nonzeroells = nonzeroells[1:]
 
         # FFT 1st density field and apply the resampler transfer kernel
-        A0_1 = self.mesh1.r2c()
+        A0 = self.mesh2.r2c() # pmesh r2c convention is 1/N^3 e^{-ikr}
         # Set mean value or real field to 0
-        for i, c1 in zip(A0_1.slabs.i, A0_1.slabs):
+        for i, c in zip(A0.slabs.i, A0.slabs):
             mask_zero = True
             for ii in i: mask_zero = mask_zero & (ii == 0)
-            c1[mask_zero] = 0.
+            c[mask_zero] = 0.
 
         # We will apply all compensation transfer functions to A0_1 (faster than applying to each Aell)
         compensations = [self.compensations[0]] * 2 if self.autocorr else self.compensations
-        compensations = [compensation for compensation in compensations if compensation is not None]
 
         result = []
         # Loop over the higher order multipoles (ell > 0)
@@ -1180,23 +1184,23 @@ class MeshFFTPower(BaseClass):
         if self.autocorr:
             if nonzeroells:
                 # Higher-order multipole requested
-                # If monopole requested, copy A0_1 without window in Aell
-                if 0 in self.ells: Aell = A0_1.copy()
-                self._compensate(A0_1, *compensations)
+                # If monopole requested, copy A0 without window in Aell
+                if 0 in self.ells: Aell = A0.copy()
+                self._compensate(A0, *compensations)
             else:
                 # In case of autocorrelation, and only monopole requested, no A0_1 copy need be made
                 # Apply a single window, which will be squared by the autocorrelation
-                if 0 in self.ells: Aell = A0_1
-                self._compensate(A0_1, compensations[0])
+                if 0 in self.ells: Aell = A0
+                self._compensate(A0, compensations[0])
         else:
-            # Cross-correlation, all windows on A0_1
-            if 0 in self.ells: Aell = self.mesh2.r2c()
-            self._compensate(A0_1, *compensations)
+            # Cross-correlation, all windows on A0
+            if 0 in self.ells: Aell = self.mesh1.r2c()
+            self._compensate(A0, *compensations)
 
         if 0 in self.ells:
 
-            for islab in range(A0_1.shape[0]):
-                Aell[islab,...] = A0_1[islab] * Aell[islab].conj()
+            for islab in range(A0.shape[0]):
+                Aell[islab,...] = Aell[islab] * A0[islab].conj()
 
             # the 1D monopole
             #from nbodykit.algorithms.fftpower import project_to_basis
@@ -1210,10 +1214,10 @@ class MeshFFTPower(BaseClass):
         if nonzeroells:
             # Initialize the memory holding the Aell terms for
             # higher multipoles (this holds sum of m for fixed ell)
-            # NOTE: this will hold FFTs of density field #2
-            rfield = RealField(self.mesh2.pm)
-            cfield = ComplexField(self.mesh2.pm)
-            Aell = ComplexField(self.mesh2.pm)
+            # NOTE: this will hold FFTs of density field #1
+            rfield = RealField(self.mesh1.pm)
+            cfield = ComplexField(self.mesh1.pm)
+            Aell = ComplexField(self.mesh1.pm)
 
             # Spherical harmonic kernels (for ell > 0)
             Ylms = [[get_real_Ylm(ell, m) for m in range(-ell, ell+1)] for ell in nonzeroells]
@@ -1229,11 +1233,13 @@ class MeshFFTPower(BaseClass):
             #xgrid = [xx.astype('f8') + offset[ii] for ii, xx in enumerate(self.mesh1.slabs.optx)]
             xnorm = np.sqrt(sum(xx**2 for xx in xgrid))
             xgrid = [xx/xnorm for xx in xgrid]
+            del xnorm
 
             # The Fourier-space grid
-            kgrid = [kk.real.astype('f8') for kk in A0_1.slabs.optx]
+            kgrid = [kk.real.astype('f8') for kk in A0.slabs.optx]
             knorm = np.sqrt(sum(kk**2 for kk in kgrid)); knorm[knorm==0.] = np.inf
             kgrid = [kk/knorm for kk in kgrid]
+            del knorm
 
         for ill, ell in enumerate(nonzeroells):
 
@@ -1241,8 +1247,8 @@ class MeshFFTPower(BaseClass):
             # Iterate from m=-ell to m=ell and apply Ylm
             substart = time.time()
             for Ylm in Ylms[ill]:
-                # Reset the real-space mesh to the original density #2
-                rfield[:] = self.mesh2[:]
+                # Reset the real-space mesh to the original density #1
+                rfield[:] = self.mesh1[:]
 
                 # Apply the config-space Ylm
                 for islab, slab in enumerate(rfield.slabs):
@@ -1267,9 +1273,9 @@ class MeshFFTPower(BaseClass):
                 self.log_info('ell = {:d} done; {:d} r2c completed'.format(ell, len(Ylms[ill])))
 
             # Calculate the power spectrum multipoles, slab-by-slab to save memory
-            # This computes (A0 of field #1) * (Aell of field #2).conj()
-            for islab in range(A0_1.shape[0]):
-                Aell[islab,...] = A0_1[islab] * Aell[islab].conj()
+            # This computes (Aell of field #1) * (A0 of field #2).conj()
+            for islab in range(A0.shape[0]):
+                Aell[islab,...] = Aell[islab] * A0[islab].conj()
 
             # Project on to 1d k-basis (averaging over mu=[-1,1])
             proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2))[0]
@@ -1279,17 +1285,16 @@ class MeshFFTPower(BaseClass):
         stop = time.time()
         if rank == 0:
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
-        # Factor of 4*pi from spherical harmonic addition theorem + volume factor
-        norm = self.nmesh.prod()**2
-        for ill, ell in enumerate(ells):
-            result[ill] *= norm
-            if self.los_type == 'firstpoint': result[ill] = result[ill].conj()
-
-        poles = np.array([result[ells.index(ell)] for ell in self.ells])
+        # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r)
+        # Correct pmesh convention here: assuming F(r) is real, F*(k) = 1/N^3 \sum_{r} e^{ikr} F(r)
+        poles = self.nmesh.prod()**2 * np.array([result[ells.index(ell)] for ell in self.ells]).conj()
+        if swap: poles = poles.conj()
         # Format the power results into :class:`PolePowerSpectrum` instance
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
-        self.poles = MultipolePowerSpectrum(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
+        self.poles = PowerSpectrumMultipole(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
+
+        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1
 
 
 class CatalogFFTPower(MeshFFTPower):

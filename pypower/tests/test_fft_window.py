@@ -4,9 +4,12 @@ import tempfile
 
 import numpy as np
 from matplotlib import pyplot as plt
+from mockfactory import Catalog
 
-from pypower import setup_logging
+from pypower import CatalogFFTPower, CatalogFFTWindow, PowerSpectrumWindowMatrix, mpi, setup_logging
 from pypower.fft_window import get_correlation_function_tophat_derivative
+
+from test_fft_power import data_fn, randoms_fn
 
 
 def test_deriv(plot=False):
@@ -28,7 +31,86 @@ def test_deriv(plot=False):
         plt.show()
 
 
+def test_fft():
+    from pmesh.pm import ParticleMesh, RealField
+    boxsize, nmesh = [1000.]*3, [64]*3
+    pm = ParticleMesh(BoxSize=boxsize, Nmesh=nmesh, dtype='c16', comm=mpi.COMM_WORLD)
+    rfield = RealField(pm)
+    shape = rfield.value.shape
+    #rfield[...] = 1.
+    rfield[...] = np.random.uniform(0., 1., size=shape)
+    cfield = rfield.r2c().value
+    #print(cfield[0,0,0])
+    from numpy import fft
+    ref = fft.fftn(rfield.value)/np.prod(shape)
+    assert np.allclose(cfield, ref)
+
+    a = np.arange(10)
+    b = 2 + np.arange(10)[::-1]
+    a = np.concatenate([a, np.zeros_like(a)], axis=0)
+    b = np.concatenate([b, np.zeros_like(b)], axis=0)
+    n = a.size
+    c = np.zeros_like(a)
+    for ii in range(len(c)):
+        for ib, bb in enumerate(b):
+            wii = ii if ii <= n // 2 else ii - n
+            wii += ib
+            if 0 <= wii < n: c[ii] += bb * a[wii]
+
+    test = fft.irfft(fft.rfft(a) * fft.rfft(b).conj()).conj()
+    assert np.allclose(test, c)
+
+
+def test_fft_window():
+
+    boxsize = 2000.
+    nmesh = 64
+    kedges = np.linspace(0., 0.1, 6)
+    ells = (0, 2)
+    resampler = 'tsc'
+    interlacing = 2
+    dtype = 'f4'
+    boxcenter = np.array([1e6,0.,0.])[None,:]
+    data = Catalog.load_fits(data_fn)
+    randoms = Catalog.load_fits(randoms_fn)
+
+    for catalog in [data, randoms]:
+        catalog['Position'] += boxcenter
+        catalog['Weight'] = catalog.ones()
+
+    for los in ['x', 'firstpoint', 'endpoint']:
+
+        power = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
+                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype=dtype)
+
+        edgesin = np.linspace(0.1, 0.11, 3)
+        window = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, power_ref=power, position_type='pos', dtype=dtype)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
+            window.save(fn)
+            window = CatalogFFTWindow.load(fn)
+
+
+        window1 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin[:2], projsin=window.poles.projsin, ells=(0,), power_ref=power, position_type='pos', dtype=dtype)
+        window2 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin[1:], projsin=window.poles.projsin, ells=(0,), power_ref=power, position_type='pos', dtype=dtype)
+        windowc = window1.concatenate_x(window1, window2)
+        assert np.allclose(windowc.poles.value, window.poles.value[:,:len(window.poles.xout[0])])
+
+        window1 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, projsin=window.poles.projsin[:1], power_ref=power.poles, position_type='pos', dtype=dtype)
+        window2 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, projsin=window.poles.projsin[1:], power_ref=power.poles, position_type='pos', dtype=dtype)
+        windowc = window1.concatenate_proj(window1, window2)
+        assert np.allclose(windowc.poles.value, window.poles.value)
+
+        window.poles.resum_input_odd_wide_angle()
+        if window.los_type == 'global':
+            window.wedges.resum_input_odd_wide_angle()
+            #window_global_poles = window.poles
+
+
 if __name__ == '__main__':
 
     setup_logging()
     #test_deriv()
+    #test_fft()
+    test_fft_window()

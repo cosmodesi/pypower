@@ -5,11 +5,15 @@ and https://fr.overleaf.com/project/60e99d5d5a0f5a3a220de2cc.
 
 import numpy as np
 from scipy import special
+from pmesh.pm import RealField, ComplexField
 
+from . import mpi
 from .utils import BaseClass
 from .fftlog import PowerToCorrelation
-from .fft_power import MeshFFTPower, get_real_Ylm
-from .wide_angle import BaseMatrix
+from .fft_power import MeshFFTPower, get_real_Ylm, _transform_rslab, project_to_basis, PowerSpectrumMultipole, PowerSpectrumWedge
+from .wide_angle import BaseMatrix, Projection
+from .mesh import _get_box, CatalogMesh
+from .direct_power import _format_positions, _format_weights
 
 
 Si = lambda x: special.sici(x)[0]
@@ -63,13 +67,21 @@ def get_correlation_function_tophat_derivative(kedges, ell=0, k=None, **kwargs):
             # i^ell; we provide the imaginary part of the odd correlation function multipoles
             expr = (-1)**(ell//2)/(2*sp.pi**2) * sp.integrate(integrand, (k, a, b))
             fun = sp.lambdify((s, a, b), expr, modules=['numpy', {'Si': Si}])
+
+        def _make_fun(kmin, kmax):
+            return lambda s: fun(s, kmin, kmax)
+
         toret = []
         for kmin, kmax in zip(kedges[:-1], kedges[1:]):
-            toret.append(lambda s: fun(s, kmin, kmax))
+            toret.append(_make_fun(kmin, kmax))
 
         return toret
 
     fftlog = PowerToCorrelation(k, ell=ell, **kwargs)
+
+    def _make_fun(sep, fun):
+        return lambda s: np.interp(s, sep, fun)
+
     toret = []
     for kmin, kmax in zip(kedges[:-1], kedges[1:]):
         tophat = np.zeros_like(k)
@@ -77,17 +89,17 @@ def get_correlation_function_tophat_derivative(kedges, ell=0, k=None, **kwargs):
         sep, fun = fftlog(tophat)
         # current prefactor is i^ell
         fun = fun * (-1j)**ell * (-1)**(ell//2) # we provide the imaginary part of the odd correlation function multipoles
-        toret.append(lambda s: np.interp(s, sep, fun.real))
+        toret.append(_make_fun(sep, fun.real))
     return toret
 
 
-class MeshFFTWindowMatrix(BaseMatrix):
+class PowerSpectrumWindowMatrix(BaseMatrix):
 
     """Window matrix, relating "theory" input to "observed" output."""
 
     def __init__(self, matrix, xin, xout, projsin, projsout, nmodes, wnorm=1., attrs=None):
         """
-        Initialize :class:`MeshFFTWindowMatrix`.
+        Initialize :class:`PowerSpectrumWindowMatrix`.
 
         Parameters
         ----------
@@ -117,7 +129,17 @@ class MeshFFTWindowMatrix(BaseMatrix):
         attrs : dict, default=None
             Dictionary of other attributes.
         """
-        super(MeshFFTWindowMatrix, self).__init__(matrix, xin, xout, projsin, projsout, weightsout=nmodes, attrs=attrs)
+        super(PowerSpectrumWindowMatrix, self).__init__(matrix, xin, xout, projsin, projsout, weightsout=nmodes, attrs=attrs)
+        self.cvalue = self.value # let us just keep the original value somewhere
+        value = []
+        nout = 0
+        for iout, xout in enumerate(self.xout):
+            slout = slice(nout, nout+len(xout))
+            tmp = self.cvalue[:,slout]
+            tmp = tmp.real if self.projsout[iout].ell % 2 == 0 else tmp.imag
+            value.append(tmp)
+            nout = slout.stop
+        self.value = np.concatenate(value, axis=-1)
         self.wnorm = wnorm
 
     @property
@@ -131,11 +153,11 @@ class MeshFFTWindowMatrix(BaseMatrix):
     @classmethod
     def from_power(cls, power, xin, projin=(0, 0)):
         """
-        Create window function from input :class:`MultipolePowerSpectrum`.
+        Create window function from input :class:`PowerSpectrumMultipole`.
 
         Parameters
         ----------
-        power : MultipolePowerSpectrum
+        power : PowerSpectrumMultipole
             Power spectrum measurement to convert into :class:`PowerSpectrumWindowMatrix`.
 
         xin : float
@@ -150,26 +172,44 @@ class MeshFFTWindowMatrix(BaseMatrix):
         """
         xin = [np.asarray([xin])]
         projsin = [projin]
-        xout = np.squeeze(np.array([modes.ravel() for modes in power.modes]).T)
-        projsout = [Projection(ell=ell, wa_order=None) for ell in power.ells]
-        matrix = np.atleast_2d(power.power.ravel()).T
-        return cls(matrix, xin, xout, projsin, projsout, power.nmodes, wnorm=power.wnorm, edges=power.edges)
+        ells = getattr(power, 'ells', [0]) # in case of PowerSpectrumWedge, only 0
+        projsout = [Projection(ell=ell, wa_order=None) for ell in ells]
+        xout = [np.squeeze(np.array([modes.ravel() for modes in power.modes]).T)]*len(projsout)
+        matrix = np.atleast_2d(power.power.ravel())
+        attrs = power.attrs.copy()
+        attrs['edges'] = power.edges
+        return cls(matrix, xin, xout, projsin, projsout, power.nmodes, wnorm=power.wnorm, attrs=attrs)
+
+    def resum_input_odd_wide_angle(self, **kwargs):
+        """
+        Resum odd wide-angle orders. By default, line-of-sight is chosen as that save in :attr:`attrs` (``attrs['los_type']``).
+        To override, use input ``kwargs`` which will be passed to :attr:`CorrelationFunctionOddWideAngleMatrix`.
+        """
+        projsin = [proj for proj in self.projsin if proj.wa_order == 0.]
+        if projsin == self.projsin: return
+        from .wide_angle import CorrelationFunctionOddWideAngleMatrix
+        if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
+        matrix = CorrelationFunctionOddWideAngleMatrix([0.], projsin, projsout=self.projsin, **kwargs).value
+        self.prod_proj(matrix, axes=('in', -1), projs=projsin)
 
     def __getstate__(self):
         """Return this class state dictionary."""
-        state = super(MeshFFTWindowMatrix, self).__getstate__()
-        for name in ['wnorm']:
+        state = super(PowerSpectrumWindowMatrix, self).__getstate__()
+        for name in ['cvalue', 'wnorm']:
             state[name] = getattr(self, name)
         return state
 
 
 class MeshFFTWindow(MeshFFTPower):
     """
-    Class that computes window function from input mesh(es), using global or local line-of-sight, https://github.com/cosmodesi/GC_derivations.
+    Class that computes window function from input mesh(es), using global or local line-of-sight, see:
+
+        - https://github.com/cosmodesi/GC_derivations
+        - https://fr.overleaf.com/read/hpgbwqzmtcxn
 
     Attributes
     ----------
-    poles : MeshFFTWindowMatrix
+    poles : PowerSpectrumWindowMatrix
         Window matrix.
     """
     def __init__(self, mesh1, mesh2=None, edgesin=None, projsin=None, power_ref=None, edges=None, ells=None, los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None):
@@ -196,7 +236,7 @@ class MeshFFTWindow(MeshFFTPower):
             If ``None``, and ``power_ref`` is provided, the list of projections is set
             to be able to compute window convolution of theory power spectrum multipoles of orders ``power_ref.ells``.
 
-        power_ref : MultipolePowerSpectrum, default=None
+        power_ref : CatalogFFTPower, MeshFFTPower, PowerSpectrumWedge, PowerSpectrumMultipole, default=None
             "Reference" power spectrum estimation, e.g. of the actual data.
             It is used to set default values for ``edges``, ``ells``, ``los``, ``boxcenter``, ``compensations`` and ``wnorm`` if those are ``None``.
 
@@ -249,28 +289,30 @@ class MeshFFTWindow(MeshFFTPower):
             of ``mesh1`` by power spectrum normalization.
         """
         if power_ref is not None:
-            if edges is None: edges = power_ref.edges
-            if ells is None: ells = power_ref.ells
-            if los is None: los = power_ref.attrs['los']
-            if boxcenter is None: boxcenter = power_ref.attrs['boxcenter']
-            if compensations is None: compensations = power_ref.attrs['compensations']
-            if projs is None:
-                ellmax = max(power_ref.ells)
-                with_odd = int(any(ell % 2 for ell in power_ref.ells))
-                projs = [(ell, 0) for ell in range(0, ellmax + 1, 2 - with_odd)]
-                if los is None or isinstance(los, str) and los in ['firstpoint', 'endpoint']:
-                    projs += [(ell, 1) for ell in range(1 - with_odd, ellmax + 1, 2 - with_odd)]
 
-        self.projsin = [Projection(proj) for proj in projsin]
+            def _get(name, insts=()):
+                # Search for ``name`` in instances ``insts``
+                for inst in insts:
+                    if inst is None and hasattr(power_ref, name):
+                        return getattr(power_ref, name)
+                    if hasattr(power_ref, inst) and hasattr(getattr(power_ref, inst), name):
+                        return getattr(getattr(power_ref, inst), name)
+
+            if edges is None: edges = _get('edges', insts=(None, 'wedges', 'poles'))
+            attrs_ref = _get('attrs', insts=(None, 'wedges', 'poles'))
+            if los is None: los = attrs_ref['los']
+            if boxcenter is None: boxcenter = attrs_ref['boxcenter']
+            if compensations is None: compensations = attrs_ref['compensations']
+            if ells is None: ells = _get('ells', insts=(None, 'poles'))
 
         self._set_compensations(compensations)
         self._set_mesh(mesh1, mesh2=mesh2)
-        self._set_xin(edgesin)
-        self._set_edges(edges)
         self._set_los(los)
-        if self.los_type == 'global' and any(proj.wa_order != 0 for proj in self.projsin):
-            raise ValueError('With global line-of-sight, input wide_angle order = 0 only is suppored')
         self._set_ells(ells)
+        self._set_projsin(projsin)
+        self._set_edges(edges)
+        self._set_xin(edgesin)
+
         self.wnorm = wnorm
         if wnorm is None:
             if power_ref is not None:
@@ -281,13 +323,23 @@ class MeshFFTWindow(MeshFFTPower):
         self.shotnoise = shotnoise
         if shotnoise is None:
             self.shotnoise = 0.
-            # Shot noise is non zero only if we can estimate it
-            if self.autocorr and isinstance(mesh1, CatalogMesh):
-                self.shotnoise = mesh1.unnormalized_shotnoise()/self.wnorm
         self.attrs.update(self._get_attrs())
         if self.mpicomm.rank == 0:
             self.log_info('Running window function estimation.')
         self.run()
+
+    def _set_projsin(self, projsin):
+        if projsin is None:
+            if self.ells is None:
+                raise ValueError('If no output multipoles requested, provide "projsin"')
+            ellmax = max(self.ells)
+            with_odd = int(any(ell % 2 for ell in self.ells))
+            projsin = [(ell, 0) for ell in range(0, ellmax + 1, 2 - with_odd)]
+            if self.los_type in ['firstpoint', 'endpoint']:
+                projsin += [(ell, 1) for ell in range(1 - with_odd, ellmax + 1, 2 - with_odd)]
+        self.projsin = [Projection(proj) for proj in projsin]
+        if self.los_type == 'global' and any(proj.wa_order != 0 for proj in self.projsin):
+            raise ValueError('With global line-of-sight, input wide_angle order = 0 only is suppored')
 
     def _set_xin(self, edgesin):
         if not isinstance(edgesin, dict):
@@ -304,104 +356,127 @@ class MeshFFTWindow(MeshFFTPower):
                 self.deriv[proj] = edgesin
                 self.xin[proj] = np.arange(len(self.deriv[proj]))
             else:
-                edges = np.asarray(edgesin[projin])
+                edges = np.asarray(edgesin[proj])
                 self.xin[proj] = 3./4. * (edges[1:]**4 - edges[:-1]**4) / (edges[1:]**3 - edges[:-1]**3)
                 self.deriv[proj] = get_correlation_function_tophat_derivative(edges, ell=proj.ell)
 
     def _get_q(self, ellout, mout, projin):
-
+        # Called for local (varying) line-of-sight only
+        # This corresponfs to Q defined in https://fr.overleaf.com/read/hpgbwqzmtcxn
+        # ellout is \ell, mout is m, projin = (\ell^\prime, m^\prime)
         Ylmout = get_real_Ylm(ellout, mout)
-        Ylmins = [get_real_Ylm(ell, m) for m in range(-projin.ell, projin.ell+1)]
+        Ylmins = [get_real_Ylm(projin.ell, m) for m in range(-projin.ell, projin.ell+1)]
 
-        rfield = RealField(self.rfield2.pm)
-        rfield[:] = self.rfield2[:]
+        rfield = RealField(self.mesh1.pm)
         for islab, slab in enumerate(rfield.slabs):
-            tmp = Ylmout(self.xgrid[0][islab], self.xgrid[1][islab], self.xgrid[2][islab])
-            if projin.wa_order != 0: tmp /= self.rgrid[islab]**projin.wa_order
-            slab[:] *= tmp
-        cfield2 = rfield.r2c(out=cfield).conj()
+            slab[:] = self.mesh1[islab] * Ylmout(self.xgrid[0][islab], self.xgrid[1][islab], self.xgrid[2][islab])
+        cfield1 = rfield.r2c()
+        # We apply all compensation transfer functions to cfield1
+        self._compensate(cfield1, *self.compensations)
+        for i, c in zip(cfield1.slabs.i, cfield1.slabs):
+            mask_zero = True
+            for ii in i: mask_zero = mask_zero & (ii == 0)
+            c[mask_zero] = 0.
 
-        cfield = ComplexField(self.rfield1.pm)
-        toret = RealField(self.rfield1.pm)
+        cfield = ComplexField(self.mesh2.pm)
+        toret = RealField(self.mesh2.pm)
         toret[:] = 0.
 
         for Ylm in Ylmins:
 
-            rfield[:] = self.rfield1[:]
             for islab, slab in enumerate(rfield.slabs):
-                slab[:] *= Ylm(self.xgrid[0][islab], self.xgrid[1][islab], self.xgrid[2][islab])
+                slab[:] = self.mesh2[islab] * Ylm(self.xgrid[0][islab], self.xgrid[1][islab], self.xgrid[2][islab])
+                if projin.wa_order != 0: slab[:] /= self.rgrid[islab]**projin.wa_order
             rfield.r2c(out=cfield)
-            cfield[:] *= cfield2[:]
 
-            cfield.r2c(out=rfield)
+            for islab in range(cfield.shape[0]):
+                cfield[islab,...] = cfield1[islab] * cfield[islab].conj()
+
+            cfield.c2r(out=rfield)
             for islab, slab in enumerate(rfield.slabs):
-                slab[:] *= 4.*np.pi/(2*projin.ell + 1) * Ylm(self.xgridw[0][islab], self.xgridw[1][islab], self.xgridw[2][islab])
+                # No 1/N^6 factor due to pmesh convention
+                slab[:] = slab[:] * 4.*np.pi/(2*projin.ell + 1) * Ylm(self.xgridw[0][islab], self.xgridw[1][islab], self.xgridw[2][islab])
+                mask_zero = True
+                for ii in slab.i: mask_zero = mask_zero & (ii == 0)
+                slab[mask_zero] = 0.
             toret[:] += rfield[:]
 
         return toret
 
     def _run_local_los(self, projin, deriv):
+        # We we perform the sum of Q defined in https://fr.overleaf.com/read/hpgbwqzmtcxn
+        # projin is \ell^\prime, n
+        # deriv is \xi^{(n)}_{\ell^{\prime},\beta \ell^\prime}(s^w)
+        swap = self.los_type == 'endpoint'
+        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1 # swap meshes + complex conjugaison at the end of run()
 
         result = []
+        ells = sorted(set(self.ells))
 
-        for ellout in self.ellsout:
-            dfield = RealField(self.rfield1.pm)
+        for ellout in ells:
+            dfield = RealField(self.mesh1.pm)
             for islab, slab in enumerate(dfield.slabs):
-                tmp = deriv(self.rgridw[islab])
-                if projin.wa_order != 0: tmp *= self.rgridw[islab]**projin.wa_order
+                tmp = np.zeros_like(self.rgridw[islab])
+                mask_nonzero = self.rgridw[islab] != 0.
+                tmp[mask_nonzero] = deriv(self.rgridw[islab][mask_nonzero])
+                if projin.wa_order != 0: tmp *= self.rgridw[islab]**projin.wa_order # s_w^n
                 slab[:] = tmp
 
-            wfield = ComplexField(self.rfiel1.pm)
+            wfield = ComplexField(self.mesh1.pm)
             wfield[:] = 0.
             for mout in range(-ellout, ellout+1):
+                Ylm = get_real_Ylm(ellout, mout)
                 qfield = self._get_q(ellout=ellout, mout=mout, projin=projin)
                 qfield[:] *= dfield[:]
                 cfield = qfield.r2c()
                 for islab, slab in enumerate(cfield.slabs):
-                    slab[:] *= 4.*np.pi/(2*ellout + 1) * Ylm(kgrid[0][islab], kgrid[1][islab], kgrid[2][islab])
+                    slab[:] *= 4.*np.pi * Ylm(self.kgrid[0][islab], self.kgrid[1][islab], self.kgrid[2][islab])
                 wfield[:] += cfield[:]
 
             del dfield
-            proj_result = project_to_basis(wfield, self.edges)[0]
+            proj_result = project_to_basis(wfield, self.edges, antisymmetric=bool(ellout % 2))[0]
             result.append(np.squeeze(proj_result[2]))
-            k, nmodes,r = proj_result[0], proj_result[-1]
+            k, nmodes = proj_result[0], proj_result[-1]
 
+        poles = self.nmesh.prod()**2 * np.array([result[ells.index(ell)] for ell in self.ells]).conj()
+        if swap: poles = poles.conj()
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
-        self.poles = MultipolePowerSpectrum(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
+        self.poles = PowerSpectrumMultipole(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
+
+        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1
 
     def _run_global_los(self, projin, deriv):
-
+        # projin is \ell^\prime
+        # deriv is \xi^{\ell^{\prime},\beta \ell^\prime}(s^w)
         qfield = self.qfield.copy()
 
         legendre = special.legendre(projin.ell)
         for islab, slab in enumerate(qfield.slabs):
-            tmp = deriv(self.rgridw[islab])
+            tmp = np.zeros_like(self.rgridw[islab])
+            mask_nonzero = self.rgridw[islab] != 0.
+            tmp[mask_nonzero] = deriv(self.rgridw[islab][mask_nonzero])
             if projin.ell:
-                mu = sum(xx*ll for xx, ll in zip(self.xgridw[islab], self.los))
+                mu = sum(xx[islab]*ll for xx, ll in zip(self.xgridw, self.los))
                 tmp *= legendre(mu)
             slab[:] *= tmp
 
         wfield = qfield.r2c()
 
         result, result_poles = project_to_basis(wfield, self.edges, ells=self.ells, los=self.los)
-        # Format the power results into :class:`WedgePowerSpectrum` instance
+        # Format the power results into :class:`PowerSpectrumWedge` instance
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
         k, mu, power, nmodes = (np.squeeze(result[ii]) for ii in [0,1,2,3])
-        norm = self.nmesh.prod()**2
-        power *= norm
-        self.wedges = WedgePowerSpectrum(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
+        power = self.nmesh.prod()**2 * power.conj()
+        self.wedges = PowerSpectrumWedge(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PolePowerSpectrum` instance
             k, power, nmodes = (np.squeeze(result_poles[ii]) for ii in [0,1,2])
-            power *= norm
-            self.poles = MultipolePowerSpectrum(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
+            power = self.nmesh.prod()**2 * power.conj()
+            self.poles = PowerSpectrumMultipole(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def run(self):
-
-        swap = self.los_type == 'firstpoint'
-        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1 # swap meshes + complex conjugaison at the end of run()
 
         def _wrap_rslab(rslab):
             # We do not use the same conventions as pmesh:
@@ -413,74 +488,78 @@ class MeshFFTWindow(MeshFFTPower):
                 toret.append(rr)
             return toret
 
-        xgridw = _wrap_rslab(_transform_rslab(self.mesh1.slabs.optx, self.boxsize)) # this should just give self.mesh1.slabs.optx
-        self.rgridw = np.sqrt(sum(xx**2 for xx in xgridw))
+        def _save_divide(num, denom):
+            with np.errstate(divide='ignore', invalid='ignore'):
+                toret = num/denom
+            toret[denom == 0.] = 0.
+            return toret
 
-        cfield2 = cfield1 = self.mesh1.r2c()
-        # Set mean value or real field to 0
-        for i, c1 in zip(cfield1.slabs.i, cfield1.slabs):
-            mask_zero = True
-            for ii in i: mask_zero = mask_zero & (ii == 0)
-            c1[mask_zero] = 0.
-
-        if self.autocorr:
-            self._compensate(cfield1, compensations[0])
-        else:
-            # We will apply all compensation transfer functions to cfield1
-            compensations = [self.compensations[0]] * 2 if self.autocorr else self.compensations
-            compensations = [compensation for compensation in compensations if compensation is not None]
-            self._compensate(cfield1, *compensations)
-            cfield2 = self.mesh2.r2c()
+        self.xgridw = _wrap_rslab(_transform_rslab(self.mesh1.slabs.optx, self.boxsize)) # this should just give self.mesh1.slabs.optx
+        self.rgridw = np.sqrt(sum(xx**2 for xx in self.xgridw))
+        self.xgridw = [_save_divide(xx, self.rgridw) for xx in self.xgridw]
 
         if self.los_type == 'global': # global (fixed) line-of-sight
 
-            cfield1[:] *= cfield2[:]
-            self.qfield = cfield2.c2r()
+            cfield2 = cfield1 = self.mesh1.r2c()
+            # Set mean value or real field to 0
+            for i, c1 in zip(cfield1.slabs.i, cfield1.slabs):
+                mask_zero = True
+                for ii in i: mask_zero = mask_zero & (ii == 0)
+                c1[mask_zero] = 0.
+
+            if self.autocorr:
+                self._compensate(cfield1, self.compensations[0])
+            else:
+                # We apply all compensation transfer functions to cfield1
+                self._compensate(cfield1, *self.compensations)
+                cfield2 = self.mesh2.r2c()
+
+            for islab in range(cfield1.shape[0]):
+                cfield1[islab,...] = cfield1[islab] * cfield2[islab].conj()
+            # No 1/N^6 factor due to pmesh convention
+            self.qfield = cfield1.c2r()
             del self.mesh2, self.mesh1, cfield2, cfield1
             run_projin = self._run_global_los
 
         else: # local (varying) line-of-sight
 
-            self.xgridw = [xx/self.rgridw for xx in xgridw]
-
             # Offset the box coordinate mesh ([-BoxSize/2, BoxSize]) back to the original (x,y,z) coords
             offset = self.boxcenter - self.boxsize/2.
-            rgrid = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))]
-            self.rgrid = np.sqrt(sum(xx**2 for xx in xgrid))
-            self.xgrid = [xx/self.rgrid for xx in xgrid]
+            self.xgrid = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))]
+            self.rgrid = np.sqrt(sum(xx**2 for xx in self.xgrid))
+            self.xgrid = [_save_divide(xx, self.rgrid) for xx in self.xgrid]
 
             # The Fourier-space grid
-            kgrid = [kk.real.astype('f8') for kk in cfield1.slabs.optx]
-            knorm = np.sqrt(sum(kk**2 for kk in kgrid)); knorm[knorm==0.] = np.inf
-            self.kgrid = [kk/knorm for kk in kgrid]
+            self.kgrid = [kk.real.astype('f8') for kk in ComplexField(self.mesh1.pm).slabs.optx]
+            knorm = np.sqrt(sum(kk**2 for kk in self.kgrid))
+            self.kgrid = [_save_divide(kk, knorm) for kk in self.kgrid]
+            del knorm
 
-            self.rfield2 = self.rfield1 = cfield1.c2r()
-            if not self.autocorr:
-                self.rfield2 = cfield2.r2c()
-                del self.mesh2, self.mesh1, cfield2, cfield1
             run_projin = self._run_local_los
 
         poles, wedges = [], []
-        for proj in self.projsin:
+        for projin in self.projsin:
             poles_x, wedges_x = [], []
-            for iin, xin in enumerate(self.xin[proj]):
+            for iin, xin in enumerate(self.xin[projin]):
                 run_projin(projin, self.deriv[projin][iin])
-                poles_x.append(MeshFFTWindowMatrix.from_power(self.poles, xin, projin))
+                poles_x.append(PowerSpectrumWindowMatrix.from_power(self.poles, xin, projin))
                 if self.los_type == 'global':
-                    wedges_x.append(MeshFFTWindowMatrix.from_power(self.wedges, xin, projin))
-            poles.append(MeshFFTWindowMatrix.concatenate_x(*poles_x, axis='in'))
+                    wedges_x.append(PowerSpectrumWindowMatrix.from_power(self.wedges, xin, projin))
+            poles.append(PowerSpectrumWindowMatrix.concatenate_x(*poles_x, axis='in'))
             if wedges_x:
-                wedges.append(MeshFFTWindowMatrix.concatenate_x(*wedges_x, axis='in'))
-        self.poles = MeshFFTWindowMatrix.concatenate_proj(poles, axis='in')
+                wedges.append(PowerSpectrumWindowMatrix.concatenate_x(*wedges_x, axis='in'))
+        self.poles = PowerSpectrumWindowMatrix.concatenate_proj(*poles, axis='in')
         if wedges:
-            self.wedges = MeshFFTWindowMatrix.concatenate_proj(wedges, axis='in')
+            self.wedges = PowerSpectrumWindowMatrix.concatenate_proj(*wedges, axis='in')
+
+        if self.los_type != 'global': del self.mesh2, self.mesh1
 
     @classmethod
     def concatenate_proj(cls, *others):
         new = others[0].copy()
         for name in ['poles', 'wedges']:
             if hasattr(others[0], name):
-                setattr(new, name, others[0].concatenate_proj(*[getattr(other, name) for other in others], axis='in'))
+                setattr(new, name, PowerSpectrumWindowMatrix.concatenate_proj(*[getattr(other, name) for other in others], axis='in'))
         return new
 
     @classmethod
@@ -488,13 +567,20 @@ class MeshFFTWindow(MeshFFTPower):
         new = others[0].copy()
         for name in ['poles', 'wedges']:
             if hasattr(others[0], name):
-                setattr(new, name, others[0].concatenate_x(*[getattr(other, name) for other in others], axis='in'))
+                setattr(new, name, PowerSpectrumWindowMatrix.concatenate_x(*[getattr(other, name) for other in others], axis='in'))
         return new
 
+    def __setstate__(self, state):
+        """Set this class state."""
+        super(MeshFFTPower, self).__setstate__(state) # MeshFFTPower to get BaseClass.__setstate__(state)
+        for name in ['wedges', 'poles']:
+            if name in state:
+                setattr(self, name, PowerSpectrumWindowMatrix.from_state(state[name]))
 
-class CatalogFFTWindow(MeshFFTPower):
 
-    """Wrapper on :class:`MeshFFTPower` to estimate window function from input random positions and weigths."""
+class CatalogFFTWindow(MeshFFTWindow):
+
+    """Wrapper on :class:`MeshFFTWindow` to estimate window function from input random positions and weigths."""
 
     def __init__(self, randoms_positions1=None, randoms_positions2=None,
                 randoms_weights1=None, randoms_weights2=None,
@@ -531,7 +617,7 @@ class CatalogFFTWindow(MeshFFTPower):
             If ``None``, and ``power_ref`` is provided, the list of projections is set
             to be able to compute window convolution of theory power spectrum multipoles of orders ``power_ref.ells``.
 
-        power_ref : MultipolePowerSpectrum, default=None
+        power_ref : PowerSpectrumMultipole, default=None
             "Reference" power spectrum estimation, e.g. of the actual data.
             It is used to set default values for ``edges``, ``ells``, ``los``, ``boxsize``, ``boxcenter``, ``nmesh``,
             ``interlacing``, ``resampler`` and ``wnorm`` if those are ``None``.

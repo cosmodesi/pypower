@@ -341,10 +341,10 @@ class BaseDirectPowerEngine(BaseClass):
             self.los = None
         elif isinstance(los, str):
             los = los.lower()
-            allowed_los = ['midpoint', 'endpoint', 'firstpoint', 'x', 'y', 'z']
+            allowed_los = ['midpoint', 'firstpoint', 'endpoint', 'x', 'y', 'z']
             if los not in allowed_los:
                 raise ValueError('los should be one of {}'.format(allowed_los))
-            if los in ['midpoint', 'endpoint', 'firstpoint']:
+            if los in ['midpoint', 'firstpoint', 'endpoint']:
                 self.los_type = los
                 self.los = None
             else:
