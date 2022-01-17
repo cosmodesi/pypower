@@ -12,9 +12,6 @@ from .utils import BaseClass
 from . import mpi, utils
 
 
-_tree_npairs_max = 1000 * 1000
-
-
 def _make_array(value, shape, dtype='f8'):
     # Return numpy array filled with value
     toret = np.empty(shape, dtype=dtype)
@@ -527,6 +524,7 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
     """Direct power spectrum measurement, summing over particle pairs, identified with KDTree."""
 
     name = 'kdtree'
+    _slab_npairs_max = 1000 * 1000
 
     def run(self):
         # FIXME: We may run out-of-memory when too many pairs...
@@ -566,7 +564,7 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             npairs_downsample = len(tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray'))
             npairs_downsample *= 1 + 3 / npairs_downsample**0.5 # 3 sigma margin
             npairs_downsample *= size1 / size1_downsample # scale to size of d1
-            npairs_max = _tree_npairs_max
+            npairs_max = self._slab_npairs_max
             nslabs = int(size2 / size2_downsample * npairs_downsample / npairs_max + 1.)
             if nslabs == 1: # do not touch autocorrelation
                 yield (d2, d1) if swap else (d1, d2)

@@ -8,6 +8,12 @@ from .direct_power import _make_array, _format_positions, _format_weights
 from . import mpi, utils
 
 
+def _get_real_dtype(dtype):
+    # Return real-dtype equivalent
+    dtype = np.dtype(dtype)
+    return np.dtype('f{:d}'.format(dtype.itemsize//2 if dtype.name.startswith('complex') else dtype.itemsize))
+
+
 def _get_resampler(resampler):
     # Return :class:`ResampleWindow` from string or :class:`ResampleWindow` instance
     if isinstance(resampler, ResampleWindow):
@@ -202,7 +208,7 @@ def ArrayMesh(array, boxsize, mpiroot=0, mpicomm=MPI.COMM_WORLD):
     dtype = mpicomm.bcast(dtype, root=mpiroot)
     shape = mpicomm.bcast(shape, root=mpiroot)
     boxsize = _make_array(boxsize, 3, dtype='f8')
-    pm = ParticleMesh(boxsize=boxsize, Nmesh=shape, dtype=dtype, comm=mpicomm)
+    pm = ParticleMesh(BoxSize=boxsize, Nmesh=shape, dtype=dtype, comm=mpicomm)
     mesh = pm.create(type='real')
     if mpicomm.rank == mpiroot:
         array = array.ravel() # ignore data from other ranks
@@ -296,7 +302,7 @@ class CatalogMesh(BaseClass):
         """
         self.mpicomm = mpicomm
         self.dtype = np.dtype(dtype)
-        self.rdtype = np.dtype('f{:d}'.format(self.dtype.itemsize//2 if self.dtype.name.startswith('complex') else self.dtype.itemsize))
+        self.rdtype = _get_real_dtype(self.dtype)
         self._set_positions(data_positions=data_positions, randoms_positions=randoms_positions, shifted_positions=shifted_positions, position_type=position_type, mpiroot=mpiroot)
         self._set_weights(data_weights=data_weights, randoms_weights=randoms_weights, shifted_weights=shifted_weights, mpiroot=mpiroot)
         self._set_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, boxpad=boxpad)

@@ -6,10 +6,57 @@ import numpy as np
 from matplotlib import pyplot as plt
 from mockfactory import Catalog
 
-from pypower import CatalogFFTPower, CatalogFFTWindow, PowerSpectrumWindowMatrix, mpi, setup_logging
+from pypower import CatalogFFTPower, MeshFFTWindow, CatalogFFTWindow, PowerSpectrumWindowMatrix, ParticleMesh, mpi, setup_logging
 from pypower.fft_window import get_correlation_function_tophat_derivative
 
 from test_fft_power import data_fn, randoms_fn
+
+
+import time
+
+class MemoryMonitor(object):
+    """
+    Class that monitors memory usage and clock, useful to check for memory leaks.
+
+    >>> with MemoryMonitor() as mem:
+            '''do something'''
+            mem()
+            '''do something else'''
+    """
+    def __init__(self, pid=None):
+        """
+        Initalize :class:`MemoryMonitor` and register current memory usage.
+
+        Parameters
+        ----------
+        pid : int, default=None
+            Process identifier. If ``None``, use the identifier of the current process.
+        """
+        import psutil
+        self.proc = psutil.Process(os.getpid() if pid is None else pid)
+        self.mem = self.proc.memory_info().rss / 1e6
+        self.time = time.time()
+        msg = 'using {:.3f} [Mb]'.format(self.mem)
+        print(msg, flush=True)
+
+    def __enter__(self):
+        """Enter context."""
+        return self
+
+    def __call__(self, log=None):
+        """Update memory usage."""
+        mem = self.proc.memory_info().rss / 1e6
+        t = time.time()
+        msg = 'using {:.3f} [Mb] (increase of {:.3f} [Mb]) after {:.3f} [s]'.format(mem,mem-self.mem,t-self.time)
+        if log:
+            msg = '[{}] {}'.format(log, msg)
+        print(msg, flush=True)
+        self.mem = mem
+        self.time = t
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        """Exit context."""
+        self()
 
 
 def test_deriv(plot=False):
@@ -60,16 +107,21 @@ def test_fft():
     test = fft.irfft(fft.rfft(a) * fft.rfft(b).conj()).conj()
     assert np.allclose(test, c)
 
+    with MemoryMonitor() as mem:
+        pm = ParticleMesh(BoxSize=boxsize, Nmesh=nmesh, dtype='c16', comm=mpi.COMM_WORLD)
+        rfield = RealField(pm)
+
 
 def test_fft_window():
 
     boxsize = 2000.
     nmesh = 64
-    kedges = np.linspace(0., 0.1, 6)
+    kedges = np.linspace(0., 0.1, 7)
     ells = (0, 2)
     resampler = 'tsc'
     interlacing = 2
-    dtype = 'f4'
+    dtype = 'f8'
+    cdtype = 'c16'
     boxcenter = np.array([1e6,0.,0.])[None,:]
     data = Catalog.load_fits(data_fn)
     randoms = Catalog.load_fits(randoms_fn)
@@ -77,6 +129,7 @@ def test_fft_window():
     for catalog in [data, randoms]:
         catalog['Position'] += boxcenter
         catalog['Weight'] = catalog.ones()
+
 
     for los in ['x', 'firstpoint', 'endpoint']:
 
@@ -91,6 +144,12 @@ def test_fft_window():
             window.save(fn)
             window = CatalogFFTWindow.load(fn)
 
+        windowc = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, power_ref=power, position_type='pos', dtype=cdtype)
+        #print(windowc.poles.value/window.poles.value)
+        assert np.allclose(windowc.poles.value, window.poles.value, rtol=0.5)
+        if window.los_type == 'global':
+            #print(windowc.wedges.value/window.wedges.value)
+            assert np.allclose(windowc.wedges.value, window.wedges.value, rtol=0.5)
 
         window1 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin[:2], projsin=window.poles.projsin, ells=(0,), power_ref=power, position_type='pos', dtype=dtype)
         window2 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin[1:], projsin=window.poles.projsin, ells=(0,), power_ref=power, position_type='pos', dtype=dtype)
@@ -106,6 +165,12 @@ def test_fft_window():
         if window.los_type == 'global':
             window.wedges.resum_input_odd_wide_angle()
             #window_global_poles = window.poles
+
+        window.poles.rebin_x(factorout=2)
+        assert len(window.poles.xout[0]) == (len(kedges) - 1)//2
+
+        if window.los_type == 'global':
+            window = MeshFFTWindow(edgesin=edgesin, power_ref=power, periodic=True, dtype=dtype)
 
 
 if __name__ == '__main__':

@@ -49,10 +49,10 @@ def test_power_spectrum_window_matrix():
         else: dwin = 0.*swin
         return interp1d(swin, dwin, kind='linear', fill_value=((1. if ell == 0 else 0.), 0.), bounds_error=False)(sep)
 
-    sep = np.geomspace(swin[0], swin[-1], 1024*16)
+    sep = np.geomspace(swin[0], swin[-1], 1024*16*2)
     kin = 1./sep[::-1]/(sep[1]/sep[0])
 
-    wm = PowerSpectrumWindowMultipoleMatrix(kout, projsin, projsout=projsout, window=window, k=kin, kinlim=None, sep=sep, sum_wa=False)
+    wm = PowerSpectrumWindowMultipoleMatrix(kout, projsin, projsout=projsout, window=window, k=kin, kin_rebin=2, kin_lim=None, sep=sep, sum_wa=False)
     kin = wm.xin[0]
     mask = (kin > 0.001) & (kin < 1.)
     test = wm.value.T
@@ -128,10 +128,11 @@ def test_fft_window():
     boxsize = 2000.
     nmesh = 64
     kedges = np.linspace(0., 0.1, 6)
-    ells = (0, 2, 4)
+    ells = (0, 2)
     resampler = 'tsc'
     interlacing = 2
-    dtype = 'f4'
+    dtype = 'f8'
+    cdtype = 'c16'
     los = None
     boxcenter = np.array([3000.,0.,0.])[None,:]
     data = Catalog.load_fits(data_fn)
@@ -152,6 +153,14 @@ def test_fft_window():
         window = PowerSpectrumWindowMultipole.load(fn)
         assert np.allclose(window.power[0], window1.power[0], equal_nan=True)
 
+    windowc = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', dtype=cdtype).poles
+
+    for iproj, proj in enumerate(windowc.projs):
+        atol = 20. if proj.ell % 2 == 0 else 1e-5
+        assert np.allclose(windowc.power[iproj].imag, window.power[iproj].imag, atol=atol, rtol=5e-2)
+        atol = 2e-1 if proj.ell % 2 else 1e-5
+        assert np.allclose(windowc.power[iproj].real, window.power[iproj].real, atol=atol, rtol=5e-2)
+
     windowp1 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, projs=window.projs[:2], position_type='pos', dtype=dtype).poles
     windowp2 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, projs=window.projs[2:], position_type='pos', dtype=dtype).poles
     windowc = window1.concatenate_proj(windowp1, windowp2)
@@ -160,6 +169,10 @@ def test_fft_window():
     window2 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', boxsize=1000., dtype=dtype).poles
     windowc = window.concatenate_x(window1, window2)
     assert windowc.k[-1] > window1.k[-1]
+
+    nk = len(windowc.k)
+    windowc.rebin(2)
+    assert len(windowc.k) == nk//2
 
 
 def get_correlation_function_window():
@@ -195,10 +208,10 @@ def test_window_convolution():
     window = get_correlation_function_window()
     ells = [0, 2, 4]
     sep = np.geomspace(window.sep[0], window.sep[-1], 1024)
-    kinlim = (1e-3, 1e1)
+    kin_lim = (1e-3, 1e1)
     kout = np.linspace(0., 0.3, 60)
     projsin = ells + PowerSpectrumOddWideAngleMatrix.propose_out(ells, wa_orders=1)
-    wm = PowerSpectrumWindowMultipoleMatrix(kout, projsin, projsout=ells, window=window, sep=sep, kinlim=kinlim)
+    wm = PowerSpectrumWindowMultipoleMatrix(kout, projsin, projsout=ells, window=window, sep=sep, kin_lim=kin_lim)
     kwargs = {'d':1000., 'wa_orders':1, 'los':'firstpoint'}
     wa = PowerSpectrumOddWideAngleMatrix(wm.xin[0], ells, projsout=wm.projsin, **kwargs)
     matrix = BaseMatrix.join(wa, wm)
@@ -234,9 +247,6 @@ def test_window_convolution():
 if __name__ == '__main__':
 
     setup_logging()
-
-    test_window_convolution()
-    exit()
 
     test_wigner()
     test_window()

@@ -16,7 +16,7 @@ from pmesh.pm import RealField, ComplexField
 
 from .utils import BaseClass
 from . import mpi, utils
-from .mesh import _get_compensation_window, _get_box, CatalogMesh
+from .mesh import _get_real_dtype, _get_compensation_window, _get_box, CatalogMesh
 from .direct_power import _make_array, _format_positions, _format_weights, get_default_nrealizations, get_inverse_probability_weight, get_direct_power_engine
 
 
@@ -199,7 +199,6 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
 
     # setup the bin edges and number of bins
     xedges, muedges = edges
-    x2edges = xedges**2
     nx = len(xedges) - 1
     nmu = len(muedges) - 1
     xdtype = max(xedges.dtype, muedges.dtype)
@@ -227,28 +226,31 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
     for islab in range(x3d[0].shape[0]):
         # the square of coordinate mesh norm
         # (either Fourier space k or configuraton space x)
-        xslab = (x3d[0][islab].real.astype(xdtype),) + tuple(x3d[i].real.astype(xdtype) for i in range(1,3))
-        x2slab = sum(xx**2 for xx in xslab)
+        xvec = (x3d[0][islab].real.astype(xdtype),) + tuple(x3d[i].real.astype(xdtype) for i in range(1,3))
+        xnorm = sum(xx**2 for xx in xvec)**0.5
 
         # if empty, do nothing
-        if len(x2slab.flat) == 0: continue
+        if len(xnorm.flat) == 0: continue
 
         # get the bin indices for x on the slab
-        dig_x = np.digitize(x2slab.flat, x2edges, right=False)
+        dig_x = np.digitize(xnorm.flat, xedges, right=False)
 
         # get the bin indices for mu on the slab
-        mu = sum(xx*ll for xx, ll in zip(xslab, los))
-        xslab = x2slab**0.5
-        nonzero = xslab != 0.
-        mu[nonzero] /= xslab[nonzero]
+        mu = sum(xx*ll for xx, ll in zip(xvec, los))
+        nonzero = xnorm != 0.
+        mu[nonzero] /= xnorm[nonzero]
 
         if hermitian_symmetric == 0:
-            hermitian_weights = 1.
             mus = [mu]
         else:
-            nonsingular = np.ones(xslab.shape, dtype='?')
+            nonsingular = np.ones(xnorm.shape, dtype='?')
             # get the indices that have positive freq along symmetry axis = -1
             nonsingular[...] = x3d[-1][0] > 0.
+            #mmu = - sum(xx*ll for xx, ll in zip(xvec[:-1], los[:-1])) - xvec[-1] * los[-1]
+            #mmu[nonzero] /= xnorm[nonzero]
+            #print(xvec[0].shape, xvec[1].shape, xvec[2].shape)
+            #mmu = sum(-xx*ll for xx, ll in zip(xvec, los))
+            #mmu[nonzero] /= xnorm[nonzero]
             mus = [mu, -mu]
 
         # accounting for negative frequencies
@@ -261,15 +263,15 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
 
             if hermitian_symmetric and imu:
                 multi_index = multi_index[nonsingular.flat]
-                xslab = xslab[nonsingular] # it will be recomputed
+                xnorm = xnorm[nonsingular] # it will be recomputed
                 mu = mu[nonsingular]
 
-            # sum up x in each bin
-            xsum.flat += np.bincount(multi_index, weights=xslab.flat, minlength=xsum.size)
-            # sum up mu in each bin
-            musum.flat += np.bincount(multi_index, weights=mu.flat, minlength=musum.size)
             # count number of modes in each bin
             nsum.flat += np.bincount(multi_index, minlength=nsum.size)
+            # sum up x in each bin
+            xsum.flat += np.bincount(multi_index, weights=xnorm.flat, minlength=nsum.size)
+            # sum up mu in each bin
+            musum.flat += np.bincount(multi_index, weights=mu.flat, minlength=nsum.size)
 
             # compute multipoles by weighting by Legendre(ell, mu)
             for ill, ell in enumerate(unique_ells):
@@ -278,7 +280,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
 
                 if hermitian_symmetric and imu:
                     # weight the input 3D array by the appropriate Legendre polynomial
-                    weightedy3d = hermitian_symmetric * (weightedy3d * y3d[islab][nonsingular[0]]).conj() # hermitian_symmetric is 1 or -1
+                    weightedy3d = hermitian_symmetric * weightedy3d * y3d[islab][nonsingular[0]].conj() # hermitian_symmetric is 1 or -1
                 else:
                     weightedy3d = weightedy3d * y3d[islab, ...]
 
@@ -476,17 +478,20 @@ class BasePowerSpectrumStatistic(BaseClass):
             factor = (factor,)
         if len(factor) != self.ndim:
             raise ValueError('Provide a rebinning factor for each dimension')
+        if any(s % f for s,f in zip(self.shape, factor)):
+            raise ValueError('Rebinning factor must divide shape')
         new_shape = tuple(s//f for s,f in zip(self.shape, factor))
         nmodes = self.nmodes
         self.nmodes = utils.rebin(nmodes, new_shape, statistic=np.sum)
         self.modes = [utils.rebin(m*nmodes, new_shape, statistic=np.sum)/self.nmodes for m in self.modes]
+        extradim = self.power_nonorm.ndim > len(self.shape) # e.g. multipoles
         self.power_nonorm.shape = (-1,) + self.shape
         self.power_nonorm = np.asarray([utils.rebin(power*nmodes, new_shape, statistic=np.sum)/self.nmodes for power in self.power_nonorm])
         self.power_direct_nonorm.shape = (-1,) + self.shape
         self.power_direct_nonorm = np.asarray([utils.rebin(power, new_shape, statistic=np.sum)/np.prod(factor) for power in self.power_direct_nonorm])
         self.edges = [edges[::f] for edges, f in zip(self.edges, factor)]
-        self.power_nonorm.shape = self.shape
-        self.power_direct_nonorm.shape = self.shape
+        self.power_nonorm.shape = (-1,)*extradim + self.shape
+        self.power_direct_nonorm.shape = (-1,)*extradim + self.shape
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -497,9 +502,9 @@ class BasePowerSpectrumStatistic(BaseClass):
         return state
 
     def __copy__(self):
-        new = super(PowerSpectrumStatistic, self).__copy__()
+        new = super(BasePowerSpectrumStatistic, self).__copy__()
         for name in ['edges', 'modes', 'attrs']:
-            setattr(new, getattr(new, name).copy())
+            setattr(new, name, getattr(new, name).copy())
         return new
 
     def deepcopy(self):
@@ -592,10 +597,17 @@ class PowerSpectrumWedge(BasePowerSpectrumStatistic):
         if k is None: k = kavg
         if mu is None: mu = muavg
         k, mu = np.asarray(k), np.asarray(mu)
-        toret = RectBivariateSpline(kavg, muavg, tmp.real, kx=1, ky=1, s=0)(k, mu, grid=True)
-        if complex:
-            toret = toret + 1j * RectBivariateSpline(kavg, muavg, tmp.imag, kx=1, ky=1, s=0)(k, mu, grid=True)
-        if k.ndim == 0 or mu.ndim == 0:
+        isscalar = k.ndim == 0 or mu.ndim == 0
+        k, mu = np.atleast_1d(k), np.atleast_1d(mu)
+        toret = np.nan * np.zeros((k.size, mu.size), dtype=tmp.dtype)
+        if muavg.size == 1:
+            toret[:,mu == muavg] = np.interp(k, kavg, tmp.ravel(), left=np.nan, right=np.nan)[:,None]
+        else:
+            mask = ((k >= kavg[0]) & (k <= kavg[-1]))[:,None] & ((mu >= muavg[0]) & (mu <= muavg[-1]))
+            toret[mask] = RectBivariateSpline(kavg, muavg, tmp.real, kx=1, ky=1, s=0)(k, mu, grid=True)[mask]
+            if complex:
+                toret[mask] += 1j * RectBivariateSpline(kavg, muavg, tmp.imag, kx=1, ky=1, s=0)(k, mu, grid=True)[mask]
+        if isscalar:
             return toret.ravel()
         return toret
 
@@ -673,7 +685,7 @@ class PowerSpectrumMultipole(BasePowerSpectrumStatistic):
         if not complex: tmp = tmp.real if ell % 2 == 0 else tmp.imag
         if k is None:
             return tmp
-        return np.interp(k, self.k, tmp)
+        return np.interp(k, self.k, tmp, left=np.nan, right=np.nan)
 
 
 def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.COMM_WORLD):
@@ -893,7 +905,7 @@ class MeshFFTPower(BaseClass):
         self._set_edges(edges)
         self.wnorm = wnorm
         if wnorm is None:
-            self.wnorm = normalization(mesh1, mesh2)
+            self.wnorm = np.real(normalization(mesh1, mesh2))
         self.shotnoise = shotnoise
         if shotnoise is None:
             self.shotnoise = 0.
@@ -910,8 +922,11 @@ class MeshFFTPower(BaseClass):
         if compensations is None: compensations = [None]*2
         if not isinstance(compensations, (tuple, list)):
             compensations = [compensations]*2
+        compensations = compensations.copy()
+        compensations += [None]*(2 - len(compensations))
 
         def _format_compensation(compensation):
+            if compensation is None: return None
             if isinstance(compensation, dict):
                 return compensation
             resampler = None
@@ -923,7 +938,7 @@ class MeshFFTPower(BaseClass):
             shotnoise = 'shotnoise' in compensation or 'sn' in compensation
             return {'resampler':resampler, 'shotnoise':shotnoise}
 
-        self.compensations = [_format_compensation(compensation) if compensation is not None else None for compensation in compensations]
+        self.compensations = [_format_compensation(compensation) for compensation in compensations]
 
     def _set_mesh(self, mesh1, mesh2=None, boxcenter=None):
         self.mesh1 = mesh1
@@ -957,9 +972,9 @@ class MeshFFTPower(BaseClass):
                 self.attrs['interlacing{:d}'.format(i+1)] = mesh.interlacing
             else:
                 setattr(self, name, mesh)
-                self.attrs['sum_data_weights{:d}'.format(i+1)] = self.attrs['sum_randoms_weights{:d}'.format(i+1)] = mesh.csum()
-                self.attrs['resampler{:d}'.format(i+1)] = not self.compensations[i]['resampler']
-                self.attrs['interlacing{:d}'.format(i+1)] = not self.compensations[i]['shotnoise']
+                self.attrs['sum_data_weights{:d}'.format(i+1)] = self.attrs['sum_randoms_weights{:d}'.format(i+1)] = mesh.csum().real
+                self.attrs['resampler{:d}'.format(i+1)] = not self.compensations[i]['resampler'] if self.compensations[i] is not None else None
+                self.attrs['interlacing{:d}'.format(i+1)] = not self.compensations[i]['shotnoise'] if self.compensations[i] is not None else False
 
         if self.autocorr:
             for name in ['sum_data_weights', 'sum_randoms_weights', 'resampler', 'interlacing']:
@@ -996,7 +1011,7 @@ class MeshFFTPower(BaseClass):
             dk = kedges.get('step', None)
             if dk is None:
                 # find unique edges
-                k = [k.real for k in self.mesh1.pm.create_coords('complex')]
+                k = [k.real for k in self.pm.create_coords('complex')]
                 dk = 2 * np.pi / self.boxsize
                 kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax*(1+1e-6), mpicomm=self.mpicomm) # margin required for float32
             else:
@@ -1117,13 +1132,11 @@ class MeshFFTPower(BaseClass):
         start = time.time()
         # Calculate the 3d power spectrum, slab-by-slab to save memory
         # FFT 1st density field and apply the resampler transfer kernel
-        cfield1 = self.mesh1.r2c() # pmesh r2c convention is 1/N^3 e^{-ikr}
+        cfield2 = cfield1 = self.mesh1.r2c() # pmesh r2c convention is 1/N^3 e^{-ikr}
         #print(cfield1.value.sum(), cfield1.value.dtype, cfield1.value.shape)
         self._compensate(cfield1, self.compensations[0])
 
-        if self.autocorr:
-            cfield2 = cfield1
-        else:
+        if not self.autocorr:
             cfield2 = self.mesh2.r2c()
             self._compensate(cfield2, self.compensations[1])
 
@@ -1135,7 +1148,7 @@ class MeshFFTPower(BaseClass):
             c1[mask_zero] = 0.
 
         #from nbodykit.algorithms.fftpower import project_to_basis
-        #result, result_poles = project_to_basis(cfield1, self.edges, poles=[], los=self.los)
+        #result, result_poles = project_to_basis(cfield1, self.edges, poles=self.ells or [], los=self.los)
         result, result_poles = project_to_basis(cfield1, self.edges, ells=self.ells, los=self.los)
 
         stop = time.time()
@@ -1144,7 +1157,7 @@ class MeshFFTPower(BaseClass):
 
         # Format the power results into :class:`PowerSpectrumWedge` instance
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
-        k, mu, power, nmodes = (np.squeeze(result[ii]) for ii in [0,1,2,3])
+        k, mu, power, nmodes = result[:4]
         # Correct pmesh convention here: assuming F(r) is real, F*(k) = 1/N^3 \sum_{r} e^{ikr} F(r)
         power = self.nmesh.prod()**2 * power.conj()
         self.wedges = PowerSpectrumWedge(modes=(k,mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
@@ -1215,9 +1228,9 @@ class MeshFFTPower(BaseClass):
             # Initialize the memory holding the Aell terms for
             # higher multipoles (this holds sum of m for fixed ell)
             # NOTE: this will hold FFTs of density field #1
-            rfield = RealField(self.mesh1.pm)
-            cfield = ComplexField(self.mesh1.pm)
-            Aell = ComplexField(self.mesh1.pm)
+            rfield = RealField(self.pm)
+            cfield = ComplexField(self.pm)
+            Aell = ComplexField(self.pm)
 
             # Spherical harmonic kernels (for ell > 0)
             Ylms = [[get_real_Ylm(ell, m) for m in range(-ell, ell+1)] for ell in nonzeroells]
@@ -1228,17 +1241,23 @@ class MeshFFTPower(BaseClass):
             #offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize / self.nmesh # in nbodykit
             #offset = self.boxcenter + 0.5*self.boxsize / self.nmesh # in nbodykit
 
+            def _save_divide(num, denom):
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    toret = num/denom
+                toret[denom == 0.] = 0.
+                return toret
+
             # The real-space grid
-            xgrid = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))]
-            #xgrid = [xx.astype('f8') + offset[ii] for ii, xx in enumerate(self.mesh1.slabs.optx)]
-            xnorm = np.sqrt(sum(xx**2 for xx in xgrid))
-            xgrid = [xx/xnorm for xx in xgrid]
+            xhat = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))]
+            #xhat = [xx.astype('f8') + offset[ii] for ii, xx in enumerate(self.mesh1.slabs.optx)]
+            xnorm = np.sqrt(sum(xx**2 for xx in xhat))
+            xhat = [_save_divide(xx, xnorm) for xx in xhat]
             del xnorm
 
             # The Fourier-space grid
-            kgrid = [kk.real.astype('f8') for kk in A0.slabs.optx]
-            knorm = np.sqrt(sum(kk**2 for kk in kgrid)); knorm[knorm==0.] = np.inf
-            kgrid = [kk/knorm for kk in kgrid]
+            khat = [kk.real.astype('f8') for kk in A0.slabs.optx]
+            knorm = np.sqrt(sum(kk**2 for kk in khat))
+            khat = [_save_divide(kk, knorm) for kk in khat]
             del knorm
 
         for ill, ell in enumerate(nonzeroells):
@@ -1252,14 +1271,14 @@ class MeshFFTPower(BaseClass):
 
                 # Apply the config-space Ylm
                 for islab, slab in enumerate(rfield.slabs):
-                    slab[:] *= Ylm(xgrid[0][islab], xgrid[1][islab], xgrid[2][islab])
+                    slab[:] *= Ylm(xhat[0][islab], xhat[1][islab], xhat[2][islab])
 
                 # Real to complex of field #2
                 rfield.r2c(out=cfield)
 
                 # Apply the Fourier-space Ylm
                 for islab, slab in enumerate(cfield.slabs):
-                    slab[:] *= Ylm(kgrid[0][islab], kgrid[1][islab], kgrid[2][islab])
+                    slab[:] *= Ylm(khat[0][islab], khat[1][islab], khat[2][islab])
 
                 # Add to the total sum
                 Aell[:] += cfield[:]
@@ -1493,9 +1512,10 @@ class CatalogFFTPower(MeshFFTPower):
         mpicomm : MPI communicator, default=MPI.COMM_WORLD
             The MPI communicator.
         """
+        rdtype = _get_real_dtype(dtype)
         bpositions, positions = [], {}
         for name in ['data_positions1', 'data_positions2', 'randoms_positions1', 'randoms_positions2', 'shifted_positions1', 'shifted_positions2']:
-            tmp = _format_positions(locals()[name], position_type=position_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
+            tmp = _format_positions(locals()[name], position_type=position_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
             if tmp is not None:
                 bpositions.append(tmp)
             label = name.replace('data_positions','D').replace('randoms_positions','R').replace('shifted_positions','S')
@@ -1514,7 +1534,7 @@ class CatalogFFTPower(MeshFFTPower):
         bweights, n_bitwise_weights, weights = {}, {}, {}
         for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']:
             label = name.replace('data_weights','D').replace('randoms_weights','R').replace('shifted_weights','S')
-            bweights[label], n_bitwise_weights[label] = _format_weights(locals()[name], weight_type=weight_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
+            bweights[label], n_bitwise_weights[label] = _format_weights(locals()[name], weight_type=weight_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
             if n_bitwise_weights[label]:
                 bitwise_weight = bweights[label][:n_bitwise_weights[label]]
                 nrealizations = get_nrealizations(bitwise_weight)

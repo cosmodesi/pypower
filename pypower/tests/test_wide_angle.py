@@ -60,7 +60,7 @@ def test_matrix():
     xin = xout = np.arange(20)
     matrix = np.eye(len(projsin) * len(xin))
     matrix = BaseMatrix(matrix, xin, xout, projsin, projsout, weightsin=np.linspace(0.2, 1., len(xin)), weightsout=np.linspace(0.2, 1., len(xout)))
-    matrix.select_projs(projsout=projsout[:-1])
+    matrix.select_proj(projsout=projsout[:-1])
     assert matrix.projsout == projsout[:-1]
     assert len(matrix.xout) == len(matrix.projsout)
     assert matrix.shape == (len(projsin) * len(xin), len(matrix.projsout) * len(xin))
@@ -108,7 +108,7 @@ def test_power_spectrum_odd_wideangle():
     assert np.allclose(wa.value.T, ref)
 
     assert wa.projsout != wa.projsin
-    wa.select_projs(projsout=projsin)
+    wa.select_proj(projsout=projsin)
     assert wa.projsout == wa.projsin
 
     shape = wa.value.shape

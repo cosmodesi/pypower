@@ -259,7 +259,7 @@ class BaseMatrix(BaseClass):
             matrix = [np.concatenate([matrix[iin][iout] for iin in range(len(self.xin))], axis=0) for iout in range(len(self.xout))]
         return matrix
 
-    def select_projs(self, projsin=None, projsout=None, **kwargs):
+    def select_proj(self, projsin=None, projsout=None, **kwargs):
         """
         Restrict current instance to provided projections.
 
@@ -430,13 +430,16 @@ class BaseMatrix(BaseClass):
                 if not isinstance(projs, list): projs = [projs]
                 projs = [Projection(proj) for proj in projs]
             inprojs[axis] = projs
-            factor = locals()['factor{}'.format(axis)]
+            factorname = 'factor{}'.format(axis)
+            factor = locals()[factorname]
             arrays = getattr(self, 'weights{}'.format(axis))
             if arrays is not None:
                 old_weights[axis], new_weights[axis] = [], []
                 for proj in projs:
                     selfii = selfprojs.index(proj)
                     old_weights[axis].append(arrays[selfii])
+                    if len(arrays[selfii]) % factor:
+                        raise ValueError('Rebinning factor {} must divide size along axis {}'.format(factorname, axis))
                     arrays[selfii] = utils.rebin(arrays[selfii], len(arrays[selfii])//factor, statistic=np.sum)
                     new_weights[axis].append(arrays[selfii])
             arrays = getattr(self, 'x{}'.format(axis))
@@ -540,7 +543,7 @@ class BaseMatrix(BaseClass):
         new = BaseMatrix.copy(others[-1])
         for first, second in zip(others[-2::-1], others[::-1]):
             first = first.copy()
-            first.select_projs(projsout=second.projsin)
+            first.select_proj(projsout=second.projsin)
             if first.shape[1] != second.shape[0]:
                 raise ValueError('Input matrices do not have same shape')
             new.value = first.value @ new.value
@@ -571,39 +574,6 @@ class BaseMatrix(BaseClass):
     def nprojs(self):
         """Number of input, output projections."""
         return (len(self.projsin), len(self.projsout))
-
-    def prod_proj(self, array, axes=('in', 0)):
-        """
-        Multiply current matrix by input ``array`` along input ``axes``, projection-wise,
-        i.e. a same operation is applied for all coordinates of a given (input projection, output projection) block.
-
-        Parameters
-        ----------
-        array : 1D or 2D array
-            Array to multiply matrix with.
-
-        axes : string, tuple
-            Tuple of axes to sum over (axis in current matrix ("in" or "out")), axis in input ``array``).
-            If ``array`` is 1D, one can just provide the axis in current matrix ("in" or "out").
-        """
-        array = np.asarray(array)
-        if array.ndim == 1:
-            if np.ndim(axes) == 0: axes = (axes, 0)
-            array = np.diag(array)
-        elif array.ndim != 2:
-            raise ValueError('Input array should be 1D or 2D')
-        axes = tuple(axes)
-        if len(axes) != 2:
-            raise ValueError('Please provide a tuple for axes to sum over: (axis in self - in or out, axis in input array)')
-        unpacked = self.unpacked(axis=axes[0])
-        shape = (len(unpacked),)*2
-        if array.shape != shape:
-            raise ValueError('Input array should be a square matrix of shape {}'.format(shape))
-        matrix = []
-        for iout in range(shape[0]):
-            tmp = sum(c * unpacked[iin] for iin, c in enumerate(np.take(array, iout, axis=axes[1] % 2 - 1)))
-            matrix.append(tmp)
-        self.value = np.concatenate(matrix, axis=['in', 'out'].index(axes[0]))
 
     def prod_proj(self, array, axes=('in', 0), projs=None):
         """

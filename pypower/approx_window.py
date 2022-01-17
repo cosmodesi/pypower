@@ -14,11 +14,11 @@ from scipy import special
 
 from .utils import BaseClass
 from .fftlog import CorrelationToPower
-from . import mpi, utils
 from .fft_power import BasePowerSpectrumStatistic, MeshFFTPower, CatalogMesh,\
-                       _make_array, _format_positions, _format_weights,\
+                       _get_real_dtype, _make_array, _format_positions, _format_weights,\
                        get_default_nrealizations, get_inverse_probability_weight, _get_box
 from .wide_angle import Projection, BaseMatrix, CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix
+from . import mpi, utils
 
 
 def weights_trapz(x):
@@ -472,6 +472,7 @@ class CatalogFFTWindowMultipole(MeshFFTPower):
         mpicomm : MPI communicator, default=MPI.COMM_WORLD
             The MPI communicator.
         """
+        rdtype = _get_real_dtype(dtype)
         mesh_names = ['nmesh', 'boxsize', 'boxcenter']
         loc = locals()
         mesh_attrs = {name: loc[name] for name in mesh_names if loc[name] is not None}
@@ -507,7 +508,7 @@ class CatalogFFTWindowMultipole(MeshFFTPower):
 
         bpositions, positions = [], {}
         for name in ['randoms_positions1', 'randoms_positions2']:
-            tmp = _format_positions(locals()[name], position_type=position_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
+            tmp = _format_positions(locals()[name], position_type=position_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
             if tmp is not None: bpositions.append(tmp)
             label = name.replace('randoms_positions','R')
             positions[label] = tmp
@@ -525,7 +526,7 @@ class CatalogFFTWindowMultipole(MeshFFTPower):
         weights = {}
         for name in ['randoms_weights1', 'randoms_weights2']:
             label = name.replace('data_weights','D').replace('randoms_weights','R').replace('shifted_weights','S')
-            weight, n_bitwise_weights = _format_weights(locals()[name], weight_type=weight_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
+            weight, n_bitwise_weights = _format_weights(locals()[name], weight_type=weight_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
 
             if n_bitwise_weights:
                 bitwise_weight = weight[:n_bitwise_weights]
@@ -718,7 +719,9 @@ class PowerSpectrumWindowMultipoleMatrix(BaseMatrix):
 
     """Class computing matrix for window convolution in Fourier space."""
 
-    def __init__(self, kout, projsin, projsout=None, k=None, kinlim=(1e-4, 1.), sep=None, window=None, xy=1, q=0, sum_wa=True, default_zero=False, attrs=None):
+    _slab_npoints_max = 100 * 1000
+
+    def __init__(self, kout, projsin, projsout=None, k=None, kin_rebin=1, kin_lim=(1e-4, 1.), sep=None, window=None, xy=1, q=0, sum_wa=True, default_zero=False, attrs=None):
         """
         Initialize :class:`PowerSpectrumWindowMultipoleMatrix`.
 
@@ -737,7 +740,10 @@ class PowerSpectrumWindowMultipoleMatrix(BaseMatrix):
             Wavenumber for Hankel transforms; must be log-spaced.
             If ``None``, use ``sep`` and ``xy`` instead to determine :attr:`k`.
 
-        kinlim : tuple, default=(1e-4, 1.)
+        kin_rebin : tuple, default=1
+            To save some memory, rebin along input k-coordinates by this factor.
+
+        kin_lim : tuple, default=(1e-4, 1.)
             To save some memory, pre-cut input k-coordinates to these limits.
 
         sep : array, default=None
@@ -781,7 +787,10 @@ class PowerSpectrumWindowMultipoleMatrix(BaseMatrix):
             self.xy = xy[0]
             if not np.allclose(self.xy, xy): raise ValueError('kin and sep must be related by kin * sep[::-1] = cste')
 
-        self.kinlim = kinlim
+        self.kin_rebin = kin_rebin
+        if len(self.k) % self.kin_rebin:
+            raise ValueError('Rebinning factor kin_rebin must divide len(k) or len(sep)')
+        self.kin_lim = kin_lim
         self.q = q
 
         self.window = window
@@ -824,27 +833,36 @@ class PowerSpectrumWindowMultipoleMatrix(BaseMatrix):
         self.corrmatrix = CorrelationFunctionWindowMultipoleMatrix(self.sep, self.projsin, projsout=self.projsout, window=self.window, sum_wa=self.sum_wa, default_zero=self.default_zero).projvalue
 
         self.value = []
+
+        krebin = utils.rebin(self.k, len(self.k)//self.kin_rebin, statistic=np.mean)
+        maskin = np.ones(len(krebin), dtype='?')
+        if self.kin_lim is not None:
+            maskin &= (krebin >= self.kin_lim[0]) & (krebin <= self.kin_lim[-1])
+        nin = maskin.sum()
+
         for iin, projin in enumerate(self.projsin):
+            self.xin[iin] = krebin[maskin]
             line = []
             for iout, projout in enumerate(self.projsout):
-                # tmp is j_{\ell}(ks) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
-                block = special.spherical_jn(projout.ell, self.xout[iout][:,None]*self.sep) * self.corrmatrix[iin, iout] # matrix has dimensions (kout,s)
-                #from hankl import P2xi, xi2P
-                fftlog = CorrelationToPower(self.sep, ell=projin.ell, q=self.q, xy=self.xy, lowring=False) # prefactor is 4 \pi (-i)^{\ell^{\prime}}
-                # tmp is 4 \pi (-i)^{\ell^{\prime}} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
-                xin, block = fftlog(block) # matrix has dimensions (kout, k)
-                assert np.allclose(xin, self.k)
-                prefactor = 1./(2.*np.pi**2) * (-1j)**projout.ell * (-1)**projin.ell # now prefactor 2 / \pi (-i)^{\ell} i^{\ell^{\prime}}
-                if projout.ell % 2 == 1: prefactor *= -1j # we provide the imaginary part of odd power spectra, so let's multiply by (-i)^{\ell}
-                if projin.ell % 2 == 1: prefactor *= 1j # we take in the imaginary part of odd power spectra, so let's multiply by i^{\ell^{\prime}}
-                # tmp is dk^{\prime} k^{\prime 2} \frac{2}{\pi} (-1)^{\ell} (-1)^{\ell^{\prime}} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
-                block = np.real(prefactor * block) * weights_trapz(xin**3) / 3. # everything should be real now
-                block = block.T # matrix has dimensions (k, kout)
-                if self.kinlim is not None:
-                    mask = (xin >= self.kinlim[0]) & (xin <= self.kinlim[-1])
-                    self.xin[iin] = xin[mask]
-                    block = block[mask,:]
-                #print(projout.ell,projin.ell,self.xin.min(),self.xin.max(),self.kout[iout].min(),self.kout[iout].max(),tmp.min(),tmp.max())
+                nout = len(self.xout[iout])
+                block = np.zeros((nin, nout), dtype=self.corrmatrix.dtype)
+                nslabs = min(max(len(self.sep) * nout // self._slab_npoints_max, 1), nout)
+                for islab in range(nslabs): # proceed by slab to save memory (if nin << len(self.sep))
+                    slout = slice(islab*nout//nslabs, (islab+1)*nout//nslabs)
+                    xout = self.xout[iout][slout]
+                    # tmp is j_{\ell}(ks) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
+                    tmp = special.spherical_jn(projout.ell, xout[:,None]*self.sep) * self.corrmatrix[iin, iout] # matrix has dimensions (kout,s)
+                    #from hankl import P2xi, xi2P
+                    fftlog = CorrelationToPower(self.sep, ell=projin.ell, q=self.q, xy=self.xy, lowring=False) # prefactor is 4 \pi (-i)^{\ell^{\prime}}
+                    # tmp is 4 \pi (-i)^{\ell^{\prime}} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
+                    xin, tmp = fftlog(tmp) # matrix has dimensions (kout, k)
+                    assert np.allclose(xin, self.k)
+                    prefactor = 1./(2.*np.pi**2) * (-1j)**projout.ell * (-1)**projin.ell # now prefactor 2 / \pi (-i)^{\ell} i^{\ell^{\prime}}
+                    if projout.ell % 2 == 1: prefactor *= -1j # we provide the imaginary part of odd power spectra, so let's multiply by (-i)^{\ell}
+                    if projin.ell % 2 == 1: prefactor *= 1j # we take in the imaginary part of odd power spectra, so let's multiply by i^{\ell^{\prime}}
+                    # tmp is dk^{\prime} k^{\prime 2} \frac{2}{\pi} (-1)^{\ell} (-1)^{\ell^{\prime}} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
+                    tmp = np.real(prefactor * tmp) * weights_trapz(xin**3) / 3. # everything should be real now
+                    block[:,slout] = utils.rebin(tmp.T, (len(krebin), len(xout)), statistic=np.sum)[maskin,:] # matrix has dimensions (k, kout)
                 line.append(block)
             self.value.append(line)
         self.value = np.bmat(self.value).A # (in, out)
