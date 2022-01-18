@@ -242,6 +242,7 @@ def test_mesh_power():
                 check_poles(power.poles, ref_power.poles)
 
     power = get_mesh_power(data, los='x').poles
+
     power_compensation = get_mesh_power_compensation(data, los='x').poles
     for ill, ell in enumerate(power.ells):
         assert np.allclose(power_compensation.power_nonorm[ill]/power_compensation.wnorm, power.power_nonorm[ill]/power.wnorm)
@@ -377,6 +378,18 @@ def test_catalog_power():
     power_cross = get_catalog_power_cross(data, randoms)
     for ell in ells:
         assert np.allclose(power_cross.poles(ell=ell) - (ell == 0)*f_power.shotnoise, f_power.poles(ell=ell))
+
+    def get_mesh_no_randoms_power(data):
+        mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos')
+        return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)
+
+    def get_catalog_no_randoms_power(data):
+        return CatalogFFTPower(data_positions1=data['Position'], ells=ells, los=los, edges=kedges, boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos')
+
+    ref_power = get_mesh_no_randoms_power(data)
+    power = get_catalog_no_randoms_power(data)
+    for ell in ells:
+        assert np.allclose(power.poles(ell=ell), ref_power.poles(ell=ell))
 
 
 def test_mpi():

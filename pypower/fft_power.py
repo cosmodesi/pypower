@@ -1384,7 +1384,8 @@ class CatalogFFTPower(MeshFFTPower):
             Optionally (for cross-correlation), positions in the second data catalog. See ``data_positions1``.
 
         randoms_positions1 : list, array, default=None
-            Positions in the first randoms catalog. Typically of shape (3, N) or (N, 3).
+            Optionally, positions of the random catalog representing the first selection function.
+            If no randoms are provided, selection function will be assumed uniform.
 
         randoms_positions2 : list, array, default=None
             Optionally (for cross-correlation), positions in the second randoms catalog. See ``randoms_positions1``.
