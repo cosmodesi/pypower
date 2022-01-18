@@ -150,16 +150,16 @@ def test_direct_power():
     modes = np.linspace(0.01, 0.1, 11)
     size = 100
     boxsize = (1000,)*3
-    from pypower import direct_power
-    _tree_npairs_max = direct_power._tree_npairs_max
+    from pypower.direct_power import KDTreeDirectPowerEngine
+    _slab_npairs_max = KDTreeDirectPowerEngine._slab_npairs_max
     list_options = []
     list_options.append({})
     list_options.append({'los':'midpoint'})
     list_options.append({'los':'firstpoint'})
-    list_options.append({'los':'endpoint', 'tree_npairs_max':10})
+    list_options.append({'los':'endpoint', 'slab_npairs_max':10})
     list_options.append({'autocorr':True})
     list_options.append({'n_individual_weights':1})
-    list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'weight_type':'inverse_bitwise_minus_individual', 'tree_npairs_max':10})
+    list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'weight_type':'inverse_bitwise_minus_individual', 'slab_npairs_max':10})
     list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'iip':1, 'dtype':'f4'})
     list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'bitwise_type': 'i4', 'iip':1})
     list_options.append({'n_individual_weights':1, 'n_bitwise_weights':1, 'bitwise_type': 'i4', 'iip':1, 'limit_type':'s'})
@@ -195,11 +195,11 @@ def test_direct_power():
             position_type = options.pop('position_type', 'xyz')
             dtype = options.pop('dtype', None)
 
-            tree_npairs_max = options.pop('tree_npairs_max', None)
-            if tree_npairs_max is not None:
-                direct_power._tree_npairs_max = tree_npairs_max
+            slab_npairs_max = options.pop('slab_npairs_max', None)
+            if slab_npairs_max is not None:
+                KDTreeDirectPowerEngine._slab_npairs_max = slab_npairs_max
             else:
-                direct_power._tree_npairs_max = _tree_npairs_max
+                KDTreeDirectPowerEngine._slab_npairs_max = _slab_npairs_max
 
             refoptions = options.copy()
             weight_attrs = refoptions.pop('weight_attrs', {}).copy()

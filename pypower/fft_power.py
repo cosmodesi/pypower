@@ -11,7 +11,7 @@ https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/convpower/fkp.p
 import time
 
 import numpy as np
-from scipy.interpolate import RectBivariateSpline
+from scipy.interpolate import UnivariateSpline, RectBivariateSpline
 from pmesh.pm import RealField, ComplexField
 
 from .utils import BaseClass
@@ -123,9 +123,9 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
     r"""
     Project a 3D statistic on to the specified basis. The basis will be one of:
 
-    - 2D :math:`(x, \mu)` bins: :math:`\mu` is the cosine of the angle to the line-of-sight
-    - 2D :math:`(x, \ell)` bins: :math:`\ell` is the multipole number, which specifies
-      the Legendre polynomial when weighting different :math:`\mu` bins.
+        - 2D :math:`(x, \mu)` bins: :math:`\mu` is the cosine of the angle to the line-of-sight
+        - 2D :math:`(x, \ell)` bins: :math:`\ell` is the multipole number, which specifies
+          the Legendre polynomial when weighting different :math:`\mu` bins.
 
     Adapted from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py.
 
@@ -135,6 +135,12 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
     due to incorrect binning of :math:`x` and :math:`\mu` modes.
     Here we cast mesh coordinates to the maximum precision of input ``edges``,
     which makes computation much more accurate in single precision.
+
+    Notes
+    -----
+    We deliberately set to 0 the number of modes beyond Nyquist, as it is unclear whether to count Nyquist as :math:`\mu` or :math:`-\mu`
+    (it should probably be half weight for both).
+    Our safe choice ensures consistent results between hermitian compressed and their associated uncompressed fields.
 
     Notes
     -----
@@ -157,7 +163,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
         The 3D array holding the statistic to be projected to the specified basis.
 
     edges : list of arrays, (2,)
-        List of arrays specifying the edges of the desired :math:`x` bins and :math:`\mu` bins.
+        List of arrays specifying the edges of the desired :math:`x` bins and :math:`\mu` bins; assumed sorted.
 
     los : array_like, default=(0, 0, 1)
         The line-of-sight direction to use, which :math:`\mu` is defined with respect to.
@@ -170,25 +176,25 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
     result : tuple
         The 2D binned results; a tuple of ``(xmean2d, mumean2d, y2d, n2d)``, where:
 
-        - xmean2d : array_like, (nx, nmu)
-            The mean :math:`x` value in each 2D bin
-        - mumean2d : array_like, (nx, nmu)
-            The mean :math:`\mu` value in each 2D bin
-        - y2d : array_like, (nx, nmu)
-            The mean `y3d` value in each 2D bin
-        - n2d : array_like, (nx, nmu)
-            The number of values averaged in each 2D bin
+            - xmean2d : array_like, (nx, nmu)
+                The mean :math:`x` value in each 2D bin
+            - mumean2d : array_like, (nx, nmu)
+                The mean :math:`\mu` value in each 2D bin
+            - y2d : array_like, (nx, nmu)
+                The mean `y3d` value in each 2D bin
+            - n2d : array_like, (nx, nmu)
+                The number of values averaged in each 2D bin
 
     result_poles : tuple or `None`
         The multipole results; if `ells` supplied it is a tuple of ``(xmean1d, poles, n1d)``,
         where:
 
-        - xmean1d : array_like, (nx,)
-            The mean :math:`x` value in each 1D multipole bin
-        - poles : array_like, (nell, nx)
-            The mean multipoles value in each 1D bin
-        - n1d : array_like, (nx,)
-            The number of values averaged in each 1D bin
+            - xmean1d : array_like, (nx,)
+                The mean :math:`x` value in each 1D multipole bin
+            - poles : array_like, (nell, nx)
+                The mean multipoles value in each 1D bin
+            - n1d : array_like, (nx,)
+                The number of values averaged in each 1D bin
     """
     comm = y3d.pm.comm
     x3d = y3d.x
@@ -197,13 +203,12 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
 
     from scipy.special import legendre
 
-    # setup the bin edges and number of bins
+    # Setup the bin edges and number of bins
     xedges, muedges = edges
     nx = len(xedges) - 1
     nmu = len(muedges) - 1
     xdtype = max(xedges.dtype, muedges.dtype)
-    # always make sure first ell value is monopole, which
-    # is just (x, mu) projection since legendre of ell=0 is 1
+    # Always make sure first ell value is monopole, which is just (x, mu) projection since legendre of ell = 0 is 1
     ells = ells or []
     do_poles = len(ells) > 0
     unique_ells = sorted(set([0]) | set(ells))
@@ -214,28 +219,28 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
     if any(ell < 0 for ell in unique_ells):
         raise ValueError('Multipole numbers must be non-negative integers')
 
-    # initialize the binning arrays
+    # Initialize the binning arrays
     musum = np.zeros((nx+2, nmu+2))
     xsum = np.zeros((nx+2, nmu+2))
     ysum = np.zeros((nell, nx+2, nmu+2), dtype=y3d.dtype) # extra dimension for multipoles
     nsum = np.zeros((nx+2, nmu+2), dtype='i8')
 
-    # if input array is Hermitian symmetric, only half of the last  axis is stored in `y3d`
+    # If input array is Hermitian symmetric, only half of the last  axis is stored in `y3d`
 
-    # iterate over y-z planes of the coordinate mesh
+    # Iterate over y-z planes of the coordinate mesh
     for islab in range(x3d[0].shape[0]):
-        # the square of coordinate mesh norm
+        # The square of coordinate mesh norm
         # (either Fourier space k or configuraton space x)
         xvec = (x3d[0][islab].real.astype(xdtype),) + tuple(x3d[i].real.astype(xdtype) for i in range(1,3))
         xnorm = sum(xx**2 for xx in xvec)**0.5
 
-        # if empty, do nothing
+        # If empty, do nothing
         if len(xnorm.flat) == 0: continue
 
-        # get the bin indices for x on the slab
+        # Get the bin indices for x on the slab
         dig_x = np.digitize(xnorm.flat, xedges, right=False)
 
-        # get the bin indices for mu on the slab
+        # Get the bin indices for mu on the slab
         mu = sum(xx*ll for xx, ll in zip(xvec, los))
         nonzero = xnorm != 0.
         mu[nonzero] /= xnorm[nonzero]
@@ -244,18 +249,13 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
             mus = [mu]
         else:
             nonsingular = np.ones(xnorm.shape, dtype='?')
-            # get the indices that have positive freq along symmetry axis = -1
+            # Get the indices that have positive freq along symmetry axis = -1
             nonsingular[...] = x3d[-1][0] > 0.
-            #mmu = - sum(xx*ll for xx, ll in zip(xvec[:-1], los[:-1])) - xvec[-1] * los[-1]
-            #mmu[nonzero] /= xnorm[nonzero]
-            #print(xvec[0].shape, xvec[1].shape, xvec[2].shape)
-            #mmu = sum(-xx*ll for xx, ll in zip(xvec, los))
-            #mmu[nonzero] /= xnorm[nonzero]
             mus = [mu, -mu]
 
-        # accounting for negative frequencies
+        # Accounting for negative frequencies
         for imu, mu in enumerate(mus):
-            # make the multi-index
+            # Make the multi-index
             dig_mu = np.digitize(mu.flat, muedges, right=False) # this is bins[i-1] <= x < bins[i]
             dig_mu[mu.real.flat == muedges[-1]] = nmu # last mu inclusive
 
@@ -266,43 +266,48 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
                 xnorm = xnorm[nonsingular] # it will be recomputed
                 mu = mu[nonsingular]
 
-            # count number of modes in each bin
+            # Count number of modes in each bin
             nsum.flat += np.bincount(multi_index, minlength=nsum.size)
-            # sum up x in each bin
+            # Sum up x in each bin
             xsum.flat += np.bincount(multi_index, weights=xnorm.flat, minlength=nsum.size)
-            # sum up mu in each bin
+            # Sum up mu in each bin
             musum.flat += np.bincount(multi_index, weights=mu.flat, minlength=nsum.size)
 
-            # compute multipoles by weighting by Legendre(ell, mu)
+            # Compute multipoles by weighting by Legendre(ell, mu)
             for ill, ell in enumerate(unique_ells):
 
                 weightedy3d = (2.*ell + 1.) * legpoly[ill](mu)
 
                 if hermitian_symmetric and imu:
-                    # weight the input 3D array by the appropriate Legendre polynomial
+                    # Weight the input 3D array by the appropriate Legendre polynomial
                     weightedy3d = hermitian_symmetric * weightedy3d * y3d[islab][nonsingular[0]].conj() # hermitian_symmetric is 1 or -1
                 else:
                     weightedy3d = weightedy3d * y3d[islab, ...]
 
-                # sum up the weighted y in each bin
+                # Sum up the weighted y in each bin
                 ysum[ill,...].real.flat += np.bincount(multi_index, weights=weightedy3d.real.flat, minlength=nsum.size)
                 if np.iscomplexobj(ysum):
                     ysum[ill,...].imag.flat += np.bincount(multi_index, weights=weightedy3d.imag.flat, minlength=nsum.size)
 
-    # sum binning arrays across all ranks
+    # Sum binning arrays across all ranks
     xsum = comm.allreduce(xsum)
     musum = comm.allreduce(musum)
     ysum = comm.allreduce(ysum)
     nsum = comm.allreduce(nsum)
 
-    # add the last 'internal' mu bin (mu == 1) to the last visible mu bin
-    # this makes the last visible mu bin inclusive on both ends.
-    #ysum[..., -2] += ysum[..., -1]
-    #musum[:, -2] += musum[:, -1]
-    #xsum[:, -2] += xsum[:, -1]
-    #nsum[:, -2] += nsum[:, -1]
+    # It is not clear how to proceed with beyond Nyquist frequencies
+    # At Nyquist, kN = - pi * N / L (appears once in y3d.x) is the same as pi * N / L, so corresponds to mu and -mu
+    # Our treatment of hermitian symmetric field would sum this frequency twice (mu and -mu)
+    # But this would appear only once in uncompressed field
+    # As a default, set frequencies beyond to NaN
+    xmax = y3d.Nmesh * (y3d.BoxSize/2/y3d.Nmesh if isinstance(y3d, RealField) else np.pi/y3d.BoxSize)
+    mask_beyond_nyq = np.flatnonzero(xedges >= np.min(xmax))
+    xsum[mask_beyond_nyq] = np.nan
+    musum[mask_beyond_nyq] = np.nan
+    ysum[:,mask_beyond_nyq] = np.nan
+    nsum[mask_beyond_nyq] = 0
 
-    # reshape and slice to remove out of bounds points
+    # Reshape and slice to remove out of bounds points
     sl = slice(1, -1)
     with np.errstate(invalid='ignore', divide='ignore'):
 
@@ -319,7 +324,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
             poles = ysum[:, sl, sl].sum(axis=-1) / n1d
             poles = poles[[unique_ells.index(ell) for ell in ells],...]
 
-    # return y(x,mu) + (possibly empty) multipoles
+    # Return y(x,mu) + (possibly empty) multipoles
     result = (xmean2d, mumean2d, y2d, n2d)
     result_poles = (xmean1d, poles, n1d) if do_poles else None
     return result, result_poles
@@ -574,10 +579,14 @@ class PowerSpectrumWedge(BasePowerSpectrumStatistic):
         ----------
         k : float, array, default=None
             :math:`k` where to interpolate the power spectrum.
+            Values outside :attr:`kavg` are set to the first/last power value;
+            outside :attr:`edges[0]` to nan.
             Defaults to :attr:`kavg`.
 
         mu : float, array, default=None
             :math:`\mu` where to interpolate the power spectrum.
+            Values outside :attr:`muavg` are set to the first/last power value;
+            outside :attr:`edges[1]` to nan.
             Defaults to :attr:`muavg`.
 
         complex : bool, default=True
@@ -590,23 +599,28 @@ class PowerSpectrumWedge(BasePowerSpectrumStatistic):
             (Optionally interpolated) power spectrum.
         """
         tmp = self.power
-        if not complex: tmp = tmp.real
+        if not complex and np.iscomplexobj(tmp): tmp = tmp.real
         if k is None and mu is None:
             return tmp
         kavg, muavg = self.kavg, self.muavg
         if k is None: k = kavg
         if mu is None: mu = muavg
+        mask_finite_k, mask_finite_mu = ~np.isnan(kavg), ~np.isnan(muavg)
+        kavg, muavg, tmp = kavg[mask_finite_k], muavg[mask_finite_mu], tmp[np.ix_(mask_finite_k, mask_finite_mu)]
         k, mu = np.asarray(k), np.asarray(mu)
         isscalar = k.ndim == 0 or mu.ndim == 0
         k, mu = np.atleast_1d(k), np.atleast_1d(mu)
         toret = np.nan * np.zeros((k.size, mu.size), dtype=tmp.dtype)
-        if muavg.size == 1:
-            toret[:,mu == muavg] = np.interp(k, kavg, tmp.ravel(), left=np.nan, right=np.nan)[:,None]
-        else:
-            mask = ((k >= kavg[0]) & (k <= kavg[-1]))[:,None] & ((mu >= muavg[0]) & (mu <= muavg[-1]))
-            toret[mask] = RectBivariateSpline(kavg, muavg, tmp.real, kx=1, ky=1, s=0)(k, mu, grid=True)[mask]
-            if complex:
-                toret[mask] += 1j * RectBivariateSpline(kavg, muavg, tmp.imag, kx=1, ky=1, s=0)(k, mu, grid=True)[mask]
+        mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
+        mask_mu = (mu >= self.edges[1][0]) & (mu <= self.edges[1][-1])
+        if mask_k.any() and mask_mu.any():
+            if muavg.size == 1:
+                interp = lambda array: UnivariateSpline(kavg, array, k=1, ext=3)(k[mask_k])[:, None]
+            else:
+                interp = lambda array: RectBivariateSpline(kavg, muavg, array, kx=1, ky=1, s=0)(k[mask_k], mu[mask_mu], grid=True)
+            toret[np.ix_(mask_k, mask_mu)] = interp(tmp.real)
+            if complex and np.iscomplexobj(tmp):
+                toret[np.ix_(mask_k, mask_mu)] += 1j * interp(tmp.imag)
         if isscalar:
             return toret.ravel()
         return toret
@@ -659,17 +673,19 @@ class PowerSpectrumMultipole(BasePowerSpectrumStatistic):
             power[self.ells.index(0)] -= self.shotnoise
         return power
 
-    def __call__(self, ell, k=None, complex=True):
+    def __call__(self, ell=None,  k=None, complex=True):
         r"""
         Return :attr:`power`, optionally performing linear interpolation over :math:`k`.
 
         Parameters
         ----------
-        ell : int
-            Multipole order.
+        ell : int, default=None
+            Multipole order. Defaults to all multipoles.
 
         k : float, array, default=None
             :math:`k` where to interpolate the power spectrum.
+            Values outside :attr:`kavg` are set to the first/last power value;
+            outside :attr:`edges[0]` to nan.
             Defaults to :attr:`kavg` (no interpolation performed).
 
         complex : bool, default=True
@@ -681,11 +697,23 @@ class PowerSpectrumMultipole(BasePowerSpectrumStatistic):
         toret : array
             (Optionally interpolated) power spectrum.
         """
+        if ell is None:
+            return np.array([self(ell=ell, k=k, complex=complex) for ell in self.ells])
         tmp = self.power[self.ells.index(ell)]
-        if not complex: tmp = tmp.real if ell % 2 == 0 else tmp.imag
+        if not complex and np.iscomplexobj(tmp): tmp = tmp.real if ell % 2 == 0 else tmp.imag
         if k is None:
             return tmp
-        return np.interp(k, self.k, tmp, left=np.nan, right=np.nan)
+        kavg = self.k
+        mask_finite_k = ~np.isnan(kavg)
+        kavg, tmp = kavg[mask_finite_k], tmp[mask_finite_k]
+        k = np.asarray(k)
+        toret = np.nan * np.zeros(k.shape, dtype=tmp.dtype)
+        mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
+        if mask_k.any():
+            interp = lambda array: UnivariateSpline(kavg, array, k=1, ext=3)(k[mask_k])
+            toret[mask_k] = interp(tmp.real)
+            if complex and np.iscomplexobj(tmp): toret[mask_k] = toret[mask_k] + 1j * interp(tmp.imag)
+        return toret
 
 
 def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.COMM_WORLD):
@@ -863,7 +891,7 @@ class MeshFFTPower(BaseClass):
             If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
             Else, one can also provide :math:`\mu`-edges (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
-            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :amth:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
+            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
             'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
             For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``bins[i] <= x < bins[i+1]``.
             However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
@@ -994,6 +1022,8 @@ class MeshFFTPower(BaseClass):
         if self.mesh2.pm.comm is not self.mesh1.pm.comm:
             raise ValueError('Communicator mismatch between input meshes')
         self.pm = self.mesh1.pm
+        if np.any(self.nmesh % 2):
+            raise NotImplementedError('For odd sizes pmesh k-coordinates are not wrapped in [-knyq, knyq]; please use even sizes for now')
 
     def _set_edges(self, edges):
         # Set :attr:`edges`
@@ -1007,7 +1037,7 @@ class MeshFFTPower(BaseClass):
             kedges = {}
         if isinstance(kedges, dict):
             kmin = kedges.get('min', 0.)
-            kmax = kedges.get('max', np.pi/(self.boxsize/self.nmesh).min())
+            kmax = kedges.get('max', np.pi/(self.boxsize/self.nmesh).max())
             dk = kedges.get('step', None)
             if dk is None:
                 # find unique edges
@@ -1388,7 +1418,7 @@ class CatalogFFTPower(MeshFFTPower):
             If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
             Else, one can also provide :math:`\mu`-edges (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
-            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :amth:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
+            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
             'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
             For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``bins[i] <= x < bins[i+1]``.
             However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
@@ -1451,6 +1481,7 @@ class CatalogFFTPower(MeshFFTPower):
                 - "auto": automatically choose weighting based on input ``weights1`` and ``weights2``,
                    i.e. ``None`` when ``weights1`` and ``weights2`` are ``None``,
                    "inverse_bitwise" if one of input weights is integer, else "product_individual".
+
             In addition, angular upweights can be provided with ``D1D2_twopoint_weights``, ``D1R2_twopoint_weights``, etc.
 
         weight_attrs : dict, default=None
@@ -1503,10 +1534,10 @@ class CatalogFFTPower(MeshFFTPower):
 
         shotnoise : float, default=None
             Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise by power spectrum normalization.
+            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise` by power spectrum normalization.
 
         mpiroot : int, default=None
-            If ``None``, input positions and weights are assumed to be scatted across all ranks.
+            If ``None``, input positions and weights are assumed to be scattered across all ranks.
             Else the MPI rank where input positions and weights are gathered.
 
         mpicomm : MPI communicator, default=MPI.COMM_WORLD

@@ -1,3 +1,5 @@
+"""Implementation of methods to paint a catalog on mesh; workhorse is :class:`CatalogMesh`."""
+
 import numpy as np
 from mpi4py import MPI
 

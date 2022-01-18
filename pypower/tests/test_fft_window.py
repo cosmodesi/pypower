@@ -170,7 +170,8 @@ def test_fft_window():
         assert len(window.poles.xout[0]) == (len(kedges) - 1)//2
 
         if window.los_type == 'global':
-            window = MeshFFTWindow(edgesin=edgesin, power_ref=power, periodic=True, dtype=dtype)
+            window = MeshFFTWindow(edgesin=(0.03, 0.04), power_ref=power, periodic=True, dtype=dtype)
+            assert not np.allclose(window.poles.value, 0.)
 
 
 if __name__ == '__main__':

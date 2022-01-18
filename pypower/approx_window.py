@@ -89,10 +89,12 @@ class PowerSpectrumWindowMultipole(BasePowerSpectrumStatistic):
         ----------
         proj : tuple, Projection
             Projection, i.e. (multipole, wide-angle order) tuple.
+            Defaults to all projections.
 
         k : float, array, default=None
             :math:`k` where to interpolate the window function.
             Defaults to :attr:`kavg` (no interpolation performed).
+            Values outside :attr:`k` are set to the first/last window value.
 
         complex : bool, default=True
             Whether (``True``) to return the complex power spectrum,
@@ -107,6 +109,8 @@ class PowerSpectrumWindowMultipole(BasePowerSpectrumStatistic):
         toret : array
             (Optionally interpolated) window function.
         """
+        if proj is None:
+            return np.array([self(proj=proj, k=k, complex=complex, default_zero=default_zero) for proj in self.projs])
         if k is None: k = self.k
         proj = Projection(proj)
         if proj not in self.projs:
@@ -115,7 +119,8 @@ class PowerSpectrumWindowMultipole(BasePowerSpectrumStatistic):
                 return np.zeros_like(k)
             raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
         tmp = self.power[self.projs.index(proj)]
-        if not complex: tmp = tmp.real if proj.ell % 2 == 0 else tmp.imag
+        complex = complex
+        if not complex and np.iscomplexobj(tmp): tmp = tmp.real if proj.ell % 2 == 0 else tmp.imag
         return np.interp(k, self.k, tmp)
 
     @classmethod
@@ -256,17 +261,19 @@ class CorrelationFunctionWindowMultipole(BaseClass):
         self.projs = [Projection(proj) for proj in projs]
         self.corr = np.asarray(corr)
 
-    def __call__(self, proj, sep=None, default_zero=False):
+    def __call__(self, proj=None, sep=None, default_zero=False):
         r"""
         Return :attr:`corr`, optionally performing linear interpolation over :math:`s`.
 
         Parameters
         ----------
-        proj : tuple, Projection
+        proj : tuple, Projection, default=None
             Projection, i.e. (multipole, wide-angle order) tuple.
+            Defaults to all projections.
 
         sep : float, array, default=None
             :math:`s` where to interpolate the window function.
+            Values outside :attr:`sep` are set to the first/last window value.
             Defaults to :attr:`sep` (no interpolation performed).
 
         default_zero : bool, default=False
@@ -278,6 +285,8 @@ class CorrelationFunctionWindowMultipole(BaseClass):
         toret : array
             (Optionally interpolated) window function.
         """
+        if proj is None:
+            return np.array([self(proj=proj, sep=sep, default_zero=default_zero) for proj in self.projs])
         if sep is None:
             sep = self.sep
         if proj not in self.projs:
@@ -372,7 +381,7 @@ class CatalogFFTWindowMultipole(MeshFFTPower):
             If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
             Else, one can also provide :math:`\mu-edges` (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
-            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :amth:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
+            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
             'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
 
         projs : list, default=None
@@ -463,7 +472,7 @@ class CatalogFFTWindowMultipole(MeshFFTPower):
 
         shotnoise : float, default=None
             Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise by power spectrum normalization.
+            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise` by power spectrum normalization.
 
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scatted across all ranks.
@@ -719,7 +728,7 @@ class PowerSpectrumWindowMultipoleMatrix(BaseMatrix):
 
     """Class computing matrix for window convolution in Fourier space."""
 
-    _slab_npoints_max = 100 * 1000
+    _slab_npoints_max = 10 * 1000
 
     def __init__(self, kout, projsin, projsout=None, k=None, kin_rebin=1, kin_lim=(1e-4, 1.), sep=None, window=None, xy=1, q=0, sum_wa=True, default_zero=False, attrs=None):
         """

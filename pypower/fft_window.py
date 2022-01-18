@@ -245,7 +245,7 @@ class MeshFFTWindow(MeshFFTPower):
             If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
             Else, one can also provide :math:`\mu`-edges (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
-            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :amth:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
+            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
             'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
             For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``bins[i] <= x < bins[i+1]``.
             However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
@@ -532,13 +532,11 @@ class MeshFFTWindow(MeshFFTPower):
         # Format the power results into :class:`PowerSpectrumWedge` instance
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
         k, mu, power, nmodes = (np.squeeze(result[ii]) for ii in [0,1,2,3])
-        power = self.nmesh.prod()**2 * power.conj()
         self.wedges = PowerSpectrumWedge(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PolePowerSpectrum` instance
             k, power, nmodes = (np.squeeze(result_poles[ii]) for ii in [0,1,2])
-            power = self.nmesh.prod()**2 * power.conj()
             self.poles = PowerSpectrumMultipole(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def run(self):
@@ -705,7 +703,7 @@ class CatalogFFTWindow(MeshFFTWindow):
             If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
             Else, one can also provide :math:`\mu`-edges (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
-            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :amth:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
+            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
             'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
             For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``bins[i] <= x < bins[i+1]``.
             However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
@@ -794,7 +792,7 @@ class CatalogFFTWindow(MeshFFTWindow):
 
         shotnoise : float, default=None
             Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise by power spectrum normalization.
+            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise` by power spectrum normalization.
 
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scatted across all ranks.

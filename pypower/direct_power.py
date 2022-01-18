@@ -1,5 +1,5 @@
 r"""
-Implementation of direct estimation of result spectrum multipoles, i.e. summing over particle pairs.
+Implementation of direct estimation of power spectrum multipoles, i.e. summing over particle pairs.
 This should be mostly used to sum over pairs at small separations, otherwise the calculation will be prohibitive.
 """
 
