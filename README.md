@@ -18,6 +18,10 @@ result = CatalogFFTPower(data_positions1=data_positions1, data_weights1=data_wei
 
 Example notebooks presenting most use cases are provided in directory nb/.
 
+## Documentation
+
+Documentation is hosted on Read the Docs, [pypower docs](https://pypower.readthedocs.io/).
+
 # Requirements
 
 Only strict requirements are:

@@ -181,12 +181,12 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
             - mumean2d : array_like, (nx, nmu)
                 The mean :math:`\mu` value in each 2D bin
             - y2d : array_like, (nx, nmu)
-                The mean `y3d` value in each 2D bin
+                The mean ``y3d`` value in each 2D bin
             - n2d : array_like, (nx, nmu)
                 The number of values averaged in each 2D bin
 
-    result_poles : tuple or `None`
-        The multipole results; if `ells` supplied it is a tuple of ``(xmean1d, poles, n1d)``,
+    result_poles : tuple or None
+        The multipole results; if ``ells`` supplied it is a tuple of ``(xmean1d, poles, n1d)``,
         where:
 
             - xmean1d : array_like, (nx,)
