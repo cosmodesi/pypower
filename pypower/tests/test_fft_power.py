@@ -379,6 +379,8 @@ def test_catalog_power():
     for ell in ells:
         assert np.allclose(power_cross.poles(ell=ell) - (ell == 0)*f_power.shotnoise, f_power.poles(ell=ell))
 
+    boxsize = 600.
+
     def get_mesh_no_randoms_power(data):
         mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos')
         return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)

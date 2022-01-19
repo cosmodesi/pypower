@@ -573,7 +573,7 @@ class PowerSpectrumWedge(BasePowerSpectrumStatistic):
 
     def __call__(self, k=None, mu=None, complex=True):
         r"""
-        Return :attr:`power`, optionally performing linear interpolation over :math:`k` and :math:`\mu`.
+        Return :attr:`power` (shot noise removed), optionally performing linear interpolation over :math:`k` and :math:`\mu`.
 
         Parameters
         ----------
@@ -675,7 +675,7 @@ class PowerSpectrumMultipole(BasePowerSpectrumStatistic):
 
     def __call__(self, ell=None,  k=None, complex=True):
         r"""
-        Return :attr:`power`, optionally performing linear interpolation over :math:`k`.
+        Return :attr:`power` (shot noise removed), optionally performing linear interpolation over :math:`k`.
 
         Parameters
         ----------
