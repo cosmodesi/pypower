@@ -3,7 +3,6 @@ import tempfile
 
 import numpy as np
 from matplotlib import pyplot as plt
-from mpi4py import MPI
 
 from cosmoprimo.fiducial import DESI
 from mockfactory import LagrangianLinearMock, Catalog
@@ -65,8 +64,10 @@ def test_power_statistic():
         ells = (0, 2, 4)
         power = [np.ones_like(modes, dtype='c16')]*len(ells)
         power = PowerSpectrumStatistic(edges, modes, power, nmodes, ells, statistic='multipole')
+        power_ref = power.copy()
         power.rebin(factor=2)
-        assert np.allclose(power.k, (modes[::2] + modes[1::2])/2.)
+        assert power.power.shape[1] == power_ref.power.shape[1]//2 # poles are first dimension
+        assert np.allclose(power.k, (power_ref.modes[0][::2] + power_ref.modes[0][1::2])/2.)
         assert np.allclose(power.kedges, np.linspace(0., 0.2, 6))
         assert power.shape == (modes.size//2,)
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -88,7 +89,9 @@ def test_power_statistic():
         nmodes = np.ones(tuple(len(e)-1 for e in edges), dtype='i8')
         power = np.ones_like(nmodes, dtype='c16')
         power = PowerSpectrumStatistic(edges, modes, power, nmodes, statistic='wedge')
+        power_ref = power.copy()
         power.rebin(factor=(2, 2))
+        assert power.power.shape[0] == power_ref.power.shape[0]//2
         assert power.modes[0].shape == (5, 10)
         assert not np.isnan(power(0.,0.))
         assert np.isnan(power(-1., 0.))
@@ -235,6 +238,7 @@ def test_mesh_power():
                 fn = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
                 power.save(fn)
                 power = MeshFFTPower.load(fn)
+                power.save(fn)
 
             check_wedges(power.wedges, ref_power.power)
 
@@ -315,14 +319,14 @@ def test_catalog_power():
         mesh = fkp.to_mesh(position='Position', comp_weight='Weight', nbar='NZ', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
         return ConvolvedFFTPower(mesh, poles=ells, dk=dk, kmin=kedges[0], kmax=kedges[-1]+1e-9)
 
-    def get_catalog_power(data, randoms, position_type='pos', edges=kedges, dtype=dtype):
+    def get_catalog_power(data, randoms, position_type='pos', edges=kedges, dtype=dtype, **kwargs):
         data_positions, randoms_positions = data['Position'], randoms['Position']
         if position_type == 'xyz':
             data_positions, randoms_positions = data['Position'].T, randoms['Position'].T
         elif position_type == 'rdd':
             data_positions, randoms_positions = utils.cartesian_to_sky(data['Position'].T), utils.cartesian_to_sky(randoms['Position'].T)
         return CatalogFFTPower(data_positions1=data_positions, data_weights1=data['Weight'], randoms_positions1=randoms_positions, randoms_weights1=randoms['Weight'],
-                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=edges, position_type=position_type, dtype=dtype)
+                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=edges, position_type=position_type, dtype=dtype, **kwargs)
 
     def get_catalog_mesh_power(data, randoms, dtype=dtype):
         mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
@@ -379,14 +383,19 @@ def test_catalog_power():
     for ell in ells:
         assert np.allclose(power_cross.poles(ell=ell) - (ell == 0)*f_power.shotnoise, f_power.poles(ell=ell))
 
+    data['Position'][0] += boxsize
+    power_wrap = get_catalog_power(data, randoms, position_type='pos', edges=kedges, wrap=True, boxcenter=f_power.attrs['boxcenter'], dtype=dtype)
+    for ell in ells:
+        assert np.allclose(power_wrap.poles(ell=ell), f_power.poles(ell=ell))
+
     boxsize = 600.
 
     def get_mesh_no_randoms_power(data):
-        mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos')
+        mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, wrap=True, resampler=resampler, interlacing=interlacing, position_type='pos')
         return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)
 
     def get_catalog_no_randoms_power(data):
-        return CatalogFFTPower(data_positions1=data['Position'], ells=ells, los=los, edges=kedges, boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos')
+        return CatalogFFTPower(data_positions1=data['Position'], ells=ells, los=los, edges=kedges, boxsize=boxsize, nmesh=nmesh, wrap=True, resampler=resampler, interlacing=interlacing, position_type='pos')
 
     ref_power = get_mesh_no_randoms_power(data)
     power = get_catalog_no_randoms_power(data)
@@ -406,8 +415,8 @@ def test_mpi():
     dtype = 'f8'
     cdtype = 'c16'
     los = None
-    data = Catalog.load_fits(data_fn)
-    randoms = Catalog.load_fits(randoms_fn)
+    data = Catalog.load_fits(data_fn, mpicomm=mpi.COMM_WORLD)
+    randoms = Catalog.load_fits(randoms_fn, mpicomm=mpi.COMM_WORLD)
     for catalog in [data, randoms]:
         catalog['Position'] += boxcenter
         catalog['Weight'] = catalog.ones()
@@ -417,19 +426,19 @@ def test_mpi():
                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos',
                                dtype=dtype, mpiroot=mpiroot, mpicomm=mpicomm).poles
 
-    ref_power = run(mpiroot=None, mpicomm=data.mpicomm)
+    ref_power = run(mpiroot=None)
     for catalog in [data, randoms]:
         catalog['Position'] = mpi.gather_array(catalog['Position'], root=0, mpicomm=catalog.mpicomm)
         catalog['Weight'] = mpi.gather_array(catalog['Weight'], root=0, mpicomm=catalog.mpicomm)
 
-    power = run(mpiroot=0, mpicomm=data.mpicomm)
-    for ell in power.ells:
-        assert np.allclose(power(ell=ell), ref_power(ell=ell))
+    power_root = run(mpiroot=0)
+    for ell in ref_power.ells:
+        assert np.allclose(power_root(ell=ell), ref_power(ell=ell))
 
     if data.mpicomm.rank == 0:
-        power = run(mpiroot=0, mpicomm=MPI.COMM_SELF)
-        for ell in power.ells:
-            assert np.allclose(power(ell=ell), ref_power(ell=ell))
+        power_root = run(mpiroot=0, mpicomm=mpi.COMM_SELF)
+        for ell in ref_power.ells:
+            assert np.allclose(power_root(ell=ell), ref_power(ell=ell))
 
 
 def test_interlacing():

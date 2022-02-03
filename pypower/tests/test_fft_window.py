@@ -12,7 +12,6 @@ from pypower.fft_window import get_correlation_function_tophat_derivative
 from test_fft_power import data_fn, randoms_fn
 
 
-import time
 
 class MemoryMonitor(object):
     """
@@ -123,18 +122,22 @@ def test_fft_window():
     dtype = 'f8'
     cdtype = 'c16'
     boxcenter = np.array([1e6,0.,0.])[None,:]
-    data = Catalog.load_fits(data_fn)
-    randoms = Catalog.load_fits(randoms_fn)
-
-    for catalog in [data, randoms]:
-        catalog['Position'] += boxcenter
-        catalog['Weight'] = catalog.ones()
-
 
     for los in ['x', 'firstpoint', 'endpoint']:
 
+        data = Catalog.load_fits(data_fn)
+        randoms = Catalog.load_fits(randoms_fn)
+
+        for catalog in [data, randoms]:
+            catalog['Position'] += boxcenter
+            catalog['Weight'] = catalog.ones()
+
+        edges = kedges
+        if los in ['x']:
+            edges = (kedges, np.linspace(-1., 1., 4))
+
         power = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
-                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype=dtype)
+                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=edges, position_type='pos', dtype=dtype)
 
         edgesin = np.linspace(0.1, 0.11, 3)
         window = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, power_ref=power, position_type='pos', dtype=dtype)
@@ -143,11 +146,17 @@ def test_fft_window():
             fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             window.save(fn)
             window = CatalogFFTWindow.load(fn)
+            window.save(fn)
+
+        power_f4 = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
+                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype='f4').poles
+        window_f4 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, power_ref=power_f4, position_type='pos')
+        assert window_f4.dtype.itemsize == 4
 
         windowc = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, power_ref=power, position_type='pos', dtype=cdtype)
         #print(windowc.poles.value/window.poles.value)
         assert np.allclose(windowc.poles.value, window.poles.value, rtol=0.5)
-        if window.los_type == 'global':
+        if window.attrs['los_type'] == 'global':
             #print(windowc.wedges.value/window.wedges.value)
             assert np.allclose(windowc.wedges.value, window.wedges.value, rtol=0.5)
 
@@ -156,20 +165,38 @@ def test_fft_window():
         windowc = window1.concatenate_x(window1, window2)
         assert np.allclose(windowc.poles.value, window.poles.value[:,:len(window.poles.xout[0])])
 
-        window1 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, projsin=window.poles.projsin[:1], power_ref=power.poles, position_type='pos', dtype=dtype)
-        window2 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, projsin=window.poles.projsin[1:], power_ref=power.poles, position_type='pos', dtype=dtype)
+        randoms['Position'][0] += boxsize
+        window1 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, projsin=window.poles.projsin[:1], power_ref=power.poles, wrap=True, position_type='pos', dtype=dtype)
+        window2 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, projsin=window.poles.projsin[1:], power_ref=power.poles, wrap=True, position_type='pos', dtype=dtype)
         windowc = window1.concatenate_proj(window1, window2)
         assert np.allclose(windowc.poles.value, window.poles.value)
 
+        randoms['Position'][0] -= boxsize
+        projsin = [(ell, 0) for ell in ells]
+        if los in ['firstpoint', 'endpoint']: projsin += [(ell, 1) for ell in range(1, max(ells), 2)]
+        alpha = data.sum('Weight')/randoms.sum('Weight')
+        window_noref = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, projsin=projsin, edges=edges, ells=ells, los=los,
+                                        boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=power.wnorm/alpha**2, dtype=dtype)
+        assert np.allclose(window_noref.poles.value, window.poles.value)
+
+        randoms['Position'] = mpi.gather_array(randoms['Position'], root=0, mpicomm=catalog.mpicomm)
+        randoms['Weight'] = mpi.gather_array(randoms['Weight'], root=0, mpicomm=catalog.mpicomm)
+        window_root = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, power_ref=power, position_type='pos', dtype=dtype, mpiroot=0)
+        assert np.allclose(window_root.poles.value, window.poles.value)
+
+        if randoms.mpicomm.rank == 0:
+            window_root = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, power_ref=power, position_type='pos', dtype=dtype, mpicomm=mpi.COMM_SELF)
+            assert np.allclose(window_root.poles.value, window.poles.value)
+
         window.poles.resum_input_odd_wide_angle()
-        if window.los_type == 'global':
+        if window.attrs['los_type'] == 'global':
             window.wedges.resum_input_odd_wide_angle()
             #window_global_poles = window.poles
 
         window.poles.rebin_x(factorout=2)
         assert len(window.poles.xout[0]) == (len(kedges) - 1)//2
 
-        if window.los_type == 'global':
+        if window.attrs['los_type'] == 'global':
             window = MeshFFTWindow(edgesin=(0.03, 0.04), power_ref=power, periodic=True, dtype=dtype)
             assert not np.allclose(window.poles.value, 0.)
 

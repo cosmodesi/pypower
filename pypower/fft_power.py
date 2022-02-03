@@ -16,8 +16,16 @@ from pmesh.pm import RealField, ComplexField
 
 from .utils import BaseClass
 from . import mpi, utils
-from .mesh import _get_real_dtype, _get_compensation_window, _get_box, CatalogMesh
+from .mesh import CatalogMesh, _get_real_dtype, _get_compensation_window, _get_box, _wrap_in_place
 from .direct_power import _make_array, _format_positions, _format_weights, get_default_nrealizations, get_inverse_probability_weight, get_direct_power_engine
+
+
+def _nan_to_zero(array):
+    # Replace nans with 0s
+    array = array.copy()
+    mask = np.isnan(array)
+    array[mask] = 0.
+    return array
 
 
 def get_real_Ylm(ell, m):
@@ -147,8 +155,8 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
     The 2D :math:`(x, \ell)` bins will be computed only if ``ells`` is specified.
     See return types for further details.
     For both :math:`x` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end,
-    i.e. mode `mode` falls in bin `i` if ``bins[i] <= mode < bins[i+1]``.
-    However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
+    i.e. mode `mode` falls in bin `i` if ``edges[i] <= mode < edges[i+1]``.
+    However, last :math:`\mu`-bin is inclusive on both ends: ``edges[-2] <= mu <= edges[-1]``.
     Therefore, with e.g. :math:`\mu`-edges ``[0.2, 0.4, 1.0]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 1.0`.
     Similarly, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 0.8`.
 
@@ -489,11 +497,9 @@ class BasePowerSpectrumStatistic(BaseClass):
         nmodes = self.nmodes
         self.nmodes = utils.rebin(nmodes, new_shape, statistic=np.sum)
         self.modes = [utils.rebin(m*nmodes, new_shape, statistic=np.sum)/self.nmodes for m in self.modes]
-        extradim = self.power_nonorm.ndim > len(self.shape) # e.g. multipoles
-        self.power_nonorm.shape = (-1,) + self.shape
-        self.power_nonorm = np.asarray([utils.rebin(power*nmodes, new_shape, statistic=np.sum)/self.nmodes for power in self.power_nonorm])
-        self.power_direct_nonorm.shape = (-1,) + self.shape
-        self.power_direct_nonorm = np.asarray([utils.rebin(power, new_shape, statistic=np.sum)/np.prod(factor) for power in self.power_direct_nonorm])
+        extradim = self.power_nonorm.ndim > self.ndim # e.g. multipoles
+        self.power_nonorm = np.asarray([utils.rebin(power*nmodes, new_shape, statistic=np.sum)/self.nmodes for power in self.power_nonorm.reshape((-1,) + self.shape)])
+        self.power_direct_nonorm = np.asarray([utils.rebin(power, new_shape, statistic=np.sum)/np.prod(factor) for power in self.power_direct_nonorm.reshape((-1,) + self.shape)])
         self.edges = [edges[::f] for edges, f in zip(self.edges, factor)]
         self.power_nonorm.shape = (-1,)*extradim + self.shape
         self.power_direct_nonorm.shape = (-1,)*extradim + self.shape
@@ -554,7 +560,8 @@ class PowerSpectrumWedge(BasePowerSpectrumStatistic):
     @property
     def kavg(self):
         """Mode-weighted average wavenumber."""
-        return np.nansum(self.k*self.nmodes, axis=1)/np.sum(self.nmodes, axis=1)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            return np.sum(_nan_to_zero(self.k)*self.nmodes, axis=1)/np.sum(self.nmodes, axis=1)
 
     @property
     def mu(self):
@@ -564,7 +571,8 @@ class PowerSpectrumWedge(BasePowerSpectrumStatistic):
     @property
     def muavg(self):
         r"""Mode-weighted average :math:`\mu`."""
-        return np.nansum(self.mu*self.nmodes, axis=0)/np.sum(self.nmodes, axis=0)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            return np.sum(_nan_to_zero(self.mu)*self.nmodes, axis=0)/np.sum(self.nmodes, axis=0)
 
     @property
     def muedges(self):
@@ -893,8 +901,8 @@ class MeshFFTPower(BaseClass):
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
             ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
             'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
-            For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``bins[i] <= x < bins[i+1]``.
-            However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
+            For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``edges[i] <= x < edges[i+1]``.
+            However, last :math:`\mu`-bin is inclusive on both ends: ``edges[-2] <= mu <= edges[-1]``.
             Therefore, with e.g. :math:`\mu`-edges ``[0.2, 0.4, 1.0]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 1.0`.
             Similarly, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 0.8`.
 
@@ -1107,6 +1115,11 @@ class MeshFFTPower(BaseClass):
         """Mesh size."""
         return self.pm.Nmesh
 
+    @property
+    def dtype(self):
+        """Mesh dtype."""
+        return self.pm.dtype
+
     def _compensate(self, cfield, *compensations):
         if self.mpicomm.rank == 0:
             self.log_debug('Applying compensations {}.'.format(compensations))
@@ -1131,13 +1144,13 @@ class MeshFFTPower(BaseClass):
     def _get_attrs(self):
         # Return some attributes, to be saved in :attr:`poles` and :attr:`wedges`
         state = {}
-        for name in ['autocorr', 'nmesh', 'boxsize', 'boxcenter', 'los', 'los_type', 'compensations']:
+        for name in ['autocorr', 'nmesh', 'boxsize', 'boxcenter', 'dtype', 'los', 'los_type', 'compensations']:
             state[name] = getattr(self, name)
         return state
 
     def __getstate__(self):
         """Return this class state dictionary."""
-        state = {'attrs':self.attrs, **self._get_attrs()}
+        state = {'attrs':self.attrs}
         for name in ['wedges', 'poles']:
             if hasattr(self, name):
                 state[name] = getattr(self, name).__getstate__()
@@ -1152,9 +1165,12 @@ class MeshFFTPower(BaseClass):
 
     def save(self, filename):
         """Save power to ``filename``."""
-        if self.mpicomm.rank == 0:
+        try:
+            if self.mpicomm.rank == 0:
+                super(MeshFFTPower, self).save(filename)
+            self.mpicomm.Barrier()
+        except AttributeError:
             super(MeshFFTPower, self).save(filename)
-        self.mpicomm.Barrier()
 
     def _run_global_los(self):
 
@@ -1190,11 +1206,11 @@ class MeshFFTPower(BaseClass):
         k, mu, power, nmodes = result[:4]
         # Correct pmesh convention here: assuming F(r) is real, F*(k) = 1/N^3 \sum_{r} e^{ikr} F(r)
         power = self.nmesh.prod()**2 * power.conj()
-        self.wedges = PowerSpectrumWedge(modes=(k,mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
+        self.wedges = PowerSpectrumWedge(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PolePowerSpectrum` instance
-            k, power, nmodes = (np.squeeze(result_poles[ii]) for ii in [0,1,2])
+            k, power, nmodes = result_poles[:3]
             # Correct pmesh convention here: assuming F(r) is real, F*(k) = 1/N^3 \sum_{r} e^{ikr} F(r)
             power = self.nmesh.prod()**2 * power.conj()
             self.poles = PowerSpectrumMultipole(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
@@ -1356,7 +1372,7 @@ class CatalogFFTPower(MeshFFTPower):
                 shifted_weights1=None, shifted_weights2=None,
                 D1D2_twopoint_weights=None, D1R2_twopoint_weights=None, D2R1_twopoint_weights=None, D1S2_twopoint_weights=None, D2S1_twopoint_weights=None,
                 edges=None, ells=(0, 2, 4), los=None,
-                nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., dtype='f8',
+                nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
                 resampler='cic', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
                 direct_engine='kdtree', direct_limits=(0., 2./60.), direct_limit_type='degree', periodic=False,
                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
@@ -1421,8 +1437,8 @@ class CatalogFFTPower(MeshFFTPower):
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
             ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
             'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
-            For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``bins[i] <= x < bins[i+1]``.
-            However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
+            For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``edges[i] <= x < edges[i+1]``.
+            However, last :math:`\mu`-bin is inclusive on both ends: ``edges[-2] <= mu <= edges[-1]``.
             Therefore, with e.g. :math:`\mu`-edges ``[0.2, 0.4, 1.0]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 1.0`.
             Similarly, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 0.8`.
 
@@ -1450,6 +1466,10 @@ class CatalogFFTPower(MeshFFTPower):
 
         boxpad : float, default=2.
             When ``boxsize`` is determined from input positions, take ``boxpad`` times the smallest box enclosing positions as ``boxsize``.
+
+        wrap : bool, default=False
+            Whether to wrap input positions?
+            If ``False`` and input positions do not fit in the the box size, raise a :class:`ValueError`.
 
         dtype : string, dtype, default='f8'
             The data type to use for input positions and weights and the mesh.
@@ -1585,11 +1605,16 @@ class CatalogFFTPower(MeshFFTPower):
             raise ValueError('randoms_positions2 or shifted_positions2 are provided, but not data_positions2')
 
         # Get box encompassing all catalogs
-        nmesh, boxsize, boxcenter = _get_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=bpositions, boxpad=boxpad, mpicomm=mpicomm)
+        nmesh, boxsize, boxcenter = _get_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
         if not isinstance(resampler, tuple):
             resampler = (resampler,)*2
         if not isinstance(interlacing, tuple):
             interlacing = (interlacing,)*2
+
+        if wrap:
+            for position in positions.values():
+                if position is not None:
+                    _wrap_in_place(position, boxsize, boxcenter - boxsize/2.)
 
         # Get catalog meshes
         def get_mesh(data_positions, data_weights=None, randoms_positions=None, randoms_weights=None, shifted_positions=None, shifted_weights=None, **kwargs):
@@ -1598,11 +1623,11 @@ class CatalogFFTPower(MeshFFTPower):
                                nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, position_type='pos', dtype=dtype, mpicomm=mpicomm, **kwargs)
 
         mesh1 = get_mesh(positions['D1'], data_weights=weights['D1'], randoms_positions=positions['R1'], randoms_weights=weights['R1'],
-                         shifted_positions=positions['S1'], shifted_weights=weights['S1'], resampler=resampler[0], interlacing=interlacing[0])
+                         shifted_positions=positions['S1'], shifted_weights=weights['S1'], resampler=resampler[0], interlacing=interlacing[0], wrap=wrap)
         mesh2 = None
         if not autocorr:
             mesh2 = get_mesh(positions['D2'], data_weights=weights['D2'], randoms_positions=positions['R2'], randoms_weights=weights['R2'],
-                             shifted_positions=positions['S2'], shifted_weights=weights['S2'], resampler=resampler[1], interlacing=interlacing[1])
+                             shifted_positions=positions['S2'], shifted_weights=weights['S2'], resampler=resampler[1], interlacing=interlacing[1], wrap=wrap)
         # Now, run power spectrum estimation
         super(CatalogFFTPower, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
 

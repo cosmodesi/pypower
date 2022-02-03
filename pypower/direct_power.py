@@ -514,9 +514,12 @@ class BaseDirectPowerEngine(BaseClass):
 
     def save(self, filename):
         """Save direct power to ``filename``."""
-        if not self.with_mpi or self.mpicomm.rank == 0:
+        try:
+            if not self.with_mpi or self.mpicomm.rank == 0:
+                super(BaseDirectPowerEngine, self).save(filename)
+            self.mpicomm.Barrier()
+        except AttributeError:
             super(BaseDirectPowerEngine, self).save(filename)
-        self.mpicomm.Barrier()
 
 
 class KDTreeDirectPowerEngine(BaseDirectPowerEngine):

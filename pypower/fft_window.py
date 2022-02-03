@@ -10,9 +10,9 @@ from pmesh.pm import ParticleMesh, RealField, ComplexField
 from . import mpi
 from .utils import BaseClass
 from .fftlog import PowerToCorrelation
-from .fft_power import MeshFFTPower, get_real_Ylm, _transform_rslab, _get_real_dtype, _make_array, project_to_basis, PowerSpectrumMultipole, PowerSpectrumWedge
+from .fft_power import MeshFFTPower, get_real_Ylm, _transform_rslab, _get_real_dtype, _make_array, project_to_basis, PowerSpectrumMultipole, PowerSpectrumWedge, normalization
 from .wide_angle import BaseMatrix, Projection
-from .mesh import _get_box, CatalogMesh
+from .mesh import CatalogMesh, _get_box, _wrap_in_place
 from .direct_power import _format_positions, _format_weights
 
 
@@ -174,11 +174,12 @@ class PowerSpectrumWindowMatrix(BaseMatrix):
         projsin = [projin]
         ells = getattr(power, 'ells', [0]) # in case of PowerSpectrumWedge, only 0
         projsout = [Projection(ell=ell, wa_order=None) for ell in ells]
-        xout = [np.squeeze(np.array([modes.ravel() for modes in power.modes]).T)]*len(projsout)
+        xout = [np.squeeze(np.array([modes.ravel() for modes in power.modes]).T)]*len(projsout) # modes are k for PowerSpectrumMultipole, (k, mu) for PowerSpectrumWedge
+        weights = [power.nmodes.ravel()]*len(projsout)
         matrix = np.atleast_2d(power.power.ravel())
         attrs = power.attrs.copy()
         attrs['edges'] = power.edges
-        return cls(matrix, xin, xout, projsin, projsout, power.nmodes, wnorm=power.wnorm, attrs=attrs)
+        return cls(matrix, xin, xout, projsin, projsout, weights, wnorm=power.wnorm, attrs=attrs)
 
     def resum_input_odd_wide_angle(self, **kwargs):
         """
@@ -247,8 +248,8 @@ class MeshFFTWindow(MeshFFTPower):
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
             ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
             'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
-            For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``bins[i] <= x < bins[i+1]``.
-            However, last :math:`\mu`-bin is inclusive on both ends: ``bins[-2] <= mu <= bins[-1]``.
+            For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``edges[i] <= x < edges[i+1]``.
+            However, last :math:`\mu`-bin is inclusive on both ends: ``edges[-2] <= mu <= edges[-1]``.
             Therefore, with e.g. :math:`\mu`-edges ``[0.2, 0.4, 1.0]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 1.0`.
             Similarly, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 0.8`.
             If ``None``, defaults to the edges used in estimation of ``power_ref``.
@@ -360,7 +361,6 @@ class MeshFFTWindow(MeshFFTPower):
             else:
                 self.pm = mesh1.pm
             self.boxcenter = _make_array(boxcenter if boxcenter is not None else 0., 3, dtype='f8')
-
         else:
             super(MeshFFTWindow, self)._set_mesh(mesh1, mesh2=mesh2, boxcenter=boxcenter)
 
@@ -375,7 +375,7 @@ class MeshFFTWindow(MeshFFTPower):
                 projsin += [(ell, 1) for ell in range(1 - with_odd, ellmax + 1, 2 - with_odd)]
         self.projsin = [Projection(proj) for proj in projsin]
         if self.los_type == 'global' and any(proj.wa_order != 0 for proj in self.projsin):
-            raise ValueError('With global line-of-sight, input wide_angle order = 0 only is suppored')
+            raise ValueError('With global line-of-sight, input wide_angle order = 0 only is supported')
 
     def _set_xin(self, edgesin):
         if not isinstance(edgesin, dict):
@@ -663,7 +663,7 @@ class CatalogFFTWindow(MeshFFTWindow):
     def __init__(self, randoms_positions1=None, randoms_positions2=None,
                 randoms_weights1=None, randoms_weights2=None,
                 edgesin=None, projsin=None, edges=None, ells=None, power_ref=None,
-                los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., dtype=None,
+                los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype=None,
                 resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
@@ -740,16 +740,20 @@ class CatalogFFTWindow(MeshFFTWindow):
         boxpad : float, default=2.
             When ``boxsize`` is determined from input positions, take ``boxpad`` times the smallest box enclosing positions as ``boxsize``.
 
+        wrap : bool, default=False
+            Whether to wrap input positions?
+            If ``False`` and input positions do not fit in the the box size, raise a :class:`ValueError`.
+
         dtype : string, dtype, default=None
             The data type to use for input positions and weights and the mesh.
-            If ``None``, defaults to the value used in estimation of ``power_ref``.
+            If ``None``, defaults to the value used in estimation of ``power_ref`` if provided, else 'f8'.
 
-        resampler : string, ResampleWindow, default='cic'
+        resampler : string, ResampleWindow, default=None
             Resampler used to assign particles to the mesh.
             Choices are ['ngp', 'cic', 'tcs', 'pcs'].
             If ``None``, defaults to the value used in estimation of ``power_ref``.
 
-        interlacing : bool, int, default=2
+        interlacing : bool, int, default=None
             Whether to use interlacing to reduce aliasing when painting the particles on the mesh.
             If positive int, the interlacing order (minimum: 2).
             If ``None``, defaults to the value used in estimation of ``power_ref``.
@@ -801,7 +805,6 @@ class CatalogFFTWindow(MeshFFTWindow):
         mpicomm : MPI communicator, default=MPI.COMM_WORLD
             The MPI communicator.
         """
-        rdtype = _get_real_dtype(dtype)
         mesh_names = ['nmesh', 'boxsize', 'boxcenter']
         loc = locals()
         mesh_attrs = {name: loc[name] for name in mesh_names if loc[name] is not None}
@@ -812,6 +815,10 @@ class CatalogFFTWindow(MeshFFTWindow):
                 interlacing = tuple(power_ref.attrs['interlacing{:d}'.format(i+1)] for i in range(2))
             if resampler is None:
                 resampler = tuple(power_ref.attrs['resampler{:d}'.format(i+1)] for i in range(2))
+            if dtype is None: dtype = power_ref.attrs.get('dtype', 'f8')
+
+        if dtype is None: dtype = 'f8'
+        rdtype = _get_real_dtype(dtype)
 
         if cellsize is not None: # if cellsize is provided, remove default nmesh or boxsize value from old_matrix instance.
             mesh_attrs['cellsize'] = cellsize
@@ -854,11 +861,18 @@ class CatalogFFTWindow(MeshFFTWindow):
         autocorr = positions['R2'] is None
 
         # Get box encompassing all catalogs
-        nmesh, boxsize, boxcenter = _get_box(**mesh_attrs, positions=bpositions, boxpad=boxpad, mpicomm=mpicomm)
+        nmesh, boxsize, boxcenter = _get_box(**mesh_attrs, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
+        if resampler is None: resampler = 'cic'
+        if interlacing is None: interlacing = 2
         if not isinstance(resampler, tuple):
             resampler = (resampler,)*2
         if not isinstance(interlacing, tuple):
             interlacing = (interlacing,)*2
+
+        if wrap:
+            for position in positions.values():
+                if position is not None:
+                    _wrap_in_place(position, boxsize, boxcenter - boxsize/2.)
 
         if wnorm is None and power_ref is not None:
             wsum = [mpicomm.allreduce(sum(weights['R1']))]*2

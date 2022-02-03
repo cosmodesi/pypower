@@ -12,8 +12,7 @@ from . import mpi, utils
 
 def _get_real_dtype(dtype):
     # Return real-dtype equivalent
-    dtype = np.dtype(dtype)
-    return np.dtype('f{:d}'.format(dtype.itemsize//2 if dtype.name.startswith('complex') else dtype.itemsize))
+    return np.empty(0, dtype=dtype).real.dtype
 
 
 def _get_resampler(resampler):
@@ -106,6 +105,10 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
     return window
 
 
+def _wrap_in_place(array, boxsize, offset=0.):
+    array[:] = (array - offset) % boxsize + offset
+
+
 def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=None, boxpad=2., check=True, mpicomm=mpi.COMM_WORLD):
     """
     Compute enclosing box.
@@ -137,7 +140,7 @@ def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=
         When ``boxsize`` is determined from ``positions``, take ``boxpad`` times the smallest box enclosing ``positions`` as ``boxsize``.
 
     check : bool, default=True
-        Whether to check input ``positions`` (if provided) are in enclosing box.
+        If ``True``, and input ``positions`` (if provided) are not contained in the box, raise a :class:`ValueError`.
 
     mpicomm : MPI communicator, default=MPI.COMM_WORLD
         The MPI communicator.
@@ -153,7 +156,9 @@ def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=
     boxcenter : array
         Box center.
     """
-    if boxsize is None or boxcenter is None or (check and positions is not None):
+    if boxsize is None or boxcenter is None or check:
+        if positions is None:
+            raise ValueError('positions must be provided if boxsize and boxcenter are not specified, or check is True')
         if not isinstance(positions, (tuple, list)):
             positions = [positions]
         # Find bounding coordinates
@@ -166,7 +171,7 @@ def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=
                 boxsize = nmesh * cellsize
             else:
                 boxsize = delta.max() * boxpad
-        if (boxsize < delta).any():
+        if check and (boxsize < delta).any():
             raise ValueError('boxsize {} too small to contain all data (max {})'.format(boxsize, delta))
 
     if nmesh is None:
@@ -226,7 +231,7 @@ class CatalogMesh(BaseClass):
 
     def __init__(self, data_positions, data_weights=None, randoms_positions=None, randoms_weights=None,
                  shifted_positions=None, shifted_weights=None,
-                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., dtype='f8',
+                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
                  resampler='cic', interlacing=2, position_type='xyz', mpiroot=None, mpicomm=MPI.COMM_WORLD):
         """
         Initialize :class:`CatalogMesh`.
@@ -273,6 +278,10 @@ class CatalogMesh(BaseClass):
             If not ``None``, and mesh size ``nmesh`` is not ``None``, used to set ``boxsize`` as ``nmesh * cellsize``.
             If ``nmesh`` is ``None``, it is set as (the nearest integer(s) to) ``boxsize/cellsize``.
 
+        wrap : bool, default=False
+            Whether to wrap input positions?
+            If ``False`` and input positions do not fit in the the box size, raise a :class:`ValueError`.
+
         boxpad : float, default=2.
             When ``boxsize`` is determined from ``positions``, take ``boxpad`` times the smallest box enclosing ``positions`` as ``boxsize``.
 
@@ -307,7 +316,7 @@ class CatalogMesh(BaseClass):
         self.rdtype = _get_real_dtype(self.dtype)
         self._set_positions(data_positions=data_positions, randoms_positions=randoms_positions, shifted_positions=shifted_positions, position_type=position_type, mpiroot=mpiroot)
         self._set_weights(data_weights=data_weights, randoms_weights=randoms_weights, shifted_weights=shifted_weights, mpiroot=mpiroot)
-        self._set_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, boxpad=boxpad)
+        self._set_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, boxpad=boxpad, wrap=wrap)
         self._set_resampler(resampler)
         self._set_interlacing(interlacing)
 
@@ -352,13 +361,16 @@ class CatalogMesh(BaseClass):
                 self.log_warning('Provided interlacing is {}; setting it to 2.'.format(interlacing))
             self.interlacing = 2
 
-    def _set_box(self, nmesh=None, boxsize=None, cellsize=None, boxcenter=None, boxpad=2., check=True):
+    def _set_box(self, nmesh=None, boxsize=None, cellsize=None, boxcenter=None, boxpad=2., wrap=False):
         # Set :attr:`nmesh`, :attr:`boxsize` and :attr:`boxcenter`
         positions = [self.data_positions]
         if self.with_randoms: positions += [self.randoms_positions]
         if self.with_shifted: positions += [self.shifted_positions]
         self.nmesh, self.boxsize, self.boxcenter = _get_box(nmesh=nmesh, boxsize=boxsize, cellsize=cellsize, boxcenter=boxcenter,
-                                                            positions=positions, boxpad=boxpad, check=check, mpicomm=self.mpicomm)
+                                                            positions=positions, boxpad=boxpad, check=not wrap, mpicomm=self.mpicomm)
+        if wrap:
+            for position in positions:
+                _wrap_in_place(position, self.boxsize, self.boxcenter - self.boxsize/2.)
 
     def _set_positions(self, data_positions, randoms_positions=None, shifted_positions=None, position_type='xyz', mpiroot=None):
         # Set data and optionally shifted and randoms positions, scattering on all ranks if not already

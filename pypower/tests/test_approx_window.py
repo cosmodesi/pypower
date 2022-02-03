@@ -9,7 +9,8 @@ from mockfactory import Catalog
 
 from pypower import CorrelationFunctionWindowMultipole, PowerSpectrumWindowMultipole, Projection,\
                     BaseMatrix, CorrelationFunctionWindowMultipoleMatrix, PowerSpectrumWindowMultipoleMatrix,\
-                    CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix, CatalogFFTPower, CatalogFFTWindowMultipole, setup_logging
+                    CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix, CatalogFFTPower, CatalogFFTWindowMultipole,\
+                    mpi, setup_logging
 from pypower.approx_window import wigner3j_square
 
 from test_fft_power import data_fn, randoms_fn
@@ -133,46 +134,73 @@ def test_fft_window():
     interlacing = 2
     dtype = 'f8'
     cdtype = 'c16'
-    los = None
     boxcenter = np.array([3000.,0.,0.])[None,:]
-    data = Catalog.load_fits(data_fn)
-    randoms = Catalog.load_fits(randoms_fn)
 
-    for catalog in [data, randoms]:
-        catalog['Position'] += boxcenter
-        catalog['Weight'] = catalog.ones()
+    for los in ['x', 'firstpoint', 'endpoint']:
 
-    poles = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
-                            boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype=dtype).poles
-    edges = {'step':0.01}
-    window1 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', dtype=dtype).poles
+        data = Catalog.load_fits(data_fn)
+        randoms = Catalog.load_fits(randoms_fn)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
-        window1.save(fn)
-        window = PowerSpectrumWindowMultipole.load(fn)
-        assert np.allclose(window.power[0], window1.power[0], equal_nan=True)
+        for catalog in [data, randoms]:
+            catalog['Position'] += boxcenter
+            catalog['Weight'] = catalog.ones()
 
-    windowc = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', dtype=cdtype).poles
+        poles = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
+                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype=dtype).poles
 
-    for iproj, proj in enumerate(windowc.projs):
-        atol = 20. if proj.ell % 2 == 0 else 1e-5
-        assert np.allclose(windowc.power[iproj].imag, window.power[iproj].imag, atol=atol, rtol=5e-2)
-        atol = 2e-1 if proj.ell % 2 else 1e-5
-        assert np.allclose(windowc.power[iproj].real, window.power[iproj].real, atol=atol, rtol=5e-2)
+        edges = {'step':0.01}
+        window1 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos').poles
 
-    windowp1 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, projs=window.projs[:2], position_type='pos', dtype=dtype).poles
-    windowp2 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, projs=window.projs[2:], position_type='pos', dtype=dtype).poles
-    windowc = window1.concatenate_proj(windowp1, windowp2)
-    assert np.allclose(windowc.power, window1.power)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
+            window1.save(fn)
+            window = PowerSpectrumWindowMultipole.load(fn)
+            assert np.allclose(window.power[0], window1.power[0], equal_nan=True)
 
-    window2 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', boxsize=1000., dtype=dtype).poles
-    windowc = window.concatenate_x(window1, window2)
-    assert windowc.k[-1] > window1.k[-1]
+        poles_f4 = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
+                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype='f4').poles
+        window_f4 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles_f4, edges=edges, position_type='pos')
+        assert window_f4.dtype.itemsize == 4
 
-    nk = len(windowc.k)
-    windowc.rebin(2)
-    assert len(windowc.k) == nk//2
+        windowc = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', dtype=cdtype).poles
+
+        for iproj, proj in enumerate(windowc.projs):
+            atol = 20. if proj.ell % 2 == 0 else 1e-5
+            assert np.allclose(windowc.power[iproj].imag, window.power[iproj].imag, atol=atol, rtol=5e-2)
+            atol = 2e-1 if proj.ell % 2 else 1e-5
+            assert np.allclose(windowc.power[iproj].real, window.power[iproj].real, atol=atol, rtol=5e-2)
+
+        randoms['Position'][0] += boxsize
+        windowp1 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges=edges, projs=window.projs[:2], position_type='pos', dtype=dtype).poles
+        windowp2 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges=edges, projs=window.projs[2:], position_type='pos', dtype=dtype).poles
+        windowc = PowerSpectrumWindowMultipole.concatenate_proj(windowp1, windowp2)
+        assert np.allclose(windowc.power, window1.power)
+
+        window2 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges=edges, position_type='pos', boxsize=1000., dtype=dtype).poles
+        windowc = window.concatenate_x(window1, window2)
+        assert windowc.k[-1] > window1.k[-1]
+
+        randoms['Position'][0] -= boxsize
+        projsin = [(ell, 0) for ell in range(0, 2*max(ells)+1, 2)]
+        if los in ['firstpoint', 'endpoint']:
+            projsin += [(ell, 1) for ell in range(1, 2*max(ells), 2)]
+        alpha = data.sum('Weight')/randoms.sum('Weight')
+        window_noref = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edges=edges, projs=projsin, los=los,
+                                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=poles.wnorm/alpha**2, dtype=dtype).poles
+        assert np.allclose(window_noref.power, window.power)
+
+        randoms['Position'] = mpi.gather_array(randoms['Position'], root=0, mpicomm=catalog.mpicomm)
+        randoms['Weight'] = mpi.gather_array(randoms['Weight'], root=0, mpicomm=catalog.mpicomm)
+        window_root = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', mpiroot=0).poles
+        assert np.allclose(window_root.power, window.power)
+
+        if randoms.mpicomm.rank == 0:
+            window_root = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', mpicomm=mpi.COMM_SELF).poles
+            assert np.allclose(window_root.power, window.power)
+
+        nk = len(windowc.k)
+        windowc.rebin(2)
+        assert len(windowc.k) == nk//2
 
 
 def get_correlation_function_window():

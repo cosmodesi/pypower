@@ -7,6 +7,7 @@ from . import utils
 
 
 COMM_WORLD = MPI.COMM_WORLD
+COMM_SELF = MPI.COMM_SELF
 
 
 def gather_array(data, root=0, mpicomm=COMM_WORLD):
