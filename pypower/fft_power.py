@@ -28,7 +28,7 @@ def _nan_to_zero(array):
     return array
 
 
-def get_real_Ylm(ell, m):
+def get_real_Ylm(ell, m, modules=None):
     """
     Return a function that computes the real spherical harmonic of order (ell, m).
     Adapted from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/convpower/fkp.py.
@@ -45,6 +45,11 @@ def get_real_Ylm(ell, m):
 
     m : int
         The order of the harmonic; abs(m) <= ell.
+
+    modules : str, default=None
+        If 'sympy', use sympy + numexpr to speed up calculation.
+        If 'scipy', use scipy.
+        If ``None``, defaults to sympy if installed, else scipy.
 
     Returns
     -------
@@ -68,13 +73,23 @@ def get_real_Ylm(ell, m):
         for n in range(ell - abs(m) + 1, ell + abs(m) + 1): fac *= n # (ell + |m|)!/(ell - |m|)!
         amp *= np.sqrt(2. / fac)
 
-    try: import sympy as sp
-    except ImportError: sp = None
+    sp = None
+
+    if modules is None:
+        try: import sympy as sp
+        except ImportError: pass
+
+    elif 'sympy' in modules:
+        import sympy as sp
+
+    elif 'scipy' in modules:
+        from scipy import special
+
+    else:
+        raise ValueError('modules must be either ["sympy", "scipy", None]')
 
     # sympy is not installed, fallback to scipy
     if sp is None:
-
-        from scipy import special
 
         def Ylm(xhat, yhat, zhat):
             # The cos(theta) dependence encoded by the associated Legendre polynomial
@@ -82,10 +97,8 @@ def get_real_Ylm(ell, m):
             # The phi dependence
             phi = np.arctan2(yhat, xhat)
             if m < 0:
-                sin_phi = yhat/np.sqrt(xhat**2 + yhat**2)
                 toret *= np.sin(abs(m)*phi)
             else:
-                cos_phi = xhat/np.sqrt(xhat**2 + yhat**2)
                 toret *= np.cos(abs(m)*phi)
             return toret
 
@@ -397,17 +410,19 @@ def _transform_rslab(rslab, boxsize):
     return toret
 
 
-class BasePowerSpectrumStatistic(BaseClass):
+class BasePowerSpectrumStatistics(BaseClass):
     """
     Base template power statistic class.
     Specific power statistic should extend this class.
     """
     name = 'base'
     _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'power_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm', 'attrs']
+    _tosum = ['nmodes']
+    _toaverage = ['modes', 'power_nonorm', 'power_direct_nonorm']
 
     def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., power_direct_nonorm=None, attrs=None):
         r"""
-        Initialize :class:`BasePowerSpectrumStatistic`.
+        Initialize :class:`BasePowerSpectrumStatistics`.
 
         Parameters
         ----------
@@ -477,13 +492,96 @@ class BasePowerSpectrumStatistic(BaseClass):
         """Return binning dimensionality."""
         return len(self.edges)
 
+    def modeavg(self, axis=0):
+        """Return average of modes for input axis; this is an 1D array of size :attr:`shape[axis]`."""
+        axis = axis % self.ndim
+        axes_to_sum_over = tuple(ii for ii in range(self.ndim) if ii != axis)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            toret = np.sum(_nan_to_zero(self.modes[axis])*self.nmodes, axis=axes_to_sum_over)/np.sum(self.nmodes, axis=axes_to_sum_over)
+        return toret
+
     def __call__(self):
         """Return :attr:`power`."""
         return self.power
 
+    def __getitem__(self, slices):
+        """Call :meth:`slice`."""
+        new = self.copy()
+        if isinstance(slices, tuple):
+            new.slice(*slices)
+        else:
+            new.slice(slices)
+        return new
+
+    def select(self, *xlims):
+        """
+        Restrict statistic to provided coordinate limits in place.
+
+        For example:
+
+        .. code-block:: python
+
+            statistic.select((0, 0.3)) # restrict first axis to (0, 0.3)
+            statistic.select(None, (0, 0.2)) # restrict second axis to (0, 0.2)
+
+        """
+        if len(xlims) > self.ndim:
+            raise IndexError('Too many limits: statistics is {:d}-dimensional, but {:d} were indexed'.format(self.ndim, len(xlims)))
+        slices = []
+        for iaxis, xlim in enumerate(xlims):
+            if xlim is None:
+                slices.append(slice(None))
+            else:
+                x = self.modeavg(axis=iaxis)
+                indices = np.flatnonzero((x >= xlim[0]) & (x <= xlim[1]))
+                if indices.size:
+                    slices.append(slice(indices[0], indices[-1]+1, 1))
+                else:
+                    slices.append(slice(0))
+        self.slice(*slices)
+
+    def slice(self, *slices):
+        """
+        Slice statistics in place. If slice step is not 1, use :meth:`rebin`.
+        For example:
+
+        .. code-block:: python
+
+            statistic.slice(slice(0, 10, 2), slice(0, 6, 3)) # rebin by factor 2 (resp. 3) along axis 0 (resp. 1), up to index 10 (resp. 6)
+            statistic[:10:2,:6:3] # same as above, but return new instance.
+
+        """
+        inslices = list(slices) + [slice(None)]*(self.ndim - len(slices))
+        if len(inslices) > self.ndim:
+            raise IndexError('Too many indices: statistics is {:d}-dimensional, but {:d} were indexed'.format(self.ndim, len(slices)))
+        slices, eslices, factor = [], [], []
+        for iaxis, sl in enumerate(inslices):
+            start, stop, step = sl.start, sl.stop, sl.step
+            if start is None: start = 0
+            if step is None: step = 1
+            indices = np.arange(self.nmodes.shape[iaxis])[slice(start, stop, 1)]
+            if indices.size:
+                stop = indices[-1] + 1 # somewhat hacky, but correct!
+            else:
+                stop = 0
+            slices.append(slice(start, stop, 1))
+            eslices.append(slice(start, stop+1, 1))
+            factor.append(step)
+        slices = tuple(slices)
+        for name in self._tosum + self._toaverage:
+            tmp = getattr(self, name, None)
+            if tmp is None: continue
+            if isinstance(tmp, list):
+                setattr(self, name, [tt[slices] for tt in tmp])
+            else:
+                setattr(self, name, tmp[slices])
+        self.edges = [edges[eslice] for edges, eslice in zip(self.edges, eslices)]
+        if not all(f == 1 for f in factor):
+            self.rebin(factor=factor)
+
     def rebin(self, factor=1):
         """
-        Rebin power spectrum estimation, by factor(s) ``factor``.
+        Rebin power spectrum estimation in place, by factor(s) ``factor``.
         A tuple must be provided in case :attr:`ndim` is greater than 1.
         Input factors must divide :attr:`shape`.
         """
@@ -495,14 +593,27 @@ class BasePowerSpectrumStatistic(BaseClass):
             raise ValueError('Rebinning factor must divide shape')
         new_shape = tuple(s//f for s,f in zip(self.shape, factor))
         nmodes = self.nmodes
-        self.nmodes = utils.rebin(nmodes, new_shape, statistic=np.sum)
-        self.modes = [utils.rebin(m*nmodes, new_shape, statistic=np.sum)/self.nmodes for m in self.modes]
-        extradim = self.power_nonorm.ndim > self.ndim # e.g. multipoles
-        self.power_nonorm = np.asarray([utils.rebin(power*nmodes, new_shape, statistic=np.sum)/self.nmodes for power in self.power_nonorm.reshape((-1,) + self.shape)])
-        self.power_direct_nonorm = np.asarray([utils.rebin(power, new_shape, statistic=np.sum)/np.prod(factor) for power in self.power_direct_nonorm.reshape((-1,) + self.shape)])
+        for name in self._tosum:
+            tmp = getattr(self, name, None)
+            if tmp is None: continue
+            if isinstance(tmp, list):
+                tmp = [utils.rebin(tt, new_shape, statistic=np.sum) for tt in tmp]
+            else:
+                tmp = utils.rebin(tmp, new_shape, statistic=np.sum)
+            setattr(self, name, tmp)
+        for name in self._toaverage:
+            tmp = getattr(self, name, None)
+            if tmp is None: continue
+            if isinstance(tmp, list):
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    tmp = [utils.rebin(_nan_to_zero(tt)*nmodes, new_shape, statistic=np.sum)/self.nmodes for tt in tmp]
+            else:
+                extradim = tmp.ndim > self.ndim
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    tmp = np.asarray([utils.rebin(_nan_to_zero(tt)*nmodes, new_shape, statistic=np.sum)/self.nmodes for tt in tmp.reshape((-1,) + self.shape)])
+                    tmp.shape = (-1,)*extradim + new_shape
+            setattr(self, name, tmp)
         self.edges = [edges[::f] for edges, f in zip(self.edges, factor)]
-        self.power_nonorm.shape = (-1,)*extradim + self.shape
-        self.power_direct_nonorm.shape = (-1,)*extradim + self.shape
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -513,7 +624,7 @@ class BasePowerSpectrumStatistic(BaseClass):
         return state
 
     def __copy__(self):
-        new = super(BasePowerSpectrumStatistic, self).__copy__()
+        new = super(BasePowerSpectrumStatistics, self).__copy__()
         for name in ['edges', 'modes', 'attrs']:
             setattr(new, name, getattr(new, name).copy())
         return new
@@ -524,15 +635,15 @@ class BasePowerSpectrumStatistic(BaseClass):
 
 
 def get_power_statistic(statistic='wedge'):
-    """Return :class:`BasePowerSpectrumStatistic` subclass corresponding to ``statistic`` (either 'wedge' or 'multipole')."""
+    """Return :class:`BasePowerSpectrumStatistics` subclass corresponding to ``statistic`` (either 'wedge' or 'multipole')."""
     if statistic == 'wedge':
-        return PowerSpectrumWedge
+        return PowerSpectrumWedges
     if statistic == 'multipole':
-        return PowerSpectrumMultipole
-    return BasePowerSpectrumStatistic
+        return PowerSpectrumMultipoles
+    return BasePowerSpectrumStatistics
 
 
-class MetaPowerSpectrumStatistic(type(BaseClass)):
+class MetaPowerSpectrumStatistics(type(BaseClass)):
 
     """Metaclass to return correct power spectrum statistic."""
 
@@ -540,7 +651,7 @@ class MetaPowerSpectrumStatistic(type(BaseClass)):
         return get_power_statistic(statistic=statistic)(*args, **kwargs)
 
 
-class PowerSpectrumStatistic(BaseClass, metaclass=MetaPowerSpectrumStatistic):
+class PowerSpectrumStatistics(BaseClass, metaclass=MetaPowerSpectrumStatistics):
 
     """Entry point to power spectrum statistics."""
 
@@ -551,7 +662,7 @@ class PowerSpectrumStatistic(BaseClass, metaclass=MetaPowerSpectrumStatistic):
         return get_power_statistic(statistic=name).from_state(state)
 
 
-class PowerSpectrumWedge(BasePowerSpectrumStatistic):
+class PowerSpectrumWedges(BasePowerSpectrumStatistics):
 
     r"""Power spectrum binned in :math:`(k, \mu)`."""
 
@@ -560,8 +671,7 @@ class PowerSpectrumWedge(BasePowerSpectrumStatistic):
     @property
     def kavg(self):
         """Mode-weighted average wavenumber."""
-        with np.errstate(divide='ignore', invalid='ignore'):
-            return np.sum(_nan_to_zero(self.k)*self.nmodes, axis=1)/np.sum(self.nmodes, axis=1)
+        return self.modeavg(axis=0)
 
     @property
     def mu(self):
@@ -571,8 +681,7 @@ class PowerSpectrumWedge(BasePowerSpectrumStatistic):
     @property
     def muavg(self):
         r"""Mode-weighted average :math:`\mu`."""
-        with np.errstate(divide='ignore', invalid='ignore'):
-            return np.sum(_nan_to_zero(self.mu)*self.nmodes, axis=0)/np.sum(self.nmodes, axis=0)
+        return self.modeavg(axis=1)
 
     @property
     def muedges(self):
@@ -634,16 +743,16 @@ class PowerSpectrumWedge(BasePowerSpectrumStatistic):
         return toret
 
 
-class PowerSpectrumMultipole(BasePowerSpectrumStatistic):
+class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
 
     """Power spectrum multipoles binned in :math:`k`."""
 
     name = 'multipole'
-    _attrs = BasePowerSpectrumStatistic._attrs + ['ells']
+    _attrs = BasePowerSpectrumStatistics._attrs + ['ells']
 
     def __init__(self, edges, modes, power_nonorm, nmodes, ells, **kwargs):
         r"""
-        Initialize :class:`PowerSpectrumMultipole`.
+        Initialize :class:`PowerSpectrumMultipoles`.
 
         Parameters
         ----------
@@ -663,10 +772,10 @@ class PowerSpectrumMultipole(BasePowerSpectrumStatistic):
             Multipole orders.
 
         kwargs : dict
-            Other arguments for :attr:`BasePowerSpectrumStatistic`.
+            Other arguments for :attr:`BasePowerSpectrumStatistics`.
         """
         self.ells = tuple(ells)
-        super(PowerSpectrumMultipole, self).__init__(edges, modes, power_nonorm, nmodes, **kwargs)
+        super(PowerSpectrumMultipoles, self).__init__(edges, modes, power_nonorm, nmodes, **kwargs)
 
     @property
     def kavg(self):
@@ -869,10 +978,10 @@ class MeshFFTPower(BaseClass):
 
     Attributes
     ----------
-    poles : PowerSpectrumMultipole
+    poles : PowerSpectrumMultipoles
         Estimated power spectrum multipoles.
 
-    wedges : PowerSpectrumWedge
+    wedges : PowerSpectrumWedges
         Estimated power spectrum wedges (if relevant).
     """
 
@@ -1186,9 +1295,9 @@ class MeshFFTPower(BaseClass):
             cfield2 = self.mesh2.r2c()
             self._compensate(cfield2, self.compensations[1])
 
-        # cfield1 * cfield2.conj()
+        # cfield1.conj() * cfield2
         for i, c1, c2 in zip(cfield1.slabs.i, cfield1.slabs, cfield2.slabs):
-            c1[...] = c1 * c2.conj()
+            c1[...] = c1.conj() * c2
             mask_zero = True
             for ii in i: mask_zero = mask_zero & (ii == 0)
             c1[mask_zero] = 0.
@@ -1201,19 +1310,19 @@ class MeshFFTPower(BaseClass):
         if rank == 0:
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
 
-        # Format the power results into :class:`PowerSpectrumWedge` instance
+        # Format the power results into :class:`PowerSpectrumWedges` instance
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
         k, mu, power, nmodes = result[:4]
-        # Correct pmesh convention here: assuming F(r) is real, F*(k) = 1/N^3 \sum_{r} e^{ikr} F(r)
+        # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
         power = self.nmesh.prod()**2 * power.conj()
-        self.wedges = PowerSpectrumWedge(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
+        self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PolePowerSpectrum` instance
             k, power, nmodes = result_poles[:3]
-            # Correct pmesh convention here: assuming F(r) is real, F*(k) = 1/N^3 \sum_{r} e^{ikr} F(r)
+            # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
             power = self.nmesh.prod()**2 * power.conj()
-            self.poles = PowerSpectrumMultipole(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
+            self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def _run_local_los(self):
 
@@ -1287,7 +1396,7 @@ class MeshFFTPower(BaseClass):
             #offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize / self.nmesh # in nbodykit
             #offset = self.boxcenter + 0.5*self.boxsize / self.nmesh # in nbodykit
 
-            def _save_divide(num, denom):
+            def _safe_divide(num, denom):
                 with np.errstate(divide='ignore', invalid='ignore'):
                     toret = num/denom
                 toret[denom == 0.] = 0.
@@ -1297,13 +1406,13 @@ class MeshFFTPower(BaseClass):
             xhat = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))]
             #xhat = [xx.astype('f8') + offset[ii] for ii, xx in enumerate(self.mesh1.slabs.optx)]
             xnorm = np.sqrt(sum(xx**2 for xx in xhat))
-            xhat = [_save_divide(xx, xnorm) for xx in xhat]
+            xhat = [_safe_divide(xx, xnorm) for xx in xhat]
             del xnorm
 
             # The Fourier-space grid
             khat = [kk.real.astype('f8') for kk in A0.slabs.optx]
             knorm = np.sqrt(sum(kk**2 for kk in khat))
-            khat = [_save_divide(kk, knorm) for kk in khat]
+            khat = [_safe_divide(kk, knorm) for kk in khat]
             del knorm
 
         for ill, ell in enumerate(nonzeroells):
@@ -1340,7 +1449,7 @@ class MeshFFTPower(BaseClass):
             # Calculate the power spectrum multipoles, slab-by-slab to save memory
             # This computes (Aell of field #1) * (A0 of field #2).conj()
             for islab in range(A0.shape[0]):
-                Aell[islab,...] = Aell[islab] * A0[islab].conj()
+                Aell[islab,...] = Aell[islab].conj() * A0[islab]
 
             # Project on to 1d k-basis (averaging over mu=[-1,1])
             proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2))[0]
@@ -1350,14 +1459,13 @@ class MeshFFTPower(BaseClass):
         stop = time.time()
         if rank == 0:
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
-        # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r)
-        # Correct pmesh convention here: assuming F(r) is real, F*(k) = 1/N^3 \sum_{r} e^{ikr} F(r)
+        # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
         poles = self.nmesh.prod()**2 * np.array([result[ells.index(ell)] for ell in self.ells]).conj()
         if swap: poles = poles.conj()
         # Format the power results into :class:`PolePowerSpectrum` instance
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
-        self.poles = PowerSpectrumMultipole(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
+        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
 
         if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1
 

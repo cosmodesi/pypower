@@ -6,7 +6,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from mockfactory import Catalog
 
-from pypower import CatalogFFTPower, MeshFFTWindow, CatalogFFTWindow, PowerSpectrumWindowMatrix, ParticleMesh, mpi, setup_logging
+from pypower import CatalogFFTPower, MeshFFTWindow, CatalogFFTWindow, PowerSpectrumFFTWindowMatrix, ParticleMesh, mpi, setup_logging
 from pypower.fft_window import get_correlation_function_tophat_derivative
 
 from test_fft_power import data_fn, randoms_fn
@@ -98,6 +98,16 @@ def test_fft():
     n = a.size
     c = np.zeros_like(a)
     for ii in range(len(c)):
+        for ia, aa in enumerate(a):
+            wii = ii if ii <= n // 2 else ii - n
+            wii += ia
+            if 0 <= wii < n: c[ii] += aa * b[wii]
+
+    test = fft.irfft(fft.rfft(a).conj() * fft.rfft(b))
+    assert np.allclose(test, c)
+
+    c = np.zeros_like(a)
+    for ii in range(len(c)):
         for ib, bb in enumerate(b):
             wii = ii if ii <= n // 2 else ii - n
             wii += ib
@@ -139,6 +149,11 @@ def test_fft_window():
         power = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
                                 boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=edges, position_type='pos', dtype=dtype)
 
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
+            power.save(fn)
+            power = CatalogFFTPower.load(fn)
+
         edgesin = np.linspace(0.1, 0.11, 3)
         window = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, power_ref=power, position_type='pos', dtype=dtype)
 
@@ -176,7 +191,7 @@ def test_fft_window():
         if los in ['firstpoint', 'endpoint']: projsin += [(ell, 1) for ell in range(1, max(ells), 2)]
         alpha = data.sum('Weight')/randoms.sum('Weight')
         window_noref = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, projsin=projsin, edges=edges, ells=ells, los=los,
-                                        boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=power.wnorm/alpha**2, dtype=dtype)
+                                        boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=power.poles.wnorm/alpha**2, dtype=dtype)
         assert np.allclose(window_noref.poles.value, window.poles.value)
 
         randoms['Position'] = mpi.gather_array(randoms['Position'], root=0, mpicomm=catalog.mpicomm)
@@ -197,7 +212,7 @@ def test_fft_window():
         assert len(window.poles.xout[0]) == (len(kedges) - 1)//2
 
         if window.attrs['los_type'] == 'global':
-            window = MeshFFTWindow(edgesin=(0.03, 0.04), power_ref=power, periodic=True, dtype=dtype)
+            window = MeshFFTWindow(edgesin=(0.03, 0.04), power_ref=power, periodic=True)
             assert not np.allclose(window.poles.value, 0.)
 
 

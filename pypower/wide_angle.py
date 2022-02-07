@@ -329,7 +329,7 @@ class BaseMatrix(BaseClass):
 
     def select_x(self, xinlim=None, xoutlim=None, projsin=None, projsout=None):
         """
-        Restrict current instance to provided coordinate limits.
+        Restrict current instance to provided coordinate limits in place.
 
         Parameters
         ----------
@@ -630,15 +630,15 @@ def odd_wide_angle_coefficients(ell, wa_order=1, los='firstpoint'):
 
     .. math::
 
-        \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right)}, - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right)}
+        - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right)}, \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right)}
 
-    See https://fr.overleaf.com/read/hpgbwqzmtcxn.
+    For the first point line-of-sight. See https://fr.overleaf.com/read/hpgbwqzmtcxn.
     A minus sign is applied on both factors if ``los`` is 'endpoint'.
 
     Parameters
     ----------
     ell : int
-        Multipole order.
+        (Odd) multipole order.
 
     wa_order : int, default=1
         Wide-angle expansion order.
@@ -661,7 +661,10 @@ def odd_wide_angle_coefficients(ell, wa_order=1, los='firstpoint'):
     if wa_order != 1:
         raise ValueError('Only wide-angle order 1 supported')
 
-    if los not in ('firstpoint', 'endpoint'):
+    if ell % 2 == 0:
+        raise ValueError('Wide-angle order 1 produces only odd poles')
+
+    if los not in ['firstpoint', 'endpoint']:
         raise ValueError('Only "firstpoint" and "endpoint" line-of-sight supported')
 
     def coefficient(ell):
@@ -677,7 +680,7 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
 
     """Class computing matrix for odd wide-angle expansion of the correlation function."""
 
-    def __init__(self, sep, projsin, projsout=None, d=1., wa_orders=1, los='firstpoint', attrs=None):
+    def __init__(self, sep, projsin, projsout=None, wa_orders=1, los='firstpoint', attrs=None):
         """
         Initialize :class:`CorrelationFunctionOddWideAngleMatrix`.
 
@@ -693,9 +696,6 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
             Output projections. Defaults to ``propose_out(projsin, wa_orders=wa_orders)``.
             If output projections have :attr:`Projection.wa_order` ``None``, wide-angle orders are summed over.
 
-        d : float, default=1
-            Distance at the effective redshift. Use :math:`1` if already included in window functions.
-
         wa_orders : int, list
             Wide-angle expansion orders.
             So far order 1 only is supported.
@@ -709,7 +709,6 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
         attrs : dict, default=None
             Dictionary of other attributes.
         """
-        self.d = d
         self.wa_orders = wa_orders
         if np.ndim(wa_orders) == 0:
             self.wa_orders = [wa_orders]
@@ -726,17 +725,17 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
             raise ValueError('Input projections must have wide-angle order wa_order specified')
         self._set_xw(xin=sep, xout=sep)
         self.attrs = attrs or {}
-        self.setup()
+        self.run()
 
-    def setup(self):
+    def run(self):
         r"""
-        Set up transform, i.e. compute matrix:
+        Set matrix:
 
         .. math::
 
             M_{\ell\ell^{\prime}}^{(n,n^{\prime})}(s) =
-            \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} \delta_{\ell,\ell - 1} \delta_{n^{\prime},0}
-            - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} \delta_{\ell,\ell + 1} \delta_{n^{\prime},0}
+            - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right)} \delta_{\ell,\ell - 1} \delta_{n^{\prime},0}
+            + \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right)} \delta_{\ell,\ell + 1} \delta_{n^{\prime},0}
 
         if :math:`\ell` is odd and :math:`n = 1`, else:
 
@@ -755,22 +754,18 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
             line = []
             for iprojout, projout in enumerate(self.projsout):
                 block = 0.*eye
-                if projout.ell % 2 == 0: # even pole :math:`\ell`
-                    if projout.ell == projin.ell and (projout.wa_order is None or projout.wa_order == projin.wa_order):
-                        block = eye
+                if projout.ell == projin.ell and projout.wa_order == projin.wa_order:
+                    block = eye
                 else:
                     if projout.wa_order is None:
                         wa_orders = self.wa_orders # sum over :math:`n`
                     else:
                         wa_orders = [projout.wa_order] # projout.wa_order is 1
                     for wa_order in wa_orders:
+                        if wa_order != 1: continue
                         ells, coeffs = odd_wide_angle_coefficients(projout.ell, wa_order=wa_order, los=self.los)
                         if projin.wa_order == 0 and projin.ell in ells:
-                            # \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
-                            # or - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} (if projin.ell == projout.ell + 1)
-                            coeff = coeffs[ells.index(projin.ell)]/self.d
-                            # tmp is - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
-                            # or \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} (if projin.ell == projout.ell + 1)
+                            coeff = coeffs[ells.index(projin.ell)]
                             block += coeff * eye
                 line.append(block)
             self.projvalue.append(line)
@@ -840,17 +835,18 @@ class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
         attrs : dict, default=None
             Dictionary of other attributes.
         """
-        CorrelationFunctionOddWideAngleMatrix.__init__(self, k, projsin, projsout=projsout, d=d, wa_orders=wa_orders, los=los, attrs=attrs)
+        self.d = d
+        CorrelationFunctionOddWideAngleMatrix.__init__(self, k, projsin, projsout=projsout, wa_orders=wa_orders, los=los, attrs=attrs)
 
-    def setup(self):
+    def run(self):
         r"""
-        Set up transform, i.e. compute matrix:
+        Set matrix:
 
         .. math::
 
             M_{\ell\ell^{\prime}}^{(n,n^{\prime})}(k) =
-            \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} \delta_{\ell,\ell - 1} \delta_{n^{\prime},0} \left[ - \frac{\ell - 1}{k} + \partial_{k} \right]
-            - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} \delta_{\ell,\ell + 1} \delta_{n^{\prime},0} \left[ \frac{\ell + 2}{k} + k \partial_{k} \right]
+            - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} \delta_{\ell,\ell - 1} \delta_{n^{\prime},0} \left[\frac{\ell - 1}{k} - \partial_{k} \right]
+            - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} \delta_{\ell,\ell + 1} \delta_{n^{\prime},0} \left[ \frac{\ell + 2}{k} + \partial_{k} \right]
 
         if :math:`\ell` is odd and :math:`n = 1`, else:
 
@@ -871,39 +867,37 @@ class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
             line = []
             for iprojout, projout in enumerate(self.projsout):
                 block = 0.*eye
-                if projout.ell % 2 == 0: # even pole :math:`\ell`
-                    if projout.ell == projin.ell and (projout.wa_order is None or projout.wa_order == projin.wa_order):
-                        block = eye
+                if projout.ell == projin.ell and projout.wa_order == projin.wa_order:
+                    block = eye
                 else:
                     if projout.wa_order is None:
                         wa_orders = self.wa_orders # sum over :math:`n`
                     else:
                         wa_orders = [projout.wa_order] # projout.wa_order is 1
                     for wa_order in wa_orders:
+                        if wa_order != 1: continue
                         ells, coeffs = odd_wide_angle_coefficients(projout.ell, wa_order=wa_order, los=self.los)
                         if projin.wa_order == 0 and projin.ell in ells:
-                            # \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
-                            # or - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} (if projin.ell == projout.ell + 1)
-                            coeff = coeffs[ells.index(projin.ell)]/self.d
-                            # tmp is - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
+                            # - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
                             # or \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} (if projin.ell == projout.ell + 1)
+                            coeff = coeffs[ells.index(projin.ell)]/self.d
                             if projin.ell == projout.ell + 1:
-                                coeff_spherical_bessel = projin.ell + 1
+                                coeff_spherical_bessel = - (projin.ell + 1)
                             else:
-                                coeff_spherical_bessel = -projin.ell
-                            # K 'diag' terms arXiv:2106.06324 eq. 3.3, 3.4 and 3.5
+                                coeff_spherical_bessel = projin.ell
+                            # K 'diag' terms
                             # tmp is - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} \frac{\ell - 1}{k} (if projin.ell == projout.ell - 1)
-                            # or \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} \frac{\ell + 2}{k} (if projin.ell == projout.ell + 1)
+                            # or - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} \frac{\ell + 2}{k} (if projin.ell == projout.ell + 1)
                             tmp = np.diag(coeff_spherical_bessel * coeff / k)
                             deltak = 2. * np.diff(k)
-                            # derivative :math:`\partial_{k}`
-                            tmp += np.diag(coeff / deltak, k=1) - np.diag(coeff / deltak, k=-1)
+                            # derivative - :math:`\partial_{k}`
+                            tmp += np.diag(coeff / deltak, k=-1) - np.diag(coeff / deltak, k=1)
 
                             # taking care of corners
-                            tmp[0,0] -= 2.*coeff / deltak[0]
-                            tmp[0,1] = 2.*coeff / deltak[0]
-                            tmp[-1,-1] += 2.*coeff / deltak[-1]
-                            tmp[-1,-2] = -2.*coeff / deltak[-1]
+                            tmp[0,0] += 2.*coeff / deltak[0]
+                            tmp[0,1] = -2.*coeff / deltak[0]
+                            tmp[-1,-1] -= 2.*coeff / deltak[-1]
+                            tmp[-1,-2] = 2.*coeff / deltak[-1]
                             block += tmp.T # (in, out)
                 line.append(block)
             self.value.append(line)

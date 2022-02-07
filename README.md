@@ -22,7 +22,7 @@ Example notebooks presenting most use cases are provided in directory nb/.
 
 Documentation is hosted on Read the Docs, [pypower docs](https://pypower.readthedocs.io/).
 
-# Requirements
+## Requirements
 
 Only strict requirements are:
 
@@ -54,7 +54,7 @@ To install the code:
 ```
 python setup.py install --user
 ```
-Or in development mode (any change to Python code will take place immediately)::
+Or in development mode (any change to Python code will take place immediately):
 ```
 python setup.py develop --user
 ```

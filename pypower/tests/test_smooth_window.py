@@ -7,11 +7,11 @@ from matplotlib import pyplot as plt
 from cosmoprimo import Cosmology
 from mockfactory import Catalog
 
-from pypower import CorrelationFunctionWindowMultipole, PowerSpectrumWindowMultipole, Projection,\
-                    BaseMatrix, CorrelationFunctionWindowMultipoleMatrix, PowerSpectrumWindowMultipoleMatrix,\
-                    CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix, CatalogFFTPower, CatalogFFTWindowMultipole,\
+from pypower import CorrelationFunctionSmoothWindow, PowerSpectrumSmoothWindow, Projection,\
+                    BaseMatrix, CorrelationFunctionSmoothWindowMatrix, PowerSpectrumSmoothWindowMatrix,\
+                    CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix, CatalogFFTPower, CatalogSmoothWindow,\
                     mpi, setup_logging
-from pypower.approx_window import wigner3j_square
+from pypower.smooth_window import wigner3j_square
 
 from test_fft_power import data_fn, randoms_fn
 
@@ -53,7 +53,7 @@ def test_power_spectrum_window_matrix():
     sep = np.geomspace(swin[0], swin[-1], 1024*16*2)
     kin = 1./sep[::-1]/(sep[1]/sep[0])
 
-    wm = PowerSpectrumWindowMultipoleMatrix(kout, projsin, projsout=projsout, window=window, k=kin, kin_rebin=2, kin_lim=None, sep=sep, sum_wa=False)
+    wm = PowerSpectrumSmoothWindowMatrix(kout, projsin, projsout=projsout, window=window, k=kin, kin_rebin=2, kin_lim=None, sep=sep, sum_wa=False)
     kin = wm.xin[0]
     mask = (kin > 0.001) & (kin < 1.)
     test = wm.value.T
@@ -62,7 +62,7 @@ def test_power_spectrum_window_matrix():
     ref = create_W(kout, swin, dwindow)
 
     from matplotlib import pyplot as plt
-    from pypower.approx_window import weights_trapz
+    from pypower.smooth_window import weights_trapz
 
     for wa_order in wa_orders:
         fig,lax = plt.subplots(len(ellsout), len(ellsin), figsize=(12, 10))
@@ -70,20 +70,16 @@ def test_power_spectrum_window_matrix():
             for illin,ellin in enumerate(ellsin):
                 iprojout = projsout.index(Projection(ell=ellout, wa_order=wa_order))
                 iprojin = projsout.index(Projection(ell=ellin, wa_order=wa_order))
-                test_ = test[iprojout*len(kout), iprojin*len(kin):(iprojin+1)*len(kin)] / (weights_trapz(kin**3) / 3.)
+                testi = test[iprojout*len(kout), iprojin*len(kin):(iprojin+1)*len(kin)] / (weights_trapz(kin**3) / 3.)
 
                 if wa_order % 2 == 0 and ellin % 2 == 1:
-                    test_ = 0.*test_ # convention of create_Wll (no theory odd multipoles at 0th order)
+                    testi = 0.*testi # convention of create_Wll (no theory odd multipoles at 0th order)
                 if wa_order % 2 == 1 and ellin % 2 == 0:
-                    test_ = 0.*test_ # convention of create_Wll (no theory even multipoles at 1th order)
-                if ellin % 2 == 1:
-                    test_ *= -1 # convention for input odd power spectra (we provide the imaginary part, wide_angle_tools.py provides - the inmaginary part)
-                if ellout % 2 == 1:
-                    test_ *= -1 # same as above
+                    testi = 0.*testi # convention of create_Wll (no theory even multipoles at 1th order)
 
-                ref_ = ref[(wa_order,ellout,ellin)][0]
-                lax[illout][illin].plot(kin[mask], test_[mask], label='test ({:d},{:d})'.format(ellout,ellin))
-                lax[illout][illin].plot(kin[mask], ref_[mask], label='ref')
+                refi = ref[(wa_order,ellout,ellin)][0]
+                lax[illout][illin].plot(kin[mask], testi[mask], label='test ({:d},{:d})'.format(ellout, ellin))
+                lax[illout][illin].plot(kin[mask], refi[mask], label='ref')
                 lax[illout][illin].legend()
             #print(np.max(test_-ref_))
             #assert np.allclose(test_,ref_,rtol=1e-1,atol=1e-3)
@@ -105,27 +101,31 @@ def test_window():
             projs.append(Projection(ell=ell, wa_order=wa_order))
     nmodes = np.ones_like(k, dtype='i4')
     boxsize = np.array([1000.]*3, dtype='f8')
-    window = PowerSpectrumWindowMultipole(edges, k, y, nmodes, projs, attrs={'boxsize':boxsize})
-    window2 = PowerSpectrumWindowMultipole(edges, k, [yy/2. for yy in y], 2.*nmodes, projs, attrs={'boxsize':boxsize})
-    window = PowerSpectrumWindowMultipole.concatenate_x(window, window2)
+    window = PowerSpectrumSmoothWindow(edges, k, y, nmodes, projs, attrs={'boxsize':boxsize})
+    window2 = PowerSpectrumSmoothWindow(edges, k, [yy/2. for yy in y], 2.*nmodes, projs, attrs={'boxsize':boxsize})
+    window = PowerSpectrumSmoothWindow.concatenate_x(window, window2)
     assert np.allclose(window.power_nonorm[0], y[0]/2.)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         fn = os.path.join(tmp_dir, 'tmp.npy')
         window.save(fn)
-        test = PowerSpectrumWindowMultipole.load(fn)
+        test = PowerSpectrumSmoothWindow.load(fn)
     assert np.allclose(test(projs[0], k), window.power_nonorm[0])
 
     window_real = window.to_real()
+    assert np.allclose(window.to_real(sep=1./window.k[window.k>0][::-1]).corr, window_real.corr)
+    assert np.allclose(window.to_real(k=window.k, smooth=0.).corr, window.to_real(k=window.k).corr)
+    assert np.allclose(window.to_real(smooth=0.5).corr, window.to_real(smooth=np.exp(-(0.5 * window.k)**2)).corr)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         fn = os.path.join(tmp_dir, 'tmp.npy')
         window_real.save(fn)
-        test = CorrelationFunctionWindowMultipole.load(fn)
+        test = CorrelationFunctionSmoothWindow.load(fn)
     assert np.allclose(test(projs[0], 1./k[::-1]), window_real.corr[0])
 
 
 def test_fft_window():
+
     boxsize = 2000.
     nmesh = 64
     kedges = np.linspace(0., 0.1, 6)
@@ -149,20 +149,20 @@ def test_fft_window():
                                 boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype=dtype).poles
 
         edges = {'step':0.01}
-        window1 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos').poles
+        window1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos').poles
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             window1.save(fn)
-            window = PowerSpectrumWindowMultipole.load(fn)
+            window = PowerSpectrumSmoothWindow.load(fn)
             assert np.allclose(window.power[0], window1.power[0], equal_nan=True)
 
         poles_f4 = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
                                 boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype='f4').poles
-        window_f4 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles_f4, edges=edges, position_type='pos')
+        window_f4 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles_f4, edges=edges, position_type='pos')
         assert window_f4.dtype.itemsize == 4
 
-        windowc = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', dtype=cdtype).poles
+        windowc = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', dtype=cdtype).poles
 
         for iproj, proj in enumerate(windowc.projs):
             atol = 20. if proj.ell % 2 == 0 else 1e-5
@@ -171,31 +171,52 @@ def test_fft_window():
             assert np.allclose(windowc.power[iproj].real, window.power[iproj].real, atol=atol, rtol=5e-2)
 
         randoms['Position'][0] += boxsize
-        windowp1 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges=edges, projs=window.projs[:2], position_type='pos', dtype=dtype).poles
-        windowp2 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges=edges, projs=window.projs[2:], position_type='pos', dtype=dtype).poles
-        windowc = PowerSpectrumWindowMultipole.concatenate_proj(windowp1, windowp2)
+        windowp1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges=edges, projs=window.projs[:2], position_type='pos', dtype=dtype).poles
+        windowp2 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges=edges, projs=window.projs[2:], position_type='pos', dtype=dtype).poles
+        windowc = PowerSpectrumSmoothWindow.concatenate_proj(windowp1, windowp2)
         assert np.allclose(windowc.power, window1.power)
 
-        window2 = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges=edges, position_type='pos', boxsize=1000., dtype=dtype).poles
+        window2 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges=edges, position_type='pos', boxsize=1000., dtype=dtype).poles
         windowc = window.concatenate_x(window1, window2)
         assert windowc.k[-1] > window1.k[-1]
+        for name in ['power', 'k', 'nmodes']:
+            assert np.allclose(getattr(windowc, name)[...,:len(window1.k)], getattr(window1, name))
+            assert np.allclose(getattr(windowc, name)[...,len(window1.k):], getattr(window2, name)[...,len(windowc.k)-len(window1.k):])
+
+        frac_nyq = 0.8
+        windowc = window.concatenate_x(window1, window2, frac_nyq=frac_nyq)
+        assert windowc.k[-1] > window1.k[-1]
+        knyq1 = np.pi*np.min(window1.attrs['nmesh']/window1.attrs['boxsize'])
+        knyq2 = np.pi*np.min(window2.attrs['nmesh']/window2.attrs['boxsize'])
+        for name in ['power', 'k', 'nmodes']:
+            assert np.allclose(getattr(windowc, name)[...,windowc.k<=frac_nyq*knyq1], getattr(window1, name)[...,window1.k<=frac_nyq*knyq1])
+            assert np.allclose(getattr(windowc, name)[...,windowc.k>frac_nyq*knyq1], getattr(window2, name)[...,(window2.k>frac_nyq*knyq1) & (window2.k<=frac_nyq*knyq2)])
+
+        assert windowc[1:5:2].shape[0] == 2
+
+        windowc = window.concatenate_x(window1, window2, frac_nyq=(frac_nyq, ))
+        assert windowc.k[-1] > window1.k[-1]
+        knyq1 = np.pi*np.min(window1.attrs['nmesh']/window1.attrs['boxsize'])
+        for name in ['power', 'k', 'nmodes']:
+            assert np.allclose(getattr(windowc, name)[...,windowc.k<=frac_nyq*knyq1], getattr(window1, name)[...,window1.k<=frac_nyq*knyq1])
+            assert np.allclose(getattr(windowc, name)[...,windowc.k>frac_nyq*knyq1], getattr(window2, name)[...,(window2.k>frac_nyq*knyq1)])
 
         randoms['Position'][0] -= boxsize
         projsin = [(ell, 0) for ell in range(0, 2*max(ells)+1, 2)]
         if los in ['firstpoint', 'endpoint']:
             projsin += [(ell, 1) for ell in range(1, 2*max(ells), 2)]
         alpha = data.sum('Weight')/randoms.sum('Weight')
-        window_noref = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edges=edges, projs=projsin, los=los,
+        window_noref = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edges=edges, projs=projsin, los=los,
                                                 boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=poles.wnorm/alpha**2, dtype=dtype).poles
         assert np.allclose(window_noref.power, window.power)
 
         randoms['Position'] = mpi.gather_array(randoms['Position'], root=0, mpicomm=catalog.mpicomm)
         randoms['Weight'] = mpi.gather_array(randoms['Weight'], root=0, mpicomm=catalog.mpicomm)
-        window_root = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', mpiroot=0).poles
+        window_root = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', mpiroot=0).poles
         assert np.allclose(window_root.power, window.power)
 
         if randoms.mpicomm.rank == 0:
-            window_root = CatalogFFTWindowMultipole(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', mpicomm=mpi.COMM_SELF).poles
+            window_root = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', mpicomm=mpi.COMM_SELF).poles
             assert np.allclose(window_root.power, window.power)
 
         nk = len(windowc.k)
@@ -214,7 +235,7 @@ def get_correlation_function_window():
             if ell > 0: y_ *= np.random.uniform()/10.
             y.append(y_)
             projs.append(Projection(ell=ell, wa_order=wa_order))
-    return CorrelationFunctionWindowMultipole(sep, y, projs)
+    return CorrelationFunctionSmoothWindow(sep, y, projs)
 
 
 def test_correlation_function_window_matrix():
@@ -222,8 +243,8 @@ def test_correlation_function_window_matrix():
     window = get_correlation_function_window()
     ells = [0, 2, 4]
     projsin = ells + PowerSpectrumOddWideAngleMatrix.propose_out(ells, wa_orders=1)
-    wm = CorrelationFunctionWindowMultipoleMatrix(np.linspace(0., 1., 10), projsin, projsout=ells, window=window)
-    kwargs = {'d':1000., 'wa_orders':1, 'los':'firstpoint'}
+    wm = CorrelationFunctionSmoothWindowMatrix(np.linspace(0., 1., 10), projsin, projsout=ells, window=window)
+    kwargs = {'wa_orders':1, 'los':'firstpoint'}
     wa = CorrelationFunctionOddWideAngleMatrix(wm.xin[0], ells, projsout=wm.projsin, **kwargs)
     matrix = BaseMatrix.join(wa, wm)
     wm.resum_input_odd_wide_angle(**kwargs)
@@ -239,7 +260,7 @@ def test_window_convolution():
     kin_lim = (1e-3, 1e1)
     kout = np.linspace(0., 0.3, 60)
     projsin = ells + PowerSpectrumOddWideAngleMatrix.propose_out(ells, wa_orders=1)
-    wm = PowerSpectrumWindowMultipoleMatrix(kout, projsin, projsout=ells, window=window, sep=sep, kin_lim=kin_lim)
+    wm = PowerSpectrumSmoothWindowMatrix(kout, projsin, projsout=ells, window=window, sep=sep, kin_lim=kin_lim)
     kwargs = {'d':1000., 'wa_orders':1, 'los':'firstpoint'}
     wa = PowerSpectrumOddWideAngleMatrix(wm.xin[0], ells, projsout=wm.projsin, **kwargs)
     matrix = BaseMatrix.join(wa, wm)

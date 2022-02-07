@@ -56,7 +56,7 @@ The code structure is the following:
   - mesh.py implements methods to paint catalog on mesh
   - fft_power.py implements FFT-based power spectrum estimation
   - direct_power.py implements direct estimation of power spectrum multipoles, i.e. summing over particle pairs (typically for PIP corrections)
-  - approx_window.py implements computation of approximate window matrix
+  - smooth_window.py implements computation of approximate window matrix
   - fft_window.py implements computation of more accurate (estimator-based) window matrix
   - wide_angle.py implements wide-angle corrections for window matrix
   - fftlog.py implements FFTlog algorithm, used in window matrix computation

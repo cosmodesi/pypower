@@ -16,6 +16,7 @@ doc/_build/
 **/bak/
 **/_catalog
 **/_plots
+**/_results
 
 # Unit test / coverage reports
 **/.coverage

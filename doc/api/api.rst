@@ -22,7 +22,7 @@ Painting catalog on mesh
 Approximate window
 ------------------
 
-.. automodule:: pypower.approx_window
+.. automodule:: pypower.smooth_window
   :members:
   :inherited-members:
   :show-inheritance:

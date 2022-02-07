@@ -250,12 +250,14 @@ class HankelTransform(FFTlog):
 
 
 class PowerToCorrelation(FFTlog):
-    """
-    Power spectrum to correlation function transform.
+    r"""
+    Power spectrum to correlation function transform, defined as:
 
-    It relies on spherical Bessel function kernels.
+    .. math::
+        \xi_{\ell}(s) = \frac{(-i)^{\ell}}{2 \pi^{2}} \int dk k^{2} P_{\ell}(k) j_{\ell}(ks)
+
     """
-    def __init__(self, k, ell=0, q=0, **kwargs):
+    def __init__(self, k, ell=0, q=0, complex=True, **kwargs):
         """
         Initialize power to correlation transform.
 
@@ -271,6 +273,9 @@ class PowerToCorrelation(FFTlog):
         q : float, list of floats
             Power-law tilt(s) to regularise integration.
 
+        complex : bool, default=True
+            ``False`` returns the real part of even poles, and the imaginary part of odd poles.
+
         kwargs : dict
             Arguments for :class:`FFTlog`.
         """
@@ -280,19 +285,26 @@ class PowerToCorrelation(FFTlog):
             kernel = [SphericalBesselJKernel(ell_) for ell_ in ell]
         FFTlog.__init__(self, k, kernel, q=1.5+q, **kwargs)
         self.padded_prefactor *= self.padded_x**3 / (2*np.pi)**1.5
-        phase = (1j)**np.atleast_1d(ell)
-        if np.isreal(phase).all(): phase = phase.real
-        # not in-place as phase (and hence padded_postfactor) may be complex instead of float
+        # Convention is (-i)^ell/(2 pi^2)
+        ell = np.atleast_1d(ell)
+        if complex:
+            phase = (-1j) ** ell
+        else:
+            # We return imaginary part of odd poles
+            phase = (-1)**((ell + 1)//2)
+        # Not in-place as phase (and hence padded_postfactor) may be complex instead of float
         self.padded_postfactor = self.padded_postfactor * phase[:,None]
 
 
 class CorrelationToPower(FFTlog):
-    """
-    Correlation function to power spectrum transform.
+    r"""
+    Correlation function to power spectrum transform, defined as:
 
-    It relies on spherical Bessel function kernels.
+    .. math::
+        P_{\ell}(k) = 4 \pi i^{\ell} \int ds s^{2} \xi_{\ell}(s) j_{\ell}(ks)
+
     """
-    def __init__(self, s, ell=0, q=0, **kwargs):
+    def __init__(self, s, ell=0, q=0, complex=True, **kwargs):
         """
         Initialize power to correlation transform.
 
@@ -308,6 +320,9 @@ class CorrelationToPower(FFTlog):
         q : float, list of floats
             Power-law tilt(s) to regularise integration.
 
+        complex : bool, default=True
+            ``False`` returns the real part of even poles, and the imaginary part of odd poles.
+
         kwargs : dict
             Arguments for :class:`FFTlog`.
         """
@@ -317,9 +332,14 @@ class CorrelationToPower(FFTlog):
             kernel = [SphericalBesselJKernel(ell_) for ell_ in ell]
         FFTlog.__init__(self, s, kernel, q=1.5+q, **kwargs)
         self.padded_prefactor *= self.padded_x**3 * (2*np.pi)**1.5
-        phase = (1j)**np.atleast_1d(ell)
-        if np.isreal(phase).all(): phase = phase.real
-        self.padded_postfactor = self.padded_postfactor / phase[:,None]
+        # Convention is 4 \pi i^ell, and we return imaginary part of odd poles
+        ell = np.atleast_1d(ell)
+        if complex:
+            phase = (-1j) ** ell
+        else:
+            # We return imaginary part of odd poles
+            phase = (-1)**(ell//2)
+        self.padded_postfactor = self.padded_postfactor * phase[:,None]
 
 
 class TophatVariance(FFTlog):

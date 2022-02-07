@@ -8,8 +8,8 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import LagrangianLinearMock, Catalog
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, PowerSpectrumStatistic, mpi, utils, setup_logging
-from pypower.fft_power import normalization, normalization_from_nbar, find_unique_edges
+from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, PowerSpectrumStatistics, mpi, utils, setup_logging
+from pypower.fft_power import normalization, normalization_from_nbar, find_unique_edges, get_real_Ylm
 
 
 base_dir = 'catalog'
@@ -63,17 +63,21 @@ def test_power_statistic():
         nmodes = np.ones_like(modes, dtype='i8')
         ells = (0, 2, 4)
         power = [np.ones_like(modes, dtype='c16')]*len(ells)
-        power = PowerSpectrumStatistic(edges, modes, power, nmodes, ells, statistic='multipole')
+        power = PowerSpectrumStatistics(edges, modes, power, nmodes, ells, statistic='multipole')
         power_ref = power.copy()
         power.rebin(factor=2)
         assert power.power.shape[1] == power_ref.power.shape[1]//2 # poles are first dimension
         assert np.allclose(power.k, (power_ref.modes[0][::2] + power_ref.modes[0][1::2])/2.)
         assert np.allclose(power.kedges, np.linspace(0., 0.2, 6))
         assert power.shape == (modes.size//2,)
+        assert np.allclose(power_ref[::2].power_nonorm, power.power_nonorm)
+        power2 = power_ref.copy()
+        power2.select((0., 0.1))
+        assert np.all(power2.modes[0] <= 0.1)
         with tempfile.TemporaryDirectory() as tmp_dir:
             fn = os.path.join(tmp_dir, 'tmp.npy')
             power.save(fn)
-            test = PowerSpectrumStatistic.load(fn)
+            test = PowerSpectrumStatistics.load(fn)
             assert np.all(test.power == power.power)
         power2 = power.copy()
         power2.modes[0] = 1.
@@ -88,7 +92,7 @@ def test_power_statistic():
         modes = np.meshgrid(*((e[:-1] + e[1:])/2 for e in edges), indexing='ij')
         nmodes = np.ones(tuple(len(e)-1 for e in edges), dtype='i8')
         power = np.ones_like(nmodes, dtype='c16')
-        power = PowerSpectrumStatistic(edges, modes, power, nmodes, statistic='wedge')
+        power = PowerSpectrumStatistics(edges, modes, power, nmodes, statistic='wedge')
         power_ref = power.copy()
         power.rebin(factor=(2, 2))
         assert power.power.shape[0] == power_ref.power.shape[0]//2
@@ -97,6 +101,11 @@ def test_power_statistic():
         assert np.isnan(power(-1., 0.))
         power.rebin(factor=(1, 10))
         assert power.power_nonorm.shape == (5, 1)
+        assert np.allclose(power_ref[::2,::2].power_nonorm, power.power_nonorm)
+        assert power_ref[1:7:2].shape[0] == 3
+        power2 = power_ref.copy()
+        power2.select(None, (0., 0.5))
+        assert np.all(power2.modes[1] <= 0.5)
 
         for complex in [False, True]:
             assert not np.isnan(power(0.,0., complex=complex))
@@ -105,10 +114,37 @@ def test_power_statistic():
             assert power(k=[0.1,0.2], mu=[0.3]).shape == (2, 1)
 
 
+def test_ylm():
+    rng = np.random.RandomState(seed=42)
+    size = 1000
+    x, y, z = [rng.uniform(0., 1., size) for i in range(3)]
+    r = np.sqrt(x**2 + y**2 + z**2)
+    r[r == 0.] = 1.
+    xhat, yhat, zhat = x/r, y/r, z/r
+    for ell in range(8):
+        for m in range(-ell, ell+1):
+            ylm = get_real_Ylm(ell, m)(xhat, yhat, zhat)
+            ylm_scipy = get_real_Ylm(ell, m, modules='scipy')(xhat, yhat, zhat)
+            assert np.allclose(ylm_scipy, ylm)
+
+
 def test_find_edges():
     x = np.meshgrid(np.arange(10.), np.arange(10.), indexing='ij')
     x0 = np.ones(len(x), dtype='f8')
     edges = find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD)
+
+
+def test_project():
+
+    z = 1.
+    bias, nbar, nmesh, boxsize, boxcenter = 2.0, 1e-3, 64, 1000., 500.
+    power = DESI().get_fourier().pk_interpolator().to_1d(z=z)
+    mock = LagrangianLinearMock(power, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=42, unitary_amplitude=False)
+    # This is Lagrangian bias, Eulerian bias - 1
+    mock.set_real_delta_field(bias=bias-1)
+    mesh_real = mock.mesh_delta_r + 1.
+
+    power = MeshFFTPower(mesh_real, ells=(0, 2), los='x', edges=({'step':0.001}, np.linspace(-1., 1., 3)))
 
 
 def test_field_power():
@@ -339,7 +375,7 @@ def test_catalog_power():
         for ell in power.ells:
             # precision is 1e-7 if offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize
             ref = ref_power.poles['power_{}'.format(ell)]
-            if power.attrs['los_type'] == 'endpoint': ref = ref.conj()
+            if power.attrs['los_type'] == 'firstpoint': ref = ref.conj()
             assert np.allclose((power(ell=ell) + (ell == 0)*power.shotnoise)*norm/ref_norm, ref, atol=1e-6, rtol=5e-2)
             assert np.allclose(power.k, ref_power.poles['k'], atol=1e-6, rtol=5e-3)
             assert np.allclose(power.nmodes, ref_power.poles['modes'], atol=1e-6, rtol=5e-3)
@@ -475,8 +511,10 @@ if __name__ == '__main__':
     #save_lognormal()
     #test_mesh_power()
     #test_interlacing()
+    #test_project()
     test_power_statistic()
     test_find_edges()
+    test_ylm()
     test_field_power()
     test_mesh_power()
     test_catalog_power()

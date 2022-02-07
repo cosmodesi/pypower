@@ -101,7 +101,7 @@ def test_power_spectrum_odd_wideangle():
     projsin = [Projection(ell=ell, wa_order=0) for ell in ells]
     projsout = [Projection(ell=ell, wa_order=ell % 2) for ell in range(ells[-1]+1)]
     PowerSpectrumOddWideAngleMatrix.propose_out(ells, wa_orders=1)
-    wa = PowerSpectrumOddWideAngleMatrix(k, projsin, projsout=projsout, d=1., wa_orders=1, los='firstpoint')
+    wa = PowerSpectrumOddWideAngleMatrix(k, projsin, projsout=projsout, d=1., wa_orders=1, los='endpoint')
 
     from wide_angle_tools import get_end_point_LOS_M
     ref = get_end_point_LOS_M(d, Nkth=nk, kmin=kmin, kmax=kmax)
