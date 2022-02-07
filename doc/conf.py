@@ -35,7 +35,7 @@ extensions = [
 # -- Project information -----------------------------------------------------
 
 project = 'pypower'
-copyright = '2021, Arnaud de Mattia'
+copyright = '2021, cosmodesi'
 
 # The full version, including alpha/beta/rc tags
 release = __version__

@@ -20,17 +20,17 @@ pip
 ---
 To install **pypower**, simply run::
 
-  python -m pip install git+https://github.com/adematti/pypower
+  python -m pip install git+https://github.com/cosmodesi/pypower
 
 To install sympy, numexpr::
 
-  python -m pip install git+https://github.com/adematti/pypower#egg=pypower[extras]
+  python -m pip install git+https://github.com/cosmodesi/pypower#egg=pypower[extras]
 
 git
 ---
 First::
 
-  git clone https://github.com/adematti/pypower.git
+  git clone https://github.com/cosmodesi/pypower.git
 
 To install the code::
 

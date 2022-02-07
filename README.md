@@ -41,14 +41,14 @@ To enable faster spherical harmonics computation:
 
 Simply run:
 ```
-python -m pip install git+https://github.com/adematti/pypower
+python -m pip install git+https://github.com/cosmodesi/pypower
 ```
 
 ### git
 
 First:
 ```
-git clone https://github.com/adematti/pypower.git
+git clone https://github.com/cosmodesi/pypower.git
 ```
 To install the code:
 ```
@@ -61,7 +61,7 @@ python setup.py develop --user
 
 ## License
 
-**pypower** is free software distributed under a GPLv3 license. For details see the [LICENSE](https://github.com/adematti/pypower/blob/main/LICENSE).
+**pypower** is free software distributed under a BSD3 license. For details see the [LICENSE](https://github.com/cosmodesi/pypower/blob/main/LICENSE).
 
 ## Credits
 

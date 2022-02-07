@@ -3,11 +3,11 @@ from setuptools import setup
 
 setup(name='pypower',
       version='0.0.1',
-      author='Arnaud de Mattia',
+      author='cosmodesi',
       author_email='',
-      description='Estimation of power spectrum',
+      description='Estimation of power spectrum and window function',
       license='GPL3',
-      url='http://github.com/adematti/pypower',
+      url='http://github.com/cosmodesi/pypower',
       install_requires=['numpy', 'scipy', 'pmesh'],
       extras_require={'extras':['sympy', 'numexpr']},
       packages=['pypower']
