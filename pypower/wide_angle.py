@@ -327,6 +327,84 @@ class BaseMatrix(BaseClass):
             self.value.append(line)
         self.value = np.bmat(self.value).A
 
+    def __getitem__(self, slices):
+        """Call :meth:`slice_x`."""
+        new = self.copy()
+        if isinstance(slices, tuple):
+            new.slice_x(*slices)
+        else:
+            new.slice_x(slices)
+        return new
+
+    def slice_x(self, slicein=None, sliceout=None, projsin=None, projsout=None):
+        """
+        Slice matrix in place. If slice step is not 1, use :meth:`rebin`.
+
+        Parameters
+        ----------
+        slicein : slice, default=None
+            Slicing to apply to input coordinates, defaults to ``slice(None)``.
+
+        sliceout : slice, default=None
+            Slicing to apply to output coordinates, defaults to ``slice(None)``.
+
+        projsin : list, default=None
+            List of input projections to apply slicing to.
+            Defaults to :attr:`projsin`.
+
+        projsout : list, default=None
+            List of output projections to apply slicing to.
+            Defaults to :attr:`projsout`.
+        """
+        self.value = self.unpacked() # unpack first, as based on :attr:`xin`, :attr:`xout`
+
+        inprojs, masks, factors = {}, {}, {}
+        for axis in ['in', 'out']:
+            name = 'projs{}'.format(axis)
+            projs = locals()[name]
+            selfprojs = getattr(self, name)
+            if projs is None:
+                projs = selfprojs
+            else:
+                if not isinstance(projs, list): projs = [projs]
+                projs = [Projection(proj) for proj in projs]
+            inprojs[axis] = projs
+
+            masks[axis] = []
+            x = getattr(self, 'x{}'.format(axis))
+            sl = locals()['slice{}'.format(axis)]
+            if sl is None: sl = slice(None)
+            start, stop, step = sl.start, sl.stop, sl.step
+            if start is None: start = 0
+            if step is None: step = 1
+            factors[axis] = step
+
+            for proj in projs:
+                selfii = selfprojs.index(proj)
+                indices = np.arange(len(x[selfii]))[slice(start, stop, 1)]
+                if indices.size:
+                    stopii = indices[-1] + 1 # somewhat hacky, but correct!
+                else:
+                    stopii = 0
+                masks[axis].append(np.arange(start, stopii, 1))
+
+            for name in ['x', 'weights']:
+                arrays = getattr(self, '{}{}'.format(name, axis))
+                if arrays is not None:
+                    for ii, proj in enumerate(projs):
+                        selfii = selfprojs.index(proj)
+                        arrays[selfii] = arrays[selfii][masks[axis][ii]]
+
+        for iin, projin in enumerate(inprojs['in']):
+            selfiin = self.projsin.index(projin)
+            for iout, projout in enumerate(inprojs['out']):
+                selfiout = self.projsout.index(projout)
+                self.value[selfiin][selfiout] = self.value[selfiin][selfiout][np.ix_(masks['in'][iin], masks['out'][iout])]
+
+        self.value = np.bmat(self.value).A
+        if not all(f == 1 for f in factors.values()):
+            self.rebin_x(factorin=factors['in'], factorout=factors['out'], projsin=inprojs['in'], projsout=inprojs['out'])
+
     def select_x(self, xinlim=None, xoutlim=None, projsin=None, projsout=None):
         """
         Restrict current instance to provided coordinate limits in place.
@@ -349,6 +427,7 @@ class BaseMatrix(BaseClass):
             List of output projections to apply limits to.
             Defaults to :attr:`projsout`.
         """
+        # One could also set the slices, and call slice_x, but this is inefficient in case x is different for each projection
         self.value = self.unpacked() # unpack first, as based on :attr:`xin`, :attr:`xout`
 
         inprojs, masks = {}, {}

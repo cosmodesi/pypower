@@ -70,6 +70,12 @@ def test_matrix():
     matrix.rebin_x(factorout=2)
     assert len(matrix.xout[0]) == len(xout)//2
     assert matrix.shape == (len(matrix.projsin) * len(matrix.xin[0]), len(matrix.projsout) * len(matrix.xout[0]))
+    matrix2 = matrix.copy()
+    matrix2.slice_x(slicein=slice(10), projsin=0)
+    assert matrix2.shape == (10 + (len(matrix.projsin) - 1) * len(matrix.xin[0]), len(matrix.projsout) * len(matrix.xout[0]))
+    matrix2 = matrix2[:10:2,:4]
+    assert matrix2.shape == (len(matrix.projsin) * 5, len(matrix.projsout) * 4)
+    assert matrix2[:0,:0].shape == (0, 0)
 
     projsin = [Projection(5, 1)]
     matrix2 = BaseMatrix(matrix.value[:len(matrix.xin[0])*len(projsin),:], matrix.xin[0], matrix.xout, projsin, matrix.projsout, weightsin=matrix.weightsin[0], weightsout=matrix.weightsout)
@@ -127,6 +133,8 @@ if __name__ == '__main__':
 
     setup_logging()
 
+    import pypower
+    print(pypower.__file__)
     test_deriv()
     test_matrix()
     test_projection()
