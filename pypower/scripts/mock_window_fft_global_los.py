@@ -30,7 +30,7 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import EulerianLinearMock
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import CatalogFFTPower, CatalogFFTWindow, PowerSpectrumFFTWindowMatrix, setup_logging
+from pypower import CatalogFFTPower, CatalogFFTWindow, PowerSpectrumFFTWindowMatrix, utils, setup_logging
 
 
 logger = logging.getLogger('FFTWindowGlobalLOS')
@@ -44,14 +44,18 @@ bias = 1.5
 boxsize = 1000.
 boxcenter = np.array([600., 0., 0.])
 nbar = 5e-4
-edgesin = np.linspace(1e-5, 0.4, 101)
+#edgesin = np.linspace(1e-5, 0.4, 201)
+edgesin = np.linspace(0.2, 0.25, 10)
 
 # Change paths here if you wish
 base_dir = '_results'
+plot_dir = '_plots'
 mock_fn = os.path.join(base_dir, 'mock_fft_global_los_{}.npy')
 window_fn = os.path.join(base_dir, 'window_fft_global_los_{}.npy')
-plot_poles_fn = os.path.join(base_dir, 'power_window_fft_global_los_poles.png')
-plot_wedges_fn = os.path.join(base_dir, 'power_window_fft_global_los_wedges.png')
+plot_window_matrix_fn = os.path.join(plot_dir, 'window_fft_global_los_matrix_poles.png')
+plot_window_integ_fn = os.path.join(plot_dir, 'window_fft_global_los_integ_poles.png')
+plot_poles_fn = os.path.join(plot_dir, 'power_window_fft_global_los_poles.png')
+plot_wedges_fn = os.path.join(plot_dir, 'power_window_fft_global_los_wedges.png')
 
 
 def run_mock(imock=0):
@@ -66,7 +70,7 @@ def run_mock(imock=0):
     randoms = RandomBoxCatalog(nbar=10*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=seed)
     data['Weight'] = mock.readout(data['Position'], field='delta', resampler='cic', compensate=True) + 1.
 
-    ells = (0, 2, 4);  edges = (np.linspace(0., 0.4, 81), np.linspace(-1., 1., 7))
+    ells = (0, 2);  edges = (np.linspace(0., 0.4, 81), np.linspace(-1., 1., 7))
     power = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], ells=ells, los=los, edges=edges,
                             boxsize=2000., boxcenter=boxcenter, nmesh=256, resampler='tsc', interlacing=3, position_type='pos')
     power.save(mock_fn.format(imock))
@@ -76,7 +80,7 @@ def run_window(icut=0, ncuts=1):
     power = CatalogFFTPower.load(mock_fn.format(0))
     randoms = RandomBoxCatalog(nbar=10*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=42)
     start, stop = icut*(len(edgesin) - 1)//ncuts, (icut + 1)*(len(edgesin) - 1)//ncuts + 1
-    window = CatalogFFTWindow(randoms_positions1=randoms['Position'], edgesin=edgesin[start:stop], power_ref=power, position_type='pos')
+    window = CatalogFFTWindow(randoms_positions1=randoms['Position'], edgesin=edgesin[start:stop], projsin=[0], power_ref=power, position_type='pos')
     window.save(window_fn.format(icut))
 
 
@@ -105,7 +109,40 @@ def mock_mean(name='poles'):
     return np.mean(powers, axis=0), np.std(powers, axis=0, ddof=1)/len(powers)**0.5
 
 
+def plot_window():
+    utils.mkdir(plot_dir)
+    window = CatalogFFTWindow.load(window_fn.format('all')).poles
+    unpacked = window.unpacked()
+    fig, lax = plt.subplots(len(window.projsout), len(window.projsin), figsize=(15, 10), squeeze=False)
+    for iprojin, projin in enumerate(window.projsin):
+        for iprojout, projout in enumerate(window.projsout):
+            # Indices in approximative window matrix
+            print(projout, unpacked[iprojin][iprojout][0,:])
+            lax[iprojout][iprojin].plot(window.xout[iprojout], unpacked[iprojin][iprojout][0,:])
+            lax[iprojout][iprojin].set_title('${}$ x ${}$'.format(projin.latex(), projout.latex()))
+    logger.info('Saving figure to {}.'.format(plot_window_matrix_fn))
+    fig.savefig(plot_window_matrix_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
+    plt.close(fig)
+
+
+def plot_window_integ():
+    utils.mkdir(plot_dir)
+    window = CatalogFFTWindow.load(window_fn.format('all')).poles
+    integ = np.array_split(window.value.sum(axis=0), np.cumsum(window.nx[-1]))
+    ax = plt.gca()
+    for iproj, proj in enumerate(window.projsout):
+        ax.plot(window.xout[iproj], integ[iproj], label=proj.latex(inline=True))
+    ax.legend()
+    ax.grid(True)
+    ax.set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
+    logger.info('Saving figure to {}.'.format(plot_window_integ_fn))
+    fig = plt.gcf()
+    fig.savefig(plot_window_integ_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
+    plt.close(fig)
+
+
 def plot_poles():
+    utils.mkdir(plot_dir)
     window = CatalogFFTWindow.load(window_fn.format('all')).poles
     kin = window.xin[0]
     kout = window.xout[0]
@@ -141,6 +178,7 @@ def plot_poles():
 
 
 def plot_wedges():
+    utils.mkdir(plot_dir)
     window = CatalogFFTWindow.load(window_fn.format('all')).wedges
     kin = window.xin[0]
     muedges = window.attrs['edges'][1]
@@ -202,6 +240,8 @@ def main(args=None):
         window.save(window_fn.format('all'))
 
     if opt.todo == 'plot':
+        plot_window()
+        plot_window_integ()
         plot_poles()
         plot_wedges()
 

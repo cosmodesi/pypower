@@ -27,7 +27,7 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import EulerianLinearMock
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import CatalogFFTPower, CatalogSmoothWindow, PowerSpectrumSmoothWindow, PowerSpectrumOddWideAngleMatrix, PowerSpectrumSmoothWindowMatrix, setup_logging
+from pypower import CatalogFFTPower, CatalogSmoothWindow, PowerSpectrumSmoothWindow, PowerSpectrumOddWideAngleMatrix, PowerSpectrumSmoothWindowMatrix, utils, setup_logging
 
 
 logger = logging.getLogger('SmoothWindow')
@@ -44,12 +44,13 @@ nbar = 1e-3
 
 # Change paths here if you wish
 base_dir = '_results'
+plot_dir = '_plots'
 mock_fn = os.path.join(base_dir, 'mock_smooth_local_los_{}.npy')
 window_poles_fn = os.path.join(base_dir, 'window_smooth_local_los_poles_{}.npy')
 window_fn = os.path.join(base_dir, 'window_smooth_local_los_all.npy')
-plot_window_fn = os.path.join(base_dir, 'window_smooth_local_los_poles.png')
-plot_window_real_fn = os.path.join(base_dir, 'window_smooth_local_los_real_poles.png')
-plot_poles_fn = os.path.join(base_dir, 'power_window_smooth_local_los_poles.png')
+plot_window_fn = os.path.join(plot_dir, 'window_smooth_local_los_poles.png')
+plot_window_real_fn = os.path.join(plot_dir, 'window_smooth_local_los_real_poles.png')
+plot_poles_fn = os.path.join(plot_dir, 'power_window_smooth_local_los_poles.png')
 
 
 def run_mock(imock=0):
@@ -98,8 +99,8 @@ def plot_window():
     ax.grid(True)
     ax.set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
     ax.set_ylabel(r'$P(k)$ [$(\mathrm{Mpc}/h)^{3}$]')
-    fig = plt.gcf()
     logger.info('Saving figure to {}.'.format(plot_window_fn))
+    fig = plt.gcf()
     fig.savefig(plot_window_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
     plt.close(fig)
 
@@ -112,8 +113,8 @@ def plot_window():
     ax.set_xscale('log')
     ax.set_xlabel('$s$ [$\mathrm{Mpc}/h$]')
     ax.set_ylabel(r'$W_{\ell}^{(n)}(s)$')
-    fig = plt.gcf()
     logger.info('Saving figure to {}.'.format(plot_window_real_fn))
+    fig = plt.gcf()
     fig.savefig(plot_window_real_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
     plt.close(fig)
 
@@ -135,6 +136,7 @@ def mock_mean(name='poles'):
 
 
 def plot_poles():
+    utils.mkdir(plot_dir)
     window = PowerSpectrumSmoothWindowMatrix.load(window_fn)
     window_wa = window.copy()
     window_wa.resum_input_odd_wide_angle()

@@ -27,7 +27,7 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import EulerianLinearMock
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import CatalogFFTPower, CatalogSmoothWindow, PowerSpectrumOddWideAngleMatrix, PowerSpectrumSmoothWindowMatrix, setup_logging
+from pypower import CatalogFFTPower, CatalogSmoothWindow, PowerSpectrumSmoothWindow, PowerSpectrumOddWideAngleMatrix, PowerSpectrumSmoothWindowMatrix, utils, setup_logging
 
 
 logger = logging.getLogger('SmoothWindowGlobalLOS')
@@ -44,11 +44,13 @@ nbar = 1e-3
 
 # Change paths here if you wish
 base_dir = '_results'
+plot_dir = '_plots'
 mock_fn = os.path.join(base_dir, 'mock_smooth_global_los_{}.npy')
 window_poles_fn = os.path.join(base_dir, 'window_smooth_global_los_poles.npy')
 window_fn = os.path.join(base_dir, 'window_smooth_global_los_all.npy')
-plot_window_fn = os.path.join(base_dir, 'window_smooth_global_los_poles.png')
-plot_poles_fn = os.path.join(base_dir, 'power_smooth_global_los_poles.png')
+plot_window_real_fn = os.path.join(plot_dir, 'window_smooth_global_los_real_poles.png')
+plot_window_integ_fn = os.path.join(plot_dir, 'window_smooth_global_los_integ_poles.png')
+plot_poles_fn = os.path.join(plot_dir, 'power_smooth_global_los_poles.png')
 
 
 def run_mock(imock=0):
@@ -100,6 +102,7 @@ def mock_mean(name='poles'):
 
 
 def plot_window():
+    utils.mkdir(plot_dir)
     window = PowerSpectrumSmoothWindow.load(window_poles_fn)
     window_real = window.to_real(sep=np.geomspace(1e-2, 4e3, 2048))
     ax = plt.gca()
@@ -110,11 +113,31 @@ def plot_window():
     ax.set_xscale('log')
     ax.set_xlabel('$s$ [$\mathrm{Mpc}/h$]')
     ax.set_ylabel(r'$W_{\ell}^{(n)}(s)$')
-    plt.gcf().savefig(plot_window_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
+    logger.info('Saving figure to {}.'.format(plot_window_real_fn))
+    fig = plt.gcf()
+    fig.savefig(plot_window_real_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
+    plt.close(fig)
+
+
+def plot_window_integ():
+    utils.mkdir(plot_dir)
+    window = PowerSpectrumSmoothWindowMatrix.load(window_fn)
+    window.select_x(xinlim=(0.2, 0.25))
+    integ = np.array_split(window.value.sum(axis=0), np.cumsum(window.nx[-1]))
+    ax = plt.gca()
+    for iproj, proj in enumerate(window.projsout):
+        ax.plot(window.xout[iproj], integ[iproj], label=proj.latex(inline=True))
+    ax.legend()
+    ax.grid(True)
+    ax.set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
+    logger.info('Saving figure to {}.'.format(plot_window_integ_fn))
+    fig = plt.gcf()
+    fig.savefig(plot_window_integ_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
     plt.close(fig)
 
 
 def plot_poles():
+    utils.mkdir(plot_dir)
     window = PowerSpectrumSmoothWindowMatrix.load(window_fn)
     kin = window.xin[0]
     kout = window.xout[0]
@@ -168,6 +191,8 @@ def main(args=None):
         run_window()
 
     if opt.todo == 'plot':
+        plot_window()
+        plot_window_integ()
         plot_poles()
 
 

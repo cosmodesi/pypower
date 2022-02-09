@@ -30,7 +30,7 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import EulerianLinearMock
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import CatalogFFTPower, CatalogFFTWindow, PowerSpectrumFFTWindowMatrix, setup_logging
+from pypower import CatalogFFTPower, CatalogFFTWindow, PowerSpectrumFFTWindowMatrix, utils, setup_logging
 
 
 logger = logging.getLogger('FFTWindow')
@@ -48,9 +48,10 @@ edgesin = np.linspace(1e-5, 0.4, 51)
 
 # Change paths here if you wish
 base_dir = '_results'
+plot_dir = '_plots'
 mock_fn = os.path.join(base_dir, 'mock_fft_local_los_{}.npy')
 window_fn = os.path.join(base_dir, 'window_fft_local_los_{}.npy')
-plot_poles_fn = os.path.join(base_dir, 'power_window_fft_local_los_poles.png')
+plot_poles_fn = os.path.join(plot_dir, 'power_window_fft_local_los_poles.png')
 
 
 def run_mock(imock=0):
@@ -95,6 +96,7 @@ def mock_mean(name='poles'):
 
 
 def plot_poles():
+    utils.mkdir(plot_dir)
     window = PowerSpectrumFFTWindowMatrix.load(window_fn.format('all'))
     window_wa = window.copy()
     window_wa.resum_input_odd_wide_angle()

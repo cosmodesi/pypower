@@ -59,9 +59,9 @@ class MemoryMonitor(object):
 
 
 def test_deriv(plot=False):
-    kedges = np.linspace(0.001, 1., 4)
+    kedges = np.array([0.1, 0.12, 0.14])
 
-    for ell in [0, 2, 4]:
+    for ell in [0, 1, 2, 3, 4]:
 
         fana = get_correlation_function_tophat_derivative(kedges, ell=ell)
         assert len(fana) == len(kedges) - 1
@@ -219,6 +219,6 @@ def test_fft_window():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_deriv()
+    test_deriv()
     #test_fft()
-    test_fft_window()
+    #test_fft_window()

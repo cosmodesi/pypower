@@ -274,7 +274,7 @@ class PowerToCorrelation(FFTlog):
             Power-law tilt(s) to regularise integration.
 
         complex : bool, default=False
-            ``False`` returns the real part of even poles, and the imaginary part of odd poles.
+            ``False`` assumes the imaginary part of odd power spectrum poles is provided.
 
         kwargs : dict
             Arguments for :class:`FFTlog`.
@@ -290,8 +290,10 @@ class PowerToCorrelation(FFTlog):
         if complex:
             phase = (-1j) ** ell
         else:
-            # We return imaginary part of odd poles
-            phase = (-1)**((ell + 1)//2)
+            # Prefactor is (-i)^ell, but we take in the imaginary part of odd power spectra, hence:
+            # (-i)^ell = (-1)^(ell/2) if ell is even
+            # (-i)^ell i = (-1)^(ell//2) if ell is odd
+            phase = (-1)**(ell//2)
         # Not in-place as phase (and hence padded_postfactor) may be complex instead of float
         self.padded_postfactor = self.padded_postfactor * phase[:,None]
 

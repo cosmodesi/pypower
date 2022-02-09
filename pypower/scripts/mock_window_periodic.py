@@ -30,7 +30,7 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import EulerianLinearMock
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import MeshFFTPower, CatalogFFTPower, MeshFFTWindow, setup_logging
+from pypower import MeshFFTPower, CatalogFFTPower, MeshFFTWindow, utils, setup_logging
 
 
 logger = logging.getLogger('PeriodicWindow')
@@ -46,10 +46,11 @@ edgesin = np.linspace(0., 0.4, 101)
 
 # Change paths here if you wish
 base_dir = '_results'
+plot_dir = '_plots
 mock_fn = os.path.join(base_dir, 'mock_periodic_{}.npy')
 window_fn = os.path.join(base_dir, 'window_periodic_{}.npy')
-plot_poles_fn = os.path.join(base_dir, 'power_window_periodic_poles.png')
-plot_wedges_fn = os.path.join(base_dir, 'power_window_periodic_wedges.png')
+plot_poles_fn = os.path.join(plot_dir, 'power_window_periodic_poles.png')
+plot_wedges_fn = os.path.join(plot_dir, 'power_window_periodic_wedges.png')
 
 
 def run_mock(imock=0, sample=True):
@@ -107,6 +108,7 @@ def mock_mean(name='poles'):
 
 
 def plot_poles():
+    utils.mkdir(plot_dir)
     window = MeshFFTWindow.load(window_fn.format('all')).poles
     kin = window.xin[0]
     kout = window.xout[0]
@@ -142,6 +144,7 @@ def plot_poles():
 
 
 def plot_wedges():
+    utils.mkdir(plot_dir)
     window = MeshFFTWindow.load(window_fn.format('all')).wedges
     kin = window.xin[0]
     muedges = window.attrs['edges'][1]

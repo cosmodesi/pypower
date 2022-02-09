@@ -20,7 +20,9 @@ Si = lambda x: special.sici(x)[0]
 # derivative of correlation function w.r.t. k-bins, precomputed with sympy
 _correlation_function_tophat_derivatives = {}
 _correlation_function_tophat_derivatives[0] = lambda s, a, b: (-(-a*np.cos(a*s)/s + np.sin(a*s)/s**2)/s + (-b*np.cos(b*s)/s + np.sin(b*s)/s**2)/s)/(2*np.pi**2)
+_correlation_function_tophat_derivatives[1] = lambda s, a, b: (-(-a*np.sin(a*s) - 2*np.cos(a*s)/s)/s**2 + (-b*np.sin(b*s) - 2*np.cos(b*s)/s)/s**2)/(2*np.pi**2)
 _correlation_function_tophat_derivatives[2] = lambda s, a, b: -(-(a*s*np.cos(a*s) - 4*np.sin(a*s) + 3*Si(a*s))/s**3 + (b*s*np.cos(b*s) - 4*np.sin(b*s) + 3*Si(b*s))/s**3)/(2*np.pi**2)
+_correlation_function_tophat_derivatives[3] = lambda s, a, b: -(-(a*s**2*np.sin(a*s) + 7*s*np.cos(a*s) - 15*np.sin(a*s)/a)/s**4 + (b*s**2*np.sin(b*s) + 7*s*np.cos(b*s) - 15*np.sin(b*s)/b)/s**4)/(2*np.pi**2)
 _correlation_function_tophat_derivatives[4] = lambda s, a, b: (-(-a*s**3*np.cos(a*s) + 11*s**2*np.sin(a*s) + 15*s**2*Si(a*s)/2 + 105*s*np.cos(a*s)/(2*a) - 105*np.sin(a*s)/(2*a**2))/s**5 +\
                                                               (-b*s**3*np.cos(b*s) + 11*s**2*np.sin(b*s) + 15*s**2*Si(b*s)/2 + 105*s*np.cos(b*s)/(2*b) - 105*np.sin(b*s)/(2*b**2))/s**5)/(2*np.pi**2)
 
@@ -61,8 +63,6 @@ def get_correlation_function_tophat_derivative(kedges, ell=0, k=None, **kwargs):
     toret : list
         List of callables, taking configuration-space separation ``s`` as input.
     """
-    try: import numexpr
-    except ImportError: numexpr = None
 
     if k is None:
         if ell in _correlation_function_tophat_derivatives:
@@ -74,8 +74,8 @@ def get_correlation_function_tophat_derivative(kedges, ell=0, k=None, **kwargs):
                 raise ImportError('Install sympy to for analytic computation') from exc
             k, s, a, b = sp.symbols('k s a b', real=True, positive=True)
             integrand = sp.simplify(k**2 * sp.expand_func(sp.jn(ell, k*s)))
-            # i^ell; we provide the imaginary part of the odd correlation function multipoles
-            expr = (-1)**(ell//2)/(2*sp.pi**2) * sp.integrate(integrand, (k, a, b))
+            # i^ell; we take in the imaginary part of the odd power spectrum multipoles
+            expr = (-1)**(ell//2) / (2*sp.pi**2) * sp.integrate(integrand, (k, a, b))
             fun = sp.lambdify((s, a, b), expr, modules=['numpy', {'Si': Si}])
 
         def _make_fun(kmin, kmax):
@@ -87,7 +87,7 @@ def get_correlation_function_tophat_derivative(kedges, ell=0, k=None, **kwargs):
 
         return toret
 
-    fftlog = PowerToCorrelation(k, ell=ell, **kwargs)
+    fftlog = PowerToCorrelation(k, ell=ell, complex=False, **kwargs)
 
     def _make_fun(sep, fun):
         return lambda s: np.interp(s, sep, fun)
@@ -97,9 +97,7 @@ def get_correlation_function_tophat_derivative(kedges, ell=0, k=None, **kwargs):
         tophat = np.zeros_like(k)
         tophat[(k >= kmin) & (k <= kmax)] = 1.
         sep, fun = fftlog(tophat)
-        # current prefactor is i^ell
-        fun = fun * (-1j)**ell * (-1)**(ell//2) # we provide the imaginary part of the odd correlation function multipoles
-        toret.append(_make_fun(sep, fun.real))
+        toret.append(_make_fun(sep, fun))
     return toret
 
 
@@ -268,7 +266,7 @@ class MeshFFTWindow(MeshFFTPower):
             Output multipole orders.
             If ``None``, defaults to the multipoles used in estimation of ``power_ref``.
 
-        los : string, array, default='firstpoint'
+        los : string, array, default=None
             If ``los`` is 'firstpoint' (resp. 'endpoint'), use local (varying) first point (resp. end point) line-of-sight.
             Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
             Else, a 3-vector.
@@ -295,7 +293,7 @@ class MeshFFTWindow(MeshFFTPower):
             rescaled to the input random weights --- which yields a correct normalization of the window function
             for the power spectrum estimation ``power_ref``.
             If ``power_ref`` provided, use internal estimate obtained with :func:`normalization` --- which is wrong
-            (the normalieation :attr:`poles.wnorm` can be reset a posteriori using the above recipe).
+            (the normalization :attr:`poles.wnorm` can be reset a posteriori using the above recipe).
         """
         if power_ref is not None:
 
@@ -559,10 +557,10 @@ class MeshFFTWindow(MeshFFTPower):
             else:
                 cfield2 = cfield1 = self.mesh1.r2c()
                 # Set mean value or real field to 0
-                for i, c1 in zip(cfield1.slabs.i, cfield1.slabs):
-                    mask_zero = True
-                    for ii in i: mask_zero = mask_zero & (ii == 0)
-                    c1[mask_zero] = 0.
+                #for i, c1 in zip(cfield1.slabs.i, cfield1.slabs):
+                #    mask_zero = True
+                #    for ii in i: mask_zero = mask_zero & (ii == 0)
+                #    c1[mask_zero] = 0.
 
                 if self.autocorr:
                     self._compensate(cfield1, self.compensations[0])

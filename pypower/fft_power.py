@@ -985,7 +985,7 @@ class MeshFFTPower(BaseClass):
         Estimated power spectrum wedges (if relevant).
     """
 
-    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los='firstpoint', boxcenter=None, compensations=None, wnorm=None, shotnoise=None):
+    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None):
         r"""
         Initialize :class:`MeshFFTPower`, i.e. estimate power spectrum.
 
@@ -1018,7 +1018,7 @@ class MeshFFTPower(BaseClass):
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
 
-        los : string, array, default='firstpoint'
+        los : string, array, default=None
             If ``los`` is 'firstpoint' (resp. 'endpoint'), use local (varying) first point (resp. end point) line-of-sight.
             Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
             Else, a 3-vector.
@@ -1160,9 +1160,9 @@ class MeshFFTPower(BaseClass):
                 # find unique edges
                 k = [k.real for k in self.pm.create_coords('complex')]
                 dk = 2 * np.pi / self.boxsize
-                kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax*(1+1e-6), mpicomm=self.mpicomm) # margin required for float32
+                kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax+1e-5*dk, mpicomm=self.mpicomm) # margin required for float32
             else:
-                kedges = np.arange(kmin, kmax*(1+1e-6), dk)
+                kedges = np.arange(kmin, kmax+1e-5*dk, dk)
         if self.mpicomm.rank == 0:
             self.log_info('Using {:d} k-bins between {:.3f} and {:.3f}.'.format(len(kedges) - 1, kedges[0], kedges[-1]))
         if muedges is None:
