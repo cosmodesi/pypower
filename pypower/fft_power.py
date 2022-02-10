@@ -12,6 +12,7 @@ import time
 
 import numpy as np
 from scipy.interpolate import UnivariateSpline, RectBivariateSpline
+from scipy import special
 from pmesh.pm import RealField, ComplexField
 
 from .utils import BaseClass
@@ -82,10 +83,7 @@ def get_real_Ylm(ell, m, modules=None):
     elif 'sympy' in modules:
         import sympy as sp
 
-    elif 'scipy' in modules:
-        from scipy import special
-
-    else:
+    elif 'scipy' not in modules:
         raise ValueError('modules must be either ["sympy", "scipy", None]')
 
     # sympy is not installed, fallback to scipy
@@ -877,7 +875,7 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
 
     .. math::
 
-        A = dV \frac{\alpha_{2} \sum_{i} n_{d,1}^{i} n_{r,2}^{i} + \alpha_{1} \sum_{i} n_{d,2}^{i} n_{r,1}^{i}}{2}
+        A = 1/dV \frac{\alpha_{2} \sum_{i} n_{d,1}^{i} n_{r,2}^{i} + \alpha_{1} \sum_{i} n_{d,2}^{i} n_{r,1}^{i}}{2}
 
     :math:`n_{d,1}^{i}` and :math:`n_{r,1}^{i}` are the first data and randoms density meshes, as obtained by
     painting data :math:`w_{d}` and random weights :math:`w_{r}` on the same mesh (of cell volume :math:`dV`),
@@ -1318,7 +1316,7 @@ class MeshFFTPower(BaseClass):
         self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
 
         if result_poles:
-            # Format the power results into :class:`PolePowerSpectrum` instance
+            # Format the power results into :class:`PowerSpectrumMultipoles` instance
             k, power, nmodes = result_poles[:3]
             # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
             power = self.nmesh.prod()**2 * power.conj()
@@ -1462,7 +1460,7 @@ class MeshFFTPower(BaseClass):
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
         poles = self.nmesh.prod()**2 * np.array([result[ells.index(ell)] for ell in self.ells]).conj()
         if swap: poles = poles.conj()
-        # Format the power results into :class:`PolePowerSpectrum` instance
+        # Format the power results into :class:`PowerSpectrumMultipoles` instance
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
         self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
@@ -1481,7 +1479,7 @@ class CatalogFFTPower(MeshFFTPower):
                 D1D2_twopoint_weights=None, D1R2_twopoint_weights=None, D2R1_twopoint_weights=None, D1S2_twopoint_weights=None, D2S1_twopoint_weights=None,
                 edges=None, ells=(0, 2, 4), los=None,
                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
-                resampler='cic', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
+                resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
                 direct_engine='kdtree', direct_limits=(0., 2./60.), direct_limit_type='degree', periodic=False,
                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
@@ -1582,7 +1580,7 @@ class CatalogFFTPower(MeshFFTPower):
         dtype : string, dtype, default='f8'
             The data type to use for input positions and weights and the mesh.
 
-        resampler : string, ResampleWindow, default='cic'
+        resampler : string, ResampleWindow, default='tsc'
             Resampler used to assign particles to the mesh.
             Choices are ['ngp', 'cic', 'tcs', 'pcs'].
 

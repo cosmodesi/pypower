@@ -414,7 +414,7 @@ class CatalogSmoothWindow(MeshFFTPower):
                 edges=None, projs=None, power_ref=None,
                 los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype=None,
                 resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
-                wnorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogSmoothWindow`, i.e. estimate power spectrum window.
 
@@ -529,6 +529,10 @@ class CatalogSmoothWindow(MeshFFTPower):
             If ``power_ref`` provided, use internal estimate obtained with :func:`normalization` --- which is wrong
             (the normalization :attr:`poles.wnorm` can be reset a posteriori using the above recipe).
 
+        shotnoise : float, default=None
+            Window function shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
+            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise` by window function normalization.
+
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scatted across all ranks.
             Else the MPI rank where input positions and weights are gathered.
@@ -609,7 +613,7 @@ class CatalogSmoothWindow(MeshFFTPower):
 
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_box(**mesh_attrs, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
-        if resampler is None: resampler = 'cic'
+        if resampler is None: resampler = 'tsc'
         if interlacing is None: interlacing = 2
         if not isinstance(resampler, tuple):
             resampler = (resampler,)*2
@@ -654,8 +658,8 @@ class CatalogSmoothWindow(MeshFFTPower):
                 else:
                     mesh2_wa = mesh2
             # Now, run power spectrum estimation
-            super(CatalogSmoothWindow, self).__init__(mesh1=mesh1_wa, mesh2=mesh2_wa, edges=edges, ells=ells, los=los, wnorm=wnorm)
-            if autocorr and wa_order != 0: # when providing 2 meshes, shotnoise estimate is 0; correct this here
+            super(CatalogSmoothWindow, self).__init__(mesh1=mesh1_wa, mesh2=mesh2_wa, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
+            if autocorr and shotnoise is None and wa_order != 0: # when providing 2 meshes, shot noise estimate is 0; correct this here
                 self.poles.shotnoise_nonorm = mesh1_wa.mpicomm.allreduce(sum(mesh1_wa.data_weights*mesh2_wa.data_weights))
             poles.append(PowerSpectrumSmoothWindow.from_power(self.poles, wa_order=wa_order))
 

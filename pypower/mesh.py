@@ -232,7 +232,7 @@ class CatalogMesh(BaseClass):
     def __init__(self, data_positions, data_weights=None, randoms_positions=None, randoms_weights=None,
                  shifted_positions=None, shifted_weights=None,
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
-                 resampler='cic', interlacing=2, position_type='xyz', mpiroot=None, mpicomm=MPI.COMM_WORLD):
+                 resampler='tsc', interlacing=2, position_type='xyz', mpiroot=None, mpicomm=MPI.COMM_WORLD):
         """
         Initialize :class:`CatalogMesh`.
 
@@ -289,7 +289,7 @@ class CatalogMesh(BaseClass):
             The data type to use for the mesh.
             Input ``positions`` and ``weights`` are cast to the corresponding (real) precision.
 
-        resampler : string, ResampleWindow, default='cic'
+        resampler : string, ResampleWindow, default='tsc'
             Resampler used to assign particles to the mesh.
             Choices are ['ngp', 'cic', 'tcs', 'pcs'].
 

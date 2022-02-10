@@ -48,9 +48,10 @@ plot_dir = '_plots'
 mock_fn = os.path.join(base_dir, 'mock_smooth_global_los_{}.npy')
 window_poles_fn = os.path.join(base_dir, 'window_smooth_global_los_poles.npy')
 window_fn = os.path.join(base_dir, 'window_smooth_global_los_all.npy')
+plot_window_fn = os.path.join(plot_dir, 'window_smooth_global_los_poles.png')
 plot_window_real_fn = os.path.join(plot_dir, 'window_smooth_global_los_real_poles.png')
 plot_window_integ_fn = os.path.join(plot_dir, 'window_smooth_global_los_integ_poles.png')
-plot_poles_fn = os.path.join(plot_dir, 'power_smooth_global_los_poles.png')
+plot_poles_fn = os.path.join(plot_dir, 'power_window_smooth_global_los_poles.png')
 
 
 def run_mock(imock=0):
@@ -104,6 +105,18 @@ def mock_mean(name='poles'):
 def plot_window():
     utils.mkdir(plot_dir)
     window = PowerSpectrumSmoothWindow.load(window_poles_fn)
+    ax = plt.gca()
+    for iproj, proj in enumerate(window.projs):
+        ax.loglog(window.k, np.abs(window(proj=proj, complex=False)), label=proj.latex(inline=True))
+    ax.legend(loc=1)
+    ax.grid(True)
+    ax.set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
+    ax.set_ylabel(r'$W(k)$')
+    logger.info('Saving figure to {}.'.format(plot_window_fn))
+    fig = plt.gcf()
+    fig.savefig(plot_window_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
+    plt.close(fig)
+
     window_real = window.to_real(sep=np.geomspace(1e-2, 4e3, 2048))
     ax = plt.gca()
     for iproj, proj in enumerate(window_real.projs):
@@ -156,7 +169,7 @@ def plot_poles():
         lax[0].plot(kin, kin*model_theory[ill], linestyle=':', color='C{:d}'.format(ill), label='theory' if ill == 0 else None)
     for ill, ell in enumerate(ells):
         lax[0].fill_between(kout, kout*(mean[ill] - std[ill]), kout*(mean[ill] + std[ill]), alpha=0.5, facecolor='C{:d}'.format(ill), linewidth=0, label='mocks' if ill == 0 else None)
-        lax[0].plot(kout, kout*model_conv[ill], linestyle='--', color='C{:d}'.format(ill), label='theory * conv' if ill == 0 else None)
+        lax[0].plot(kout, kout*model_conv[ill], linestyle='--', color='C{:d}'.format(ill), label='theory * window' if ill == 0 else None)
     for ill, ell in enumerate(ells):
         lax[ill+1].plot(kout, (model_conv[ill] - mean[ill])/std[ill], linestyle='--', color='C{:d}'.format(ill))
         lax[ill+1].set_ylim(-4, 4)

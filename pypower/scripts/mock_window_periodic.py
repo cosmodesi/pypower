@@ -46,7 +46,7 @@ edgesin = np.linspace(0., 0.4, 101)
 
 # Change paths here if you wish
 base_dir = '_results'
-plot_dir = '_plots
+plot_dir = '_plots'
 mock_fn = os.path.join(base_dir, 'mock_periodic_{}.npy')
 window_fn = os.path.join(base_dir, 'window_periodic_{}.npy')
 plot_poles_fn = os.path.join(plot_dir, 'power_window_periodic_poles.png')
@@ -127,7 +127,7 @@ def plot_poles():
         lax[0].plot(kin, kin*model_theory[ill], linestyle=':', color='C{:d}'.format(ill), label='theory' if ill == 0 else None)
     for ill, ell in enumerate(ells):
         lax[0].fill_between(kout, kout*(mean[ill] - std[ill]), kout*(mean[ill] + std[ill]), alpha=0.5, facecolor='C{:d}'.format(ill), linewidth=0, label='mocks' if ill == 0 else None)
-        lax[0].plot(kout, kout*model_conv[ill], linestyle='-', color='C{:d}'.format(ill), label='theory * conv' if ill == 0 else None)
+        lax[0].plot(kout, kout*model_conv[ill], linestyle='-', color='C{:d}'.format(ill), label='theory * window' if ill == 0 else None)
     for ill, ell in enumerate(ells):
         lax[ill+1].plot(kout, (model_conv[ill] - mean[ill])/std[ill], linestyle='-', color='C{:d}'.format(ill))
         lax[ill+1].set_ylim(-4, 4)
@@ -169,7 +169,7 @@ def plot_wedges():
         lax[0].plot(kin, kin*model_theory[imu], linestyle=':', color='C{:d}'.format(imu), label='theory' if imu == 0 else None)
     for imu, mu in enumerate(muout):
         lax[0].fill_between(kout[imu], kout[imu]*(mean[imu] - std[imu]), kout[imu]*(mean[imu] + std[imu]), alpha=0.5, facecolor='C{:d}'.format(imu), linewidth=0, label='mocks' if imu == 0 else None)
-        lax[0].plot(kout[imu], kout[imu]*model_conv[imu], linestyle='-', color='C{:d}'.format(imu), label='theory * conv' if imu == 0 else None)
+        lax[0].plot(kout[imu], kout[imu]*model_conv[imu], linestyle='-', color='C{:d}'.format(imu), label='theory * window' if imu == 0 else None)
     for imu, mu in enumerate(muout):
         lax[imu+1].plot(kout[imu], (model_conv[imu] - mean[imu])/std[imu], linestyle='-', color='C{:d}'.format(imu))
         lax[imu+1].set_ylim(-4, 4)

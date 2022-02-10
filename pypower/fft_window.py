@@ -1,6 +1,6 @@
 """
 Implementation of window function estimation, following https://github.com/cosmodesi/GC_derivations,
-and https://fr.overleaf.com/project/60e99d5d5a0f5a3a220de2cc.
+and https://fr.overleaf.com/read/hpgbwqzmtcxn.
 """
 
 import numpy as np
@@ -17,14 +17,19 @@ from .direct_power import _format_positions, _format_weights
 
 
 Si = lambda x: special.sici(x)[0]
+
 # derivative of correlation function w.r.t. k-bins, precomputed with sympy
-_correlation_function_tophat_derivatives = {}
-_correlation_function_tophat_derivatives[0] = lambda s, a, b: (-(-a*np.cos(a*s)/s + np.sin(a*s)/s**2)/s + (-b*np.cos(b*s)/s + np.sin(b*s)/s**2)/s)/(2*np.pi**2)
-_correlation_function_tophat_derivatives[1] = lambda s, a, b: (-(-a*np.sin(a*s) - 2*np.cos(a*s)/s)/s**2 + (-b*np.sin(b*s) - 2*np.cos(b*s)/s)/s**2)/(2*np.pi**2)
-_correlation_function_tophat_derivatives[2] = lambda s, a, b: -(-(a*s*np.cos(a*s) - 4*np.sin(a*s) + 3*Si(a*s))/s**3 + (b*s*np.cos(b*s) - 4*np.sin(b*s) + 3*Si(b*s))/s**3)/(2*np.pi**2)
-_correlation_function_tophat_derivatives[3] = lambda s, a, b: -(-(a*s**2*np.sin(a*s) + 7*s*np.cos(a*s) - 15*np.sin(a*s)/a)/s**4 + (b*s**2*np.sin(b*s) + 7*s*np.cos(b*s) - 15*np.sin(b*s)/b)/s**4)/(2*np.pi**2)
-_correlation_function_tophat_derivatives[4] = lambda s, a, b: (-(-a*s**3*np.cos(a*s) + 11*s**2*np.sin(a*s) + 15*s**2*Si(a*s)/2 + 105*s*np.cos(a*s)/(2*a) - 105*np.sin(a*s)/(2*a**2))/s**5 +\
-                                                              (-b*s**3*np.cos(b*s) + 11*s**2*np.sin(b*s) + 15*s**2*Si(b*s)/2 + 105*s*np.cos(b*s)/(2*b) - 105*np.sin(b*s)/(2*b**2))/s**5)/(2*np.pi**2)
+_registered_correlation_function_tophat_derivatives = {}
+_registered_correlation_function_tophat_derivatives[0] = (lambda s, a: (-a*np.cos(a*s)/s + np.sin(a*s)/s**2)/(2*np.pi**2*s),
+                                                          lambda s, a: -a**9*s**6/(90720*np.pi**2) + a**7*s**4/(1680*np.pi**2) - a**5*s**2/(60*np.pi**2) + a**3/(6*np.pi**2))
+_registered_correlation_function_tophat_derivatives[1] = (lambda s, a: ((-a*np.sin(a*s) - 2*np.cos(a*s)/s)/s**2 + 2/s**3)/(2*np.pi**2),
+                                                          lambda s, a: -a**10*s**7/(907200*np.pi**2) + a**8*s**5/(13440*np.pi**2) - a**6*s**3/(360*np.pi**2) + a**4*s/(24*np.pi**2))
+_registered_correlation_function_tophat_derivatives[2] = (lambda s, a: -(a*s*np.cos(a*s) - 4*np.sin(a*s) + 3*Si(a*s))/(2*np.pi**2*s**3),
+                                                          lambda s, a: -a**9*s**6/(136080*np.pi**2) + a**7*s**4/(2940*np.pi**2) - a**5*s**2/(150*np.pi**2))
+_registered_correlation_function_tophat_derivatives[3] = (lambda s, a: -(8/s**3 + (a*s**2*np.sin(a*s) + 7*s*np.cos(a*s) - 15*np.sin(a*s)/a)/s**4)/(2*np.pi**2),
+                                                          lambda s, a: -a**10*s**7/(1663200*np.pi**2) + a**8*s**5/(30240*np.pi**2) - a**6*s**3/(1260*np.pi**2))
+_registered_correlation_function_tophat_derivatives[4] = (lambda s, a: (-a*s**3*np.cos(a*s) + 11*s**2*np.sin(a*s) + 15*s**2*Si(a*s)/2 + 105*s*np.cos(a*s)/(2*a) - 105*np.sin(a*s)/(2*a**2))/(2*np.pi**2*s**5),
+                                                          lambda s, a: -a**9*s**6/(374220*np.pi**2) + a**7*s**4/(13230*np.pi**2))
 
 def _get_attr_in_inst(obj, name, insts=(None,)):
     # Search for ``name`` in instances of name ``insts`` of obj
@@ -65,21 +70,35 @@ def get_correlation_function_tophat_derivative(kedges, ell=0, k=None, **kwargs):
     """
 
     if k is None:
-        if ell in _correlation_function_tophat_derivatives:
-            fun = _correlation_function_tophat_derivatives[ell]
+        if ell in _registered_correlation_function_tophat_derivatives:
+            fun, fun_lows = _registered_correlation_function_tophat_derivatives[ell]
         else:
             try:
                 import sympy as sp
             except ImportError as exc:
                 raise ImportError('Install sympy to for analytic computation') from exc
-            k, s, a, b = sp.symbols('k s a b', real=True, positive=True)
+            k, s, a = sp.symbols('k s a', real=True, positive=True)
             integrand = sp.simplify(k**2 * sp.expand_func(sp.jn(ell, k*s)))
             # i^ell; we take in the imaginary part of the odd power spectrum multipoles
-            expr = (-1)**(ell//2) / (2*sp.pi**2) * sp.integrate(integrand, (k, a, b))
-            fun = sp.lambdify((s, a, b), expr, modules=['numpy', {'Si': Si}])
+            expr = (-1)**(ell//2) / (2*sp.pi**2) * sp.integrate(integrand, (k, 0, a))
+            expr_lows = sp.series(expr, x=s, x0=0, n=8).removeO()
+            modules = ['numpy', {'Si': Si}]
+            fun = sp.lambdify((s, a), expr, modules=modules)
+            fun_lows = sp.lambdify((s, a), expr_lows, modules=modules)
 
         def _make_fun(kmin, kmax):
-            return lambda s: fun(s, kmin, kmax)
+
+            funa = fun_lows if np.abs(kmin) < 1e-4 else fun
+            funb = fun_lows if np.abs(kmax) < 1e-4 else fun
+
+            def _fun(s):
+                toret = np.empty_like(s)
+                mask = s < 1e-1
+                toret[mask] = fun_lows(s[mask], kmax) - fun_lows(s[mask], kmin)
+                toret[~mask] = funb(s[~mask], kmax) - funa(s[~mask], kmin)
+                return toret
+
+            return _fun
 
         toret = []
         for kmin, kmax in zip(kedges[:-1], kedges[1:]):
@@ -221,7 +240,8 @@ class MeshFFTWindow(MeshFFTPower):
     poles : PowerSpectrumFFTWindowMatrix
         Window matrix.
     """
-    def __init__(self, mesh1=None, mesh2=None, edgesin=None, projsin=None, power_ref=None, edges=None, ells=None, los=None, periodic=False, boxcenter=None, compensations=None, wnorm=None, **kwargs):
+    def __init__(self, mesh1=None, mesh2=None, edgesin=None, projsin=None, power_ref=None, edges=None, ells=None, los=None, periodic=False, boxcenter=None,
+                 compensations=None, wnorm=None, shotnoise=None, edgesin_type='smooth', **kwargs):
         """
         Initialize :class:`MeshFFTWindow`.
 
@@ -235,7 +255,7 @@ class MeshFFTWindow(MeshFFTPower):
 
         edgesin : dict, array, list
             An array of :math:`k`-edges which defines the theory :math:`k`-binning; corresponding derivatives will be computed
-            using :func:`get_correlation_function_tophat_derivative`; or a dictionary of such array for each theory projection.
+            (see ``edgesin_type``); or a dictionary of such array for each theory projection.
             Else a list of derivatives (callable) of theory correlation function w.r.t. each theory basis vector, e.g. each in :math:`k`-bin;
             or a dictionary of such list for each theory projection.
             If ``periodic`` is ``True``, this should correspond to the derivatives of theory *power spectrum* (instead of correlation function)
@@ -294,6 +314,17 @@ class MeshFFTWindow(MeshFFTPower):
             for the power spectrum estimation ``power_ref``.
             If ``power_ref`` provided, use internal estimate obtained with :func:`normalization` --- which is wrong
             (the normalization :attr:`poles.wnorm` can be reset a posteriori using the above recipe).
+
+        shotnoise : float, default=None
+            Window function shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
+            or both ``mesh1`` and ``mesh2`` are :class:`pmesh.pm.RealField`,
+            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise`
+            of ``mesh1`` by window function normalization.
+
+        edgesin_type : str, default='smooth'
+            Technique to transpose ``edgesin`` to Fourier space, relevant only if ``periodic`` is ``False``.
+            'smooth' uses :func:`get_correlation_function_tophat_derivative`;
+            'fourier-grid' paints ``edgesin`` on the Fourier mesh (akin to the periodic case), then takes the FFT.
         """
         if power_ref is not None:
 
@@ -321,7 +352,7 @@ class MeshFFTWindow(MeshFFTPower):
         self._set_mesh(mesh1, mesh2=mesh2, boxcenter=boxcenter)
         self._set_projsin(projsin)
         self._set_edges(edges)
-        self._set_xin(edgesin)
+        self._set_xin(edgesin, edgesin_type=edgesin_type)
 
         self.wnorm = wnorm
         if wnorm is None:
@@ -333,6 +364,12 @@ class MeshFFTWindow(MeshFFTPower):
                     self.wnorm = ialpha2 * power_ref.wnorm
                 else:
                     self.wnorm = normalization(mesh1, mesh2)
+        self.shotnoise = shotnoise
+        if shotnoise is None:
+            self.shotnoise = 0.
+            # Shot noise is non zero only if we can estimate it
+            if self.autocorr and isinstance(mesh1, CatalogMesh):
+                self.shotnoise = mesh1.unnormalized_shotnoise()/self.wnorm
         self.attrs.update(self._get_attrs())
         if self.mpicomm.rank == 0:
             self.log_info('Running window function estimation.')
@@ -368,7 +405,11 @@ class MeshFFTWindow(MeshFFTPower):
         if self.los_type == 'global' and any(proj.wa_order != 0 for proj in self.projsin):
             raise ValueError('With global line-of-sight, input wide_angle order = 0 only is supported')
 
-    def _set_xin(self, edgesin):
+    def _set_xin(self, edgesin, edgesin_type='fourier-grid'):
+        self.edgesin_type = edgesin_type.lower()
+        allowed_edgesin_type = ['smooth', 'fourier-grid']
+        if self.edgesin_type not in allowed_edgesin_type:
+            raise ValueError('edgesin_type must be one of {}'.format(allowed_edgesin_type))
         if not isinstance(edgesin, dict):
             edgesin = {proj: edgesin for proj in self.projsin}
         else:
@@ -385,7 +426,7 @@ class MeshFFTWindow(MeshFFTPower):
             else:
                 edges = np.asarray(edgesin[proj])
                 self.xin[proj] = 3./4. * (edges[1:]**4 - edges[:-1]**4) / (edges[1:]**3 - edges[:-1]**3)
-                if self.periodic:
+                if self.periodic or self.edgesin_type == 'fourier-grid':
 
                     def _make_fun(low, high):
                         return lambda k: 1. * ((k >= low) & (k < high))
@@ -406,6 +447,10 @@ class MeshFFTWindow(MeshFFTPower):
         toret = RealField(self.pm)
         toret[:] = 0.
 
+        remove_shotnoise = ellout == projin.ell == projin.wa_order == 0
+        if remove_shotnoise:
+            shotnoise = self.shotnoise*self.wnorm/self.nmesh.prod()
+
         for Ylmin in Ylmins:
 
             for islab, slab in enumerate(rfield.slabs):
@@ -419,10 +464,11 @@ class MeshFFTWindow(MeshFFTPower):
             cfield.c2r(out=rfield)
             for islab, slab in enumerate(rfield.slabs):
                 # No 1/N^6 factor due to pmesh convention
-                slab[:] = slab[:] * 4.*np.pi/(2*projin.ell + 1) * Ylmin(self.xwhat[0][islab], self.xwhat[1][islab], self.xwhat[2][islab])
-                mask_zero = True
-                for ii in slab.i: mask_zero = mask_zero & (ii == 0)
-                slab[mask_zero] = 0.
+                if remove_shotnoise:
+                    mask_zero = True
+                    for ii in slab.i: mask_zero = mask_zero & (ii == 0)
+                    slab[mask_zero] -= shotnoise
+                slab[:] *= 4.*np.pi/(2*projin.ell + 1) * Ylmin(self.xwhat[0][islab], self.xwhat[1][islab], self.xwhat[2][islab])
             toret[:] += rfield[:]
 
         return toret
@@ -437,14 +483,27 @@ class MeshFFTWindow(MeshFFTPower):
         result = []
         ells = sorted(set(self.ells))
 
-        for ellout in ells:
-            dfield = RealField(self.pm)
+        if self.edgesin_type == 'fourier-grid':
+            dfield = ComplexField(self.pm)
             for islab, slab in enumerate(dfield.slabs):
-                tmp = np.zeros_like(self.xwnorm[islab])
-                mask_nonzero = self.xwnorm[islab] != 0.
-                tmp[mask_nonzero] = deriv(self.xwnorm[islab][mask_nonzero])
+                slab[:] = deriv(self.knorm[islab])
+            dfield = dfield.c2r()
+            volume = self.boxsize.prod()
+            for islab, slab in enumerate(dfield.slabs):
+                tmp = self.qfield[islab]/volume
                 if projin.wa_order != 0: tmp *= self.xwnorm[islab]**projin.wa_order # s_w^n
                 slab[:] = tmp
+        else:
+            dfield = RealField(self.pm)
+            for islab, slab in enumerate(dfield.slabs):
+                #tmp = np.zeros_like(self.xwnorm[islab])
+                #mask_nonzero = self.xwnorm[islab] != 0.
+                #tmp[mask_nonzero] = deriv(self.xwnorm[islab][mask_nonzero])
+                tmp = deriv(self.xwnorm[islab])
+                if projin.wa_order != 0: tmp *= self.xwnorm[islab]**projin.wa_order # s_w^n
+                slab[:] = tmp
+
+        for ellout in ells:
 
             wfield = ComplexField(self.pm)
             wfield[:] = 0.
@@ -457,10 +516,11 @@ class MeshFFTWindow(MeshFFTPower):
                     slab[:] *= 4.*np.pi * Ylm(self.khat[0][islab], self.khat[1][islab], self.khat[2][islab])
                 wfield[:] += cfield[:]
 
-            del dfield
             proj_result = project_to_basis(wfield, self.edges, antisymmetric=bool(ellout % 2))[0]
             result.append(np.squeeze(proj_result[2]))
             k, nmodes = proj_result[0], proj_result[-1]
+
+        del dfield
 
         poles = self.nmesh.prod()**2 * np.array([result[ells.index(ell)] for ell in self.ells]).conj()
         if swap: poles = poles.conj()
@@ -473,30 +533,51 @@ class MeshFFTWindow(MeshFFTPower):
     def _run_global_los(self, projin, deriv):
         # projin is \ell^\prime
         # deriv is \xi^{\ell^{\prime},\beta \ell^\prime}(s^w)
-        qfield = self.qfield.copy()
 
         legendre = special.legendre(projin.ell)
-        for islab, slab in enumerate(qfield.slabs):
-            tmp = np.zeros_like(self.xwnorm[islab])
-            mask_nonzero = self.xwnorm[islab] != 0.
-            tmp[mask_nonzero] = deriv(self.xwnorm[islab][mask_nonzero])
-            if projin.ell:
-                mu = sum(xx[islab]*ll for xx, ll in zip(self.xwhat, self.los))
-                tmp *= legendre(mu)
-            slab[:] *= tmp
+
+        if self.edgesin_type == 'fourier-grid':
+            if projin.ell % 2:
+                # Odd poles, need full mesh
+                dtype = self.dtype if 'complex' in self.dtype.name else 'c{:d}'.format(self.dtype.itemsize*2)
+                pm = ParticleMesh(BoxSize=self.boxSize, Nmesh=self.nmesh, dtype=dtype, comm=self.mpicomm, np=self.np)
+                qfield = ComplexField(pm)
+            else:
+                qfield = ComplexField(self.pm)
+            for islab, slab in enumerate(qfield.slabs):
+                tmp = deriv(self.knorm[islab])
+                if projin.ell:
+                    mu = sum(xx[islab]*ll for xx, ll in zip(self.khat, self.los))
+                    tmp *= legendre(mu)
+                slab[:] = tmp
+            qfield = qfield.c2r()
+            volume = self.boxsize.prod()
+            for islab, slab in enumerate(qfield.slabs):
+                slab[:] *= self.qfield[islab]/volume
+        else:
+            qfield = self.qfield.copy()
+            for islab, slab in enumerate(qfield.slabs):
+                #tmp = np.zeros_like(self.xwnorm[islab])
+                #mask_nonzero = self.xwnorm[islab] != 0.
+                #tmp[mask_nonzero] = deriv(self.xwnorm[islab][mask_nonzero])
+                tmp = deriv(self.xwnorm[islab])
+                if projin.ell:
+                    mu = sum(xx[islab]*ll for xx, ll in zip(self.xwhat, self.los))
+                    tmp *= legendre(mu)
+                slab[:] *= tmp
 
         wfield = qfield.r2c()
 
         result, result_poles = project_to_basis(wfield, self.edges, ells=self.ells, los=self.los)
         # Format the power results into :class:`PowerSpectrumWedges` instance
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':0., 'attrs':self.attrs}
-        k, mu, power, nmodes = (np.squeeze(result[ii]) for ii in [0,1,2,3])
+        k, mu, power, nmodes = result[:4]
         power = self.nmesh.prod()**2 * power.conj()
         self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PolePowerSpectrum` instance
-            k, power, nmodes = (np.squeeze(result_poles[ii]) for ii in [0,1,2])
+            k, power, nmodes = result_poles[:3]
             power = self.nmesh.prod()**2 * power.conj()
             self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
 
@@ -512,12 +593,12 @@ class MeshFFTWindow(MeshFFTPower):
         result, result_poles = project_to_basis(self.qfield, self.edges, ells=self.ells, los=self.los)
         # Format the power results into :class:`PowerSpectrumWedges` instance
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':0., 'attrs':self.attrs}
-        k, mu, power, nmodes = (np.squeeze(result[ii]) for ii in [0,1,2,3])
+        k, mu, power, nmodes = result[:4]
         self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PolePowerSpectrum` instance
-            k, power, nmodes = (np.squeeze(result_poles[ii]) for ii in [0,1,2])
+            k, power, nmodes = result_poles[:3]
             self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def run(self):
@@ -540,6 +621,8 @@ class MeshFFTWindow(MeshFFTPower):
 
         if self.periodic:
             self.qfield = ComplexField(self.pm)
+
+        if self.periodic or self.edgesin_type == 'fourier-grid':
             # The Fourier-space grid
             self.khat = [kk.real.astype('f8') for kk in ComplexField(self.pm).slabs.optx]
             self.knorm = np.sqrt(sum(kk**2 for kk in self.khat))
@@ -556,11 +639,6 @@ class MeshFFTWindow(MeshFFTPower):
 
             else:
                 cfield2 = cfield1 = self.mesh1.r2c()
-                # Set mean value or real field to 0
-                #for i, c1 in zip(cfield1.slabs.i, cfield1.slabs):
-                #    mask_zero = True
-                #    for ii in i: mask_zero = mask_zero & (ii == 0)
-                #    c1[mask_zero] = 0.
 
                 if self.autocorr:
                     self._compensate(cfield1, self.compensations[0])
@@ -571,8 +649,14 @@ class MeshFFTWindow(MeshFFTPower):
 
                 for islab in range(cfield1.shape[0]):
                     cfield1[islab,...] = cfield1[islab].conj() * cfield2[islab]
-                # No 1/N^6 factor due to pmesh convention
+
                 self.qfield = cfield1.c2r()
+                shotnoise = self.shotnoise*self.wnorm/self.nmesh.prod()
+                for i, c in zip(self.qfield.slabs.i, self.qfield.slabs):
+                    mask_zero = True
+                    for ii in i: mask_zero = mask_zero & (ii == 0)
+                    c[mask_zero] -= shotnoise # remove shot noise
+
                 del self.mesh2, self.mesh1, cfield2, cfield1
                 run_projin = self._run_global_los
 
@@ -586,10 +670,10 @@ class MeshFFTWindow(MeshFFTPower):
                 compensations = self.compensations
             # We apply all compensation transfer functions to cfield2
             self._compensate(self.cfield2, *compensations)
-            for i, c in zip(self.cfield2.slabs.i, self.cfield2.slabs):
-                mask_zero = True
-                for ii in i: mask_zero = mask_zero & (ii == 0)
-                c[mask_zero] = 0.
+            #for i, c in zip(self.cfield2.slabs.i, self.cfield2.slabs):
+            #    mask_zero = True
+            #    for ii in i: mask_zero = mask_zero & (ii == 0)
+            #    c[mask_zero] = 0.
 
             # Offset the box coordinate mesh ([-BoxSize/2, BoxSize]) back to the original (x,y,z) coords
             offset = self.boxcenter - self.boxsize/2.
@@ -659,7 +743,7 @@ class CatalogFFTWindow(MeshFFTWindow):
                 edgesin=None, projsin=None, edges=None, ells=None, power_ref=None,
                 los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype=None,
                 resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
-                wnorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                wnorm=None, shotnoise=None, edgesin_type='smooth', mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTWindow`, i.e. estimate power spectrum window matrix.
 
@@ -788,6 +872,15 @@ class CatalogFFTWindow(MeshFFTWindow):
             If ``power_ref`` provided, use internal estimate obtained with :func:`normalization` --- which is wrong
             (the normalization :attr:`poles.wnorm` can be reset a posteriori using the above recipe).
 
+        shotnoise : float, default=None
+            Window function shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
+            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise` by window function normalization.
+
+        edgesin_type : str, default='smooth'
+            Technique to transpose ``edgesin`` to Fourier space.
+            'smooth' uses :func:`get_correlation_function_tophat_derivative`;
+            'fourier-grid' paints ``edgesin`` on the Fourier mesh, then takes the FFT.
+
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scatted across all ranks.
             Else the MPI rank where input positions and weights are gathered.
@@ -853,7 +946,7 @@ class CatalogFFTWindow(MeshFFTWindow):
 
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_box(**mesh_attrs, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
-        if resampler is None: resampler = 'cic'
+        if resampler is None: resampler = 'tsc'
         if interlacing is None: interlacing = 2
         if not isinstance(resampler, tuple):
             resampler = (resampler,)*2
@@ -883,4 +976,4 @@ class CatalogFFTWindow(MeshFFTWindow):
             mesh2 = get_mesh(positions['R2'], data_weights=weights['R2'], resampler=resampler[1], interlacing=interlacing[1])
 
         # Now, run power spectrum estimation
-        super(CatalogFFTWindow, self).__init__(mesh1=mesh1, mesh2=mesh2, edgesin=edgesin, projsin=projsin, power_ref=power_ref, edges=edges, ells=ells, los=los, wnorm=wnorm)
+        super(CatalogFFTWindow, self).__init__(mesh1=mesh1, mesh2=mesh2, edgesin=edgesin, projsin=projsin, power_ref=power_ref, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, edgesin_type=edgesin_type)
