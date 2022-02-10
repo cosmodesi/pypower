@@ -449,7 +449,7 @@ class MeshFFTWindow(MeshFFTPower):
 
         remove_shotnoise = ellout == projin.ell == projin.wa_order == 0
         if remove_shotnoise:
-            shotnoise = self.shotnoise*self.wnorm/self.nmesh.prod()
+            shotnoise = self.shotnoise*self.wnorm/self.nmesh.prod() / (4.*np.pi) # normalization of Ylmin * Ylmout
 
         for Ylmin in Ylmins:
 
@@ -675,7 +675,6 @@ class MeshFFTWindow(MeshFFTPower):
             #    for ii in i: mask_zero = mask_zero & (ii == 0)
             #    c[mask_zero] = 0.
 
-            # Offset the box coordinate mesh ([-BoxSize/2, BoxSize]) back to the original (x,y,z) coords
             offset = self.boxcenter - self.boxsize/2.
             self.xhat = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))]
             self.xnorm = np.sqrt(sum(xx**2 for xx in self.xhat))

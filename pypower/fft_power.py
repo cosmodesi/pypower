@@ -1388,7 +1388,6 @@ class MeshFFTPower(BaseClass):
             # Spherical harmonic kernels (for ell > 0)
             Ylms = [[get_real_Ylm(ell, m) for m in range(-ell, ell+1)] for ell in nonzeroells]
 
-            # Offset the box coordinate mesh ([-BoxSize/2, BoxSize]) back to the original (x,y,z) coords
             offset = self.boxcenter - self.boxsize/2.
             # NOTE: we do not apply half cell shift as in nbodykit below
             #offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize / self.nmesh # in nbodykit
