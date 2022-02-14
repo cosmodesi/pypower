@@ -421,7 +421,7 @@ class MeshFFTWindow(MeshFFTPower):
             iscallable = [callable(f) for f in edgesin[proj]]
             if any(iscallable):
                 if not all(iscallable): raise ValueError('Provide callables or floats only for edgesin')
-                self.deriv[proj] = edgesin
+                self.deriv[proj] = edgesin[proj]
                 self.xin[proj] = np.arange(len(self.deriv[proj]))
             else:
                 edges = np.asarray(edgesin[proj])
