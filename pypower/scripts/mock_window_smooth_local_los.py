@@ -2,15 +2,15 @@
 This script is dedicated to testing the approximate window matrix for cutsky mocks.
 First generate Gaussian mocks::
 
-    (mpiexec -np 4) python mock_window_smooth.py --todo mock --irun 0 20 # start - end of mock ids
+    (mpiexec -np 4) python mock_window_smooth_local_los.py --todo mock --irun 0 20 # start - end of mock ids
 
 Then compute window matrix::
 
-    (mpiexec -np 4) python mock_window_smooth.py --todo window
+    (mpiexec -np 4) python mock_window_smooth_local_los.py --todo window
 
 Then plot::
 
-    python mock_window_smooth.py --todo plot
+    python mock_window_smooth_local_los.py --todo plot
 
 Results are saved in "_results" (see below to change).
 """

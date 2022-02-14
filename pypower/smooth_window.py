@@ -17,7 +17,7 @@ from .fftlog import CorrelationToPower
 from .fft_power import BasePowerSpectrumStatistics, MeshFFTPower, CatalogMesh,\
                        _get_real_dtype, _make_array, _format_positions, _format_weights,\
                        get_default_nrealizations, get_inverse_probability_weight, _get_box, _wrap_in_place
-from .wide_angle import Projection, BaseMatrix, CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix
+from .wide_angle import Projection, BaseMatrix
 from . import mpi, utils
 
 
@@ -559,7 +559,7 @@ class CatalogSmoothWindow(MeshFFTPower):
                 with_odd = int(any(ell % 2 for ell in power_ref.ells))
                 projs = [(ell, 0) for ell in range(0, 2*ellmax + 1, 2 - with_odd)]
                 if los is None or isinstance(los, str) and los in ['firstpoint', 'endpoint']:
-                    projs += [(ell, 1) for ell in range(1 - with_odd, 2*ellmax + 1, 2 - with_odd)]
+                    projs += [(ell, 1) for ell in range(1 - with_odd, 2*ellmax + 2, 2 - with_odd)] # e.g. P_5^{(1)} contribution to P_4 => ell = 9
             if dtype is None: dtype = power_ref.attrs.get('dtype', 'f8')
 
         if dtype is None: dtype = 'f8'
@@ -799,7 +799,7 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
         Resum odd wide-angle orders. By default, line-of-sight is chosen as that save in :attr:`attrs` (``attrs['los_type']``).
         To override, use input ``kwargs`` which will be passed to :attr:`CorrelationFunctionOddWideAngleMatrix`.
         """
-        projsin = [proj for proj in self.projsin if proj.wa_order == 0.]
+        projsin = [proj for proj in self.projsin if proj.wa_order == 0]
         if projsin == self.projsin: return
         from .wide_angle import CorrelationFunctionOddWideAngleMatrix
         if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
@@ -967,9 +967,9 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
         Resum odd wide-angle orders. By default, line-of-sight is chosen as that save in :attr:`attrs` (``attrs['los_type']``).
         To override, use input ``kwargs`` which will be passed to :attr:`PowerSpectrumOddWideAngleMatrix`.
         """
-        projsin = [proj for proj in self.projsin if proj.wa_order == 0.]
+        projsin = [proj for proj in self.projsin if proj.wa_order == 0]
         if projsin == self.projsin: return
-        from .wide_angle import CorrelationFunctionOddWideAngleMatrix
+        from .wide_angle import PowerSpectrumOddWideAngleMatrix
         if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
         matrix = PowerSpectrumOddWideAngleMatrix(self.xin[0], projsin=projsin, projsout=self.projsin, **kwargs)
         self.__dict__.update(self.join(matrix, self).__dict__)

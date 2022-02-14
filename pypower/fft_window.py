@@ -208,18 +208,6 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
         attrs['edges'] = power.edges
         return cls(matrix, xin, xout, projsin, projsout, weights, wnorm=power.wnorm, attrs=attrs)
 
-    def resum_input_odd_wide_angle(self, **kwargs):
-        """
-        Resum odd wide-angle orders. By default, line-of-sight is chosen as that save in :attr:`attrs` (``attrs['los_type']``).
-        To override, use input ``kwargs`` which will be passed to :attr:`CorrelationFunctionOddWideAngleMatrix`.
-        """
-        projsin = [proj for proj in self.projsin if proj.wa_order == 0.]
-        if projsin == self.projsin: return
-        from .wide_angle import CorrelationFunctionOddWideAngleMatrix
-        if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
-        matrix = CorrelationFunctionOddWideAngleMatrix([0.], projsin, projsout=self.projsin, **kwargs).value
-        self.prod_proj(matrix, axes=('in', -1), projs=projsin)
-
     def __getstate__(self):
         """Return this class state dictionary."""
         state = super(PowerSpectrumFFTWindowMatrix, self).__getstate__()
@@ -397,10 +385,9 @@ class MeshFFTWindow(MeshFFTPower):
             if self.ells is None:
                 raise ValueError('If no output multipoles requested, provide "projsin"')
             ellmax = max(self.ells)
-            with_odd = int(any(ell % 2 for ell in self.ells))
-            projsin = [(ell, 0) for ell in range(0, ellmax + 1, 2 - with_odd)]
-            if self.los_type in ['firstpoint', 'endpoint']:
-                projsin += [(ell, 1) for ell in range(1 - with_odd, ellmax + 1, 2 - with_odd)]
+            projsin = [(ell, 0) for ell in range(0, ellmax + 1, 2)]
+            #if self.los_type in ['firstpoint', 'endpoint']:
+            #    projsin += PowerSpectrumOddWideAngleMatrix.propose_out(projsin, wa_orders=1)
         self.projsin = [Projection(proj) for proj in projsin]
         if self.los_type == 'global' and any(proj.wa_order != 0 for proj in self.projsin):
             raise ValueError('With global line-of-sight, input wide_angle order = 0 only is supported')
@@ -421,7 +408,7 @@ class MeshFFTWindow(MeshFFTPower):
             iscallable = [callable(f) for f in edgesin[proj]]
             if any(iscallable):
                 if not all(iscallable): raise ValueError('Provide callables or floats only for edgesin')
-                self.deriv[proj] = edgesin
+                self.deriv[proj] = edgesin[proj]
                 self.xin[proj] = np.arange(len(self.deriv[proj]))
             else:
                 edges = np.asarray(edgesin[proj])
@@ -692,6 +679,7 @@ class MeshFFTWindow(MeshFFTPower):
         for projin in self.projsin:
             poles_x, wedges_x = [], []
             for iin, xin in enumerate(self.xin[projin]):
+                print(projin, iin, len(self.xin[projin]))
                 run_projin(projin, self.deriv[projin][iin])
                 if self.ells:
                     poles_x.append(PowerSpectrumFFTWindowMatrix.from_power(self.poles, xin, projin))

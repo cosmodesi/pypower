@@ -860,8 +860,8 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
         ellsin = [proj.ell for proj in projsin if proj.wa_order == 0] # only consider input wa_order = 0 multipoles
         projsout = []
         for wa_order in wa_orders:
-            for ellout in range(1, max(ellsin), 2):
-                if all(ell in ellsin for ell in odd_wide_angle_coefficients(ellout, wa_order=wa_order)[0]): # check input multipoles are provided
+            for ellout in range(1, max(ellsin) + 2, 2):
+                if any(ell in ellsin for ell in odd_wide_angle_coefficients(ellout, wa_order=wa_order)[0]): # check input multipoles are provided
                     projsout.append(Projection(ell=ellout, wa_order=wa_order))
 
         return projsout

@@ -8,5 +8,5 @@ Scripts "mock_interlacing*.py" are designed to test the accuracy of interlacing 
 Requirements are:
 
   - pypower
-  - cosmoprimo
-  - mockfactory
+  - cosmoprimo (see https://github.com/cosmodesi/cosmoprimo)
+  - mockfactory (see https://github.com/adematti/mockfactory)

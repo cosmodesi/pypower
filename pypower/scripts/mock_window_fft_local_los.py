@@ -2,18 +2,18 @@
 This script is dedicated to testing the window matrix for cutsky mocks.
 First generate Gaussian mocks::
 
-    (mpiexec -np 4) python mock_window_fft.py --todo mock --irun 0 20 # start - end of mock ids
+    (mpiexec -np 4) python mock_window_fft_local_los.py --todo mock --irun 0 20 # start - end of mock ids
 
 Then compute window matrix::
 
     # you can split in as many parts as you want
-    (mpiexec -np 4) python mock_window_fft.py --todo window --irun 0 3 # icut - ncuts
-    (mpiexec -np 4) python mock_window_fft.py --todo window --irun 1 3
-    (mpiexec -np 4) python mock_window_fft.py --todo window --irun 2 3
+    (mpiexec -np 4) python mock_window_fft_local_los.py --todo window --irun 0 3 # icut - ncuts
+    (mpiexec -np 4) python mock_window_fft_local_los.py --todo window --irun 1 3
+    (mpiexec -np 4) python mock_window_fft_local_los.py --todo window --irun 2 3
 
 Then plot::
 
-    python mock_window_fft.py --todo plot
+    python mock_window_fft_local_los.py --todo plot
 
 Results are saved in "_results" (see below to change).
 """
@@ -44,7 +44,7 @@ bias = 1.5
 boxsize = 1000.
 boxcenter = np.array([600., 0., 0.])
 nbar = 5e-4
-edgesin = np.linspace(1e-5, 0.2, 41)
+edgesin = np.linspace(1e-5, 0.25, 51)
 
 # Change paths here if you wish
 base_dir = '_results'
@@ -68,7 +68,7 @@ def run_mock(imock=0):
     randoms = RandomBoxCatalog(nbar=10*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=seed)
     data['Weight'] = mock.readout(data['Position'], field='delta', resampler='tsc', compensate=True) + 1.
 
-    ells = (0, 2, 4); edges = np.linspace(0., 0.2, 41)
+    ells = (0, 1, 2, 3, 4); edges = np.linspace(0., 0.2, 41)
     power = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], ells=ells, los=los, edges=edges,
                             boxsize=2000., boxcenter=boxcenter, nmesh=256, resampler='tsc', interlacing=3, position_type='pos')
     power.save(mock_fn.format(imock))
@@ -88,6 +88,7 @@ def kaiser_model(k, ell=0):
     if ell == 0: return (1. + 2./3.*beta + 1./5.*beta**2)*pk + 1./nbar
     if ell == 2: return (4./3.*beta + 4./7.*beta**2)*pk
     if ell == 4: return 8./35*beta**2*pk
+    return np.zeros_like(k)
 
 
 def mock_mean(name='poles'):
@@ -131,20 +132,16 @@ def plot_window_integ():
 def plot_poles():
     utils.mkdir(plot_dir)
     window = PowerSpectrumFFTWindowMatrix.load(window_fn.format('all'))
-    window_wa = window.copy()
-    window_wa.resum_input_odd_wide_angle()
-    window.select_proj(projsin=[proj for proj in window.projsin if proj.wa_order == 0])
+    window.select_proj(projsin=[proj for proj in window.projsin if proj.wa_order == 0 and proj.ell % 2 == 0])
     kin = window.xin[0]
     kout = window.xout[0]
     ellsin = [proj.ell for proj in window.projsin]
     ells = [proj.ell for proj in window.projsout]
     model_theory = np.array([kaiser_model(kin, ell=ell) for ell in ellsin])
     model_conv = window.dot(model_theory, unpack=True)
-    model_theory[ellsin.index(0)] -= 1./nbar
+    model_theory = np.array([kaiser_model(kin, ell=ell) for ell in ells])
+    model_theory[ells.index(0)] -= 1./nbar
     model_conv[ells.index(0)] -= 1./nbar
-    model_theory_wa = np.array([kaiser_model(kin, ell=proj.ell) for proj in window_wa.projsin])
-    model_conv_wa = window_wa.dot(model_theory_wa, unpack=True)
-    model_conv_wa[ells.index(0)] -= 1./nbar
     mean, std = mock_mean('poles')
     height_ratios = [max(len(ells), 3)] + [1]*len(ells)
     figsize = (6, 1.5*sum(height_ratios))
@@ -154,11 +151,9 @@ def plot_poles():
         lax[0].plot(kin, kin*model_theory[ill], linestyle=':', color='C{:d}'.format(ill), label='theory' if ill == 0 else None)
     for ill, ell in enumerate(ells):
         lax[0].fill_between(kout, kout*(mean[ill] - std[ill]), kout*(mean[ill] + std[ill]), alpha=0.5, facecolor='C{:d}'.format(ill), linewidth=0, label='mocks' if ill == 0 else None)
-        lax[0].plot(kout, kout*model_conv[ill], linestyle='--', color='C{:d}'.format(ill), label='theory * window' if ill == 0 else None)
-        lax[0].plot(kout, kout*model_conv_wa[ill], linestyle='-', color='C{:d}'.format(ill), label='theory * wa * window' if ill == 0 else None)
+        lax[0].plot(kout, kout*model_conv[ill], linestyle='-', color='C{:d}'.format(ill), label='theory * window' if ill == 0 else None)
     for ill, ell in enumerate(ells):
-        lax[ill+1].plot(kout, (model_conv[ill] - mean[ill])/std[ill], linestyle='--', color='C{:d}'.format(ill))
-        lax[ill+1].plot(kout, (model_conv_wa[ill] - mean[ill])/std[ill], linestyle='-', color='C{:d}'.format(ill))
+        lax[ill+1].plot(kout, (model_conv[ill] - mean[ill])/std[ill], linestyle='-', color='C{:d}'.format(ill))
         lax[ill+1].set_ylim(-4, 4)
         for offset in [-2., 2.]: lax[ill+1].axhline(offset, color='k', linestyle='--')
         lax[ill+1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))
