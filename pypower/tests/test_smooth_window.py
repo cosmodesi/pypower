@@ -204,7 +204,7 @@ def test_fft_window():
         randoms['Position'][0] -= boxsize
         projsin = [(ell, 0) for ell in range(0, 2*max(ells)+1, 2)]
         if los in ['firstpoint', 'endpoint']:
-            projsin += [(ell, 1) for ell in range(1, 2*max(ells), 2)]
+            projsin += [(ell, 1) for ell in range(1, 2*max(ells)+2, 2)]
         alpha = data.sum('Weight')/randoms.sum('Weight')
         window_noref = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edges=edges, projs=projsin, los=los,
                                                 boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=poles.wnorm/alpha**2, dtype=dtype).poles
@@ -230,7 +230,7 @@ def get_correlation_function_window():
 
     y, projs = [], []
     for wa_order in range(2):
-        for ell in range(9):
+        for ell in range(10):
             y_ = win.copy()
             if ell > 0: y_ *= np.random.uniform()/10.
             y.append(y_)

@@ -11,14 +11,14 @@ from . import mpi
 from .utils import BaseClass
 from .fftlog import PowerToCorrelation
 from .fft_power import MeshFFTPower, get_real_Ylm, _transform_rslab, _get_real_dtype, _make_array, project_to_basis, PowerSpectrumMultipoles, PowerSpectrumWedges, normalization
-from .wide_angle import BaseMatrix, Projection
+from .wide_angle import BaseMatrix, Projection, PowerSpectrumOddWideAngleMatrix
 from .mesh import CatalogMesh, _get_box, _wrap_in_place
 from .direct_power import _format_positions, _format_weights
 
 
 Si = lambda x: special.sici(x)[0]
 
-# derivative of correlation function w.r.t. k-bins, precomputed with sympy
+# derivative of correlation function w.r.t. k-bins, precomputed with sympy; full, low-s or low-a limit
 _registered_correlation_function_tophat_derivatives = {}
 _registered_correlation_function_tophat_derivatives[0] = (lambda s, a: (-a*np.cos(a*s)/s + np.sin(a*s)/s**2)/(2*np.pi**2*s),
                                                           lambda s, a: -a**9*s**6/(90720*np.pi**2) + a**7*s**4/(1680*np.pi**2) - a**5*s**2/(60*np.pi**2) + a**3/(6*np.pi**2))
@@ -30,6 +30,9 @@ _registered_correlation_function_tophat_derivatives[3] = (lambda s, a: -(8/s**3 
                                                           lambda s, a: -a**10*s**7/(1663200*np.pi**2) + a**8*s**5/(30240*np.pi**2) - a**6*s**3/(1260*np.pi**2))
 _registered_correlation_function_tophat_derivatives[4] = (lambda s, a: (-a*s**3*np.cos(a*s) + 11*s**2*np.sin(a*s) + 15*s**2*Si(a*s)/2 + 105*s*np.cos(a*s)/(2*a) - 105*np.sin(a*s)/(2*a**2))/(2*np.pi**2*s**5),
                                                           lambda s, a: -a**9*s**6/(374220*np.pi**2) + a**7*s**4/(13230*np.pi**2))
+_registered_correlation_function_tophat_derivatives[5] = (lambda s, a: (16/s**3 + (-a*s**4*np.sin(a*s) - 16*s**3*np.cos(a*s) + 105*s**2*np.sin(a*s)/a + 315*s*np.cos(a*s)/a**2 - 315*np.sin(a*s)/a**3)/s**6)/(2*np.pi**2),
+                                                          lambda s, a: -a**10*s**7/(5405400*np.pi**2) + a**8*s**5/(166320*np.pi**2))
+
 
 def _get_attr_in_inst(obj, name, insts=(None,)):
     # Search for ``name`` in instances of name ``insts`` of obj
@@ -215,6 +218,17 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
             state[name] = getattr(self, name)
         return state
 
+    def resum_input_odd_wide_angle(self, **kwargs):
+        """
+        Resum odd wide-angle orders. By default, line-of-sight is chosen as that save in :attr:`attrs` (``attrs['los_type']``).
+        To override, use input ``kwargs`` which will be passed to :attr:`PowerSpectrumOddWideAngleMatrix`.
+        """
+        projsin = [proj for proj in self.projsin if proj.wa_order == 0]
+        if projsin == self.projsin: return
+        if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
+        matrix = PowerSpectrumOddWideAngleMatrix(self.xin[0], projsin=projsin, projsout=self.projsin, **kwargs)
+        self.__dict__.update(self.join(matrix, self).__dict__)
+
 
 class MeshFFTWindow(MeshFFTPower):
     """
@@ -386,17 +400,18 @@ class MeshFFTWindow(MeshFFTPower):
                 raise ValueError('If no output multipoles requested, provide "projsin"')
             ellmax = max(self.ells)
             projsin = [(ell, 0) for ell in range(0, ellmax + 1, 2)]
-            #if self.los_type in ['firstpoint', 'endpoint']:
-            #    projsin += PowerSpectrumOddWideAngleMatrix.propose_out(projsin, wa_orders=1)
+            if self.los_type in ['firstpoint', 'endpoint']:
+                projsin += PowerSpectrumOddWideAngleMatrix.propose_out(projsin, wa_orders=1)
         self.projsin = [Projection(proj) for proj in projsin]
         if self.los_type == 'global' and any(proj.wa_order != 0 for proj in self.projsin):
             raise ValueError('With global line-of-sight, input wide_angle order = 0 only is supported')
 
     def _set_xin(self, edgesin, edgesin_type='fourier-grid'):
         self.edgesin_type = edgesin_type.lower()
-        allowed_edgesin_type = ['smooth', 'fourier-grid']
-        if self.edgesin_type not in allowed_edgesin_type:
-            raise ValueError('edgesin_type must be one of {}'.format(allowed_edgesin_type))
+        allowed_edgesin_types = ['smooth']
+        if self.los_type == 'global': allowed_edgesin_types.append('fourier-grid')
+        if self.edgesin_type not in allowed_edgesin_types:
+            raise ValueError('edgesin_type must be one of {}'.format(allowed_edgesin_types))
         if not isinstance(edgesin, dict):
             edgesin = {proj: edgesin for proj in self.projsin}
         else:
@@ -470,25 +485,15 @@ class MeshFFTWindow(MeshFFTPower):
         result = []
         ells = sorted(set(self.ells))
 
-        if self.edgesin_type == 'fourier-grid':
-            dfield = ComplexField(self.pm)
-            for islab, slab in enumerate(dfield.slabs):
-                slab[:] = deriv(self.knorm[islab])
-            dfield = dfield.c2r()
-            volume = self.boxsize.prod()
-            for islab, slab in enumerate(dfield.slabs):
-                tmp = self.qfield[islab]/volume
-                if projin.wa_order != 0: tmp *= self.xwnorm[islab]**projin.wa_order # s_w^n
-                slab[:] = tmp
-        else:
-            dfield = RealField(self.pm)
-            for islab, slab in enumerate(dfield.slabs):
-                #tmp = np.zeros_like(self.xwnorm[islab])
-                #mask_nonzero = self.xwnorm[islab] != 0.
-                #tmp[mask_nonzero] = deriv(self.xwnorm[islab][mask_nonzero])
-                tmp = deriv(self.xwnorm[islab])
-                if projin.wa_order != 0: tmp *= self.xwnorm[islab]**projin.wa_order # s_w^n
-                slab[:] = tmp
+        dfield = RealField(self.pm)
+        for islab, slab in enumerate(dfield.slabs):
+            #tmp = np.zeros_like(self.xwnorm[islab])
+            #mask_nonzero = self.xwnorm[islab] != 0.
+            #tmp[mask_nonzero] = deriv(self.xwnorm[islab][mask_nonzero])
+            #tmp = deriv(self.xwnorm[islab])
+            #if projin.wa_order != 0: tmp *= self.xwnorm[islab]**projin.wa_order # s_w^n
+            #slab[:] = tmp
+            slab[:] = deriv(self.xwnorm[islab])
 
         for ellout in ells:
 
@@ -679,7 +684,6 @@ class MeshFFTWindow(MeshFFTPower):
         for projin in self.projsin:
             poles_x, wedges_x = [], []
             for iin, xin in enumerate(self.xin[projin]):
-                print(projin, iin, len(self.xin[projin]))
                 run_projin(projin, self.deriv[projin][iin])
                 if self.ells:
                     poles_x.append(PowerSpectrumFFTWindowMatrix.from_power(self.poles, xin, projin))

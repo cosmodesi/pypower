@@ -17,7 +17,7 @@ from .fftlog import CorrelationToPower
 from .fft_power import BasePowerSpectrumStatistics, MeshFFTPower, CatalogMesh,\
                        _get_real_dtype, _make_array, _format_positions, _format_weights,\
                        get_default_nrealizations, get_inverse_probability_weight, _get_box, _wrap_in_place
-from .wide_angle import Projection, BaseMatrix
+from .wide_angle import Projection, BaseMatrix, CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix
 from . import mpi, utils
 
 
@@ -801,7 +801,6 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
         """
         projsin = [proj for proj in self.projsin if proj.wa_order == 0]
         if projsin == self.projsin: return
-        from .wide_angle import CorrelationFunctionOddWideAngleMatrix
         if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
         matrix = CorrelationFunctionOddWideAngleMatrix([0.], projsin, projsout=self.projsin, **kwargs).value
         self.prod_proj(matrix, axes=('in', -1), projs=projsin)
@@ -969,7 +968,6 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
         """
         projsin = [proj for proj in self.projsin if proj.wa_order == 0]
         if projsin == self.projsin: return
-        from .wide_angle import PowerSpectrumOddWideAngleMatrix
         if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
         matrix = PowerSpectrumOddWideAngleMatrix(self.xin[0], projsin=projsin, projsout=self.projsin, **kwargs)
         self.__dict__.update(self.join(matrix, self).__dict__)

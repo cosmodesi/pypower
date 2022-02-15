@@ -410,6 +410,7 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
             if multiple_weights: weights2 = list(weights2)
             else: weights2 = [weights2]
 
-    assert mpicomm.allreduce(len(positions1)) == size1, 'some particles disappeared...'
+    nsize1 = mpicomm.allreduce(len(positions1))
+    assert nsize1 == size1, 'some particles1 disappeared (after: {:d} v.s. before: {:d})...'.format(nsize1, size1)
 
     return (positions1, weights1), (positions2, weights2)

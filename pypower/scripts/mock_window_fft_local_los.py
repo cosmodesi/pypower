@@ -132,7 +132,10 @@ def plot_window_integ():
 def plot_poles():
     utils.mkdir(plot_dir)
     window = PowerSpectrumFFTWindowMatrix.load(window_fn.format('all'))
-    window.select_proj(projsin=[proj for proj in window.projsin if proj.wa_order == 0 and proj.ell % 2 == 0])
+    #window.select_proj(projsin=[proj for proj in window.projsin if proj.wa_order == 0 or proj.ell % 2 == proj.wa_order])
+    window_wa = window.copy()
+    window_wa.resum_input_odd_wide_angle()
+    window.select_proj(projsin=[proj for proj in window.projsin if proj.wa_order == 0])
     kin = window.xin[0]
     kout = window.xout[0]
     ellsin = [proj.ell for proj in window.projsin]
@@ -142,18 +145,23 @@ def plot_poles():
     model_theory = np.array([kaiser_model(kin, ell=ell) for ell in ells])
     model_theory[ells.index(0)] -= 1./nbar
     model_conv[ells.index(0)] -= 1./nbar
+    model_theory_wa = np.array([kaiser_model(kin, ell=proj.ell) for proj in window_wa.projsin])
+    model_conv_wa = window_wa.dot(model_theory_wa, unpack=True)
+    model_conv_wa[ells.index(0)] -= 1./nbar
     mean, std = mock_mean('poles')
     height_ratios = [max(len(ells), 3)] + [1]*len(ells)
     figsize = (6, 1.5*sum(height_ratios))
     fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios':height_ratios}, figsize=figsize, squeeze=True)
     fig.subplots_adjust(hspace=0)
-    for ill, ell in enumerate(ellsin):
+    for ill, ell in enumerate(ells):
         lax[0].plot(kin, kin*model_theory[ill], linestyle=':', color='C{:d}'.format(ill), label='theory' if ill == 0 else None)
     for ill, ell in enumerate(ells):
         lax[0].fill_between(kout, kout*(mean[ill] - std[ill]), kout*(mean[ill] + std[ill]), alpha=0.5, facecolor='C{:d}'.format(ill), linewidth=0, label='mocks' if ill == 0 else None)
-        lax[0].plot(kout, kout*model_conv[ill], linestyle='-', color='C{:d}'.format(ill), label='theory * window' if ill == 0 else None)
+        lax[0].plot(kout, kout*model_conv[ill], linestyle='--', color='C{:d}'.format(ill), label='theory * window' if ill == 0 else None)
+        lax[0].plot(kout, kout*model_conv_wa[ill], linestyle='-', color='C{:d}'.format(ill), label='theory * wa * window' if ill == 0 else None)
     for ill, ell in enumerate(ells):
-        lax[ill+1].plot(kout, (model_conv[ill] - mean[ill])/std[ill], linestyle='-', color='C{:d}'.format(ill))
+        lax[ill+1].plot(kout, (model_conv[ill] - mean[ill])/std[ill], linestyle='--', color='C{:d}'.format(ill))
+        lax[ill+1].plot(kout, (model_conv_wa[ill] - mean[ill])/std[ill], linestyle='-', color='C{:d}'.format(ill))
         lax[ill+1].set_ylim(-4, 4)
         for offset in [-2., 2.]: lax[ill+1].axhline(offset, color='k', linestyle='--')
         lax[ill+1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))

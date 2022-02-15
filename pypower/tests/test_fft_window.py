@@ -61,7 +61,7 @@ class MemoryMonitor(object):
 def test_deriv(plot=False):
     kedges = np.array([0.1, 0.12, 0.14])
 
-    for ell in [0, 1, 2, 3, 4]:
+    for ell in [0, 1, 2, 3, 4, 5]:
 
         fana = get_correlation_function_tophat_derivative(kedges, ell=ell)
         assert len(fana) == len(kedges) - 1
@@ -189,7 +189,7 @@ def test_fft_window():
 
         randoms['Position'][0] -= boxsize
         projsin = [(ell, 0) for ell in ells]
-        if los in ['firstpoint', 'endpoint']: projsin += [(ell, 1) for ell in range(1, max(ells), 2)]
+        if los in ['firstpoint', 'endpoint']: projsin += [(ell, 1) for ell in range(1, max(ells)+2, 2)]
         alpha = data.sum('Weight')/randoms.sum('Weight')
         window_noref = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, projsin=projsin, edges=edges, ells=ells, los=los,
                                         boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=power.poles.wnorm/alpha**2, dtype=dtype)
