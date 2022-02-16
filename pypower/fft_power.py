@@ -886,10 +886,11 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
 
     Parameters
     ----------
-    mesh1 : CatalogMesh, RealField
+    mesh1 : CatalogMesh, RealField, ComplexField
         First mesh. If :class:`RealField`, density is assumed to be uniform, ``mesh1.csum()/np.prod(mesh1.pm.BoxSize)``.
+        If :class:`ComplexField`, assumed to be the FFT of :math:`\delta` (or :math:`1 + \delta`), i.e. unit density.
 
-    mesh2 : CatalogMesh, RealField, default=None
+    mesh2 : CatalogMesh, RealField, ComplexField, default=None
         Second mesh, for cross-correlations.
 
     uniform : bool, default=False
@@ -951,6 +952,9 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
     if isinstance(mesh1, CatalogMesh):
         s1 = mesh1.sum_data_weights
         boxsize = mesh1.boxsize
+    elif isinstance(mesh1, ComplexField):
+        s1 = mesh1.pm.Nmesh.prod()
+        boxsize = mesh1.pm.BoxSize
     else:
         s1 = mesh1.csum()
         boxsize = mesh1.pm.BoxSize
@@ -959,6 +963,8 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
     else:
         if isinstance(mesh2, CatalogMesh):
             s2 = mesh2.sum_data_weights
+        elif isinstance(mesh1, ComplexField):
+            s2 = mesh1.pm.Nmesh.prod()
         else:
             s2 = mesh2.csum()
 
@@ -996,10 +1002,10 @@ class MeshFFTPower(BaseClass):
 
         Parameters
         ----------
-        mesh1 : CatalogMesh, RealField
-            First mesh.
+        mesh1 : CatalogMesh, RealField, ComplexField
+            First mesh. In case of :class:`ComplexField`, assumed to be the FFT of :math:`\delta` (or :math:`1 + \delta`), i.e. unit density.
 
-        mesh2 : CatalogMesh, RealField, default=None
+        mesh2 : CatalogMesh, RealField, ComplexField, efault=None
             In case of cross-correlation, second mesh, with same size and physical extent (``boxsize`` and ``boxcenter``) that ``mesh1``.
 
         edges : tuple, array, default=None
@@ -1084,8 +1090,6 @@ class MeshFFTPower(BaseClass):
         self.compensations = [_format_compensation(compensation) for compensation in compensations]
 
     def _set_mesh(self, mesh1, mesh2=None, boxcenter=None):
-        self.mesh1 = mesh1
-        self.mesh2 = mesh2
         self.autocorr = mesh2 is None or mesh2 is mesh1
         self.attrs = {}
 
@@ -1100,13 +1104,13 @@ class MeshFFTPower(BaseClass):
                     self.log_info('Done painting catalog {:d} to mesh.'.format(i+1))
                 if boxcenter is not None:
                     if not np.allclose(boxcenter, mesh.boxcenter):
-                        self.log_warning('Provided boxcenter is not the same as that of provided {} instance'.format(mesh.__class__.__name__))
+                        self.log_warning('Provided boxcenter {} is not the same as that of provided {} instance ({})'.format(boxcenter, mesh.__class__.__name__, mesh.boxcenter))
                 else:
                     boxcenter = mesh.boxcenter
                 compensation = mesh.compensation
                 if self.compensations[i] is not None:
                     if self.compensations[i] != compensation:
-                        self.log_warning('Provided compensation is not the same as that of provided {} instance'.format(mesh.__class__.__name__))
+                        self.log_warning('Provided compensation {} is not the same as that of provided {} instance ({})'.format(self.compensations[i], mesh.__class__.__name__, compensation))
                 else:
                     self.compensations[i] = compensation
                 self.attrs['sum_data_weights{:d}'.format(i+1)] = mesh.sum_data_weights
@@ -1115,7 +1119,11 @@ class MeshFFTPower(BaseClass):
                 self.attrs['interlacing{:d}'.format(i+1)] = mesh.interlacing
             else:
                 setattr(self, name, mesh)
-                self.attrs['sum_data_weights{:d}'.format(i+1)] = self.attrs['sum_randoms_weights{:d}'.format(i+1)] = mesh.csum().real
+                if isinstance(mesh, ComplexField):
+                    sum_data = mesh.pm.Nmesh.prod()
+                else:
+                    sum_data = mesh.csum().real
+                self.attrs['sum_data_weights{:d}'.format(i+1)] = self.attrs['sum_randoms_weights{:d}'.format(i+1)] = sum_data
                 self.attrs['resampler{:d}'.format(i+1)] = not self.compensations[i]['resampler'] if self.compensations[i] is not None else None
                 self.attrs['interlacing{:d}'.format(i+1)] = not self.compensations[i]['shotnoise'] if self.compensations[i] is not None else False
 
@@ -1129,16 +1137,28 @@ class MeshFFTPower(BaseClass):
 
         if isinstance(mesh1, CatalogMesh) and isinstance(mesh2, CatalogMesh):
             if not np.allclose(mesh1.boxcenter, mesh2.boxcenter):
-                raise ValueError('Mismatch in input box centers')
+                raise ValueError('Mismatch in input box centers, {} v.s. {}'.format(mesh1.boxcenter, mesh2.boxcenter))
         if not np.allclose(self.mesh1.pm.BoxSize, self.mesh2.pm.BoxSize):
-            raise ValueError('Mismatch in input box sizes')
+            raise ValueError('Mismatch in input box sizes, {} v.s. {}'.format(self.mesh1.pm.BoxSize, self.mesh2.pm.BoxSize))
         if not np.allclose(self.mesh1.pm.Nmesh, self.mesh2.pm.Nmesh):
-            raise ValueError('Mismatch in input mesh sizes')
+            raise ValueError('Mismatch in input mesh sizes, {} v.s. {}'.format(self.mesh1.pm.Nmesh, self.mesh2.pm.Nmesh))
         if self.mesh2.pm.comm is not self.mesh1.pm.comm:
             raise ValueError('Communicator mismatch between input meshes')
         self.pm = self.mesh1.pm
         if np.any(self.nmesh % 2):
             raise NotImplementedError('For odd sizes pmesh k-coordinates are not wrapped in [-knyq, knyq]; please use even sizes for now')
+
+    @staticmethod
+    def _to_complex(mesh):
+        if isinstance(mesh, ComplexField):
+            return mesh
+        return mesh.r2c()
+
+    @staticmethod
+    def _to_real(mesh):
+        if isinstance(mesh, RealField):
+            return mesh
+        return mesh.c2r()
 
     def _set_edges(self, edges):
         # Set :attr:`edges`
@@ -1246,7 +1266,6 @@ class MeshFFTPower(BaseClass):
             self._run_global_los()
         else: # local (varying) line-of-sight
             self._run_local_los()
-        del self.mesh2, self.mesh1
 
     def _get_attrs(self):
         # Return some attributes, to be saved in :attr:`poles` and :attr:`wedges`
@@ -1285,12 +1304,14 @@ class MeshFFTPower(BaseClass):
         start = time.time()
         # Calculate the 3d power spectrum, slab-by-slab to save memory
         # FFT 1st density field and apply the resampler transfer kernel
-        cfield2 = cfield1 = self.mesh1.r2c() # pmesh r2c convention is 1/N^3 e^{-ikr}
+        cfield2 = cfield1 = self._to_complex(self.mesh1) # pmesh r2c convention is 1/N^3 e^{-ikr}
+        del self.mesh1
         #print(cfield1.value.sum(), cfield1.value.dtype, cfield1.value.shape)
         self._compensate(cfield1, self.compensations[0])
 
         if not self.autocorr:
-            cfield2 = self.mesh2.r2c()
+            cfield2 = self._to_complex(self.mesh2)
+            del self.mesh2
             self._compensate(cfield2, self.compensations[1])
 
         # cfield1.conj() * cfield2
@@ -1333,7 +1354,8 @@ class MeshFFTPower(BaseClass):
         if nonzeroells[0] == 0: nonzeroells = nonzeroells[1:]
 
         # FFT 1st density field and apply the resampler transfer kernel
-        A0 = self.mesh2.r2c() # pmesh r2c convention is 1/N^3 e^{-ikr}
+        A0 = self._to_complex(self.mesh2) # pmesh r2c convention is 1/N^3 e^{-ikr}
+        del self.mesh2
         # Set mean value or real field to 0
         for i, c in zip(A0.slabs.i, A0.slabs):
             mask_zero = True
@@ -1360,7 +1382,7 @@ class MeshFFTPower(BaseClass):
                 self._compensate(A0, compensations[0])
         else:
             # Cross-correlation, all windows on A0
-            if 0 in self.ells: Aell = self.mesh1.r2c()
+            if 0 in self.ells: Aell = self._to_complex(self.mesh1)
             self._compensate(A0, *compensations)
 
         if 0 in self.ells:
@@ -1385,6 +1407,9 @@ class MeshFFTPower(BaseClass):
             cfield = ComplexField(self.pm)
             Aell = ComplexField(self.pm)
 
+            rfield1 = self._to_real(self.mesh1)
+            del self.mesh1
+
             # Spherical harmonic kernels (for ell > 0)
             Ylms = [[get_real_Ylm(ell, m) for m in range(-ell, ell+1)] for ell in nonzeroells]
 
@@ -1400,7 +1425,7 @@ class MeshFFTPower(BaseClass):
                 return toret
 
             # The real-space grid
-            xhat = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))]
+            xhat = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(rfield1.slabs.optx, self.boxsize))]
             #xhat = [xx.astype('f8') + offset[ii] for ii, xx in enumerate(self.mesh1.slabs.optx)]
             xnorm = np.sqrt(sum(xx**2 for xx in xhat))
             xhat = [_safe_divide(xx, xnorm) for xx in xhat]
@@ -1419,7 +1444,7 @@ class MeshFFTPower(BaseClass):
             substart = time.time()
             for Ylm in Ylms[ill]:
                 # Reset the real-space mesh to the original density #1
-                rfield[:] = self.mesh1[:]
+                rfield[:] = rfield1[:]
 
                 # Apply the config-space Ylm
                 for islab, slab in enumerate(rfield.slabs):
@@ -1463,8 +1488,6 @@ class MeshFFTPower(BaseClass):
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
         self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
-
-        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1
 
 
 class CatalogFFTPower(MeshFFTPower):

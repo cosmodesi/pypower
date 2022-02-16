@@ -55,9 +55,9 @@ plot_wedges_fn = os.path.join(plot_dir, 'power_window_periodic_wedges.png')
 
 def run_mock(imock=0, sample=True):
     seed = (imock + 1) * 42
-    nmesh = 512; boxsize = 1000.; boxcenter = 0.; los = 'x'
+    boxsize = 1000.; boxcenter = 0.; los = 'x'
 
-    mock = EulerianLinearMock(pklin, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
+    mock = EulerianLinearMock(pklin, nmesh=512, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
     mock.set_real_delta_field(bias=bias)
     mock.set_rsd(f=f, los=los)
 

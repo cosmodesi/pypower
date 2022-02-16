@@ -721,6 +721,7 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
         self.window = window
         self.attrs = {}
         if hasattr(window, 'attrs'): self.attrs.update(window.attrs)
+        self.attrs.update(attrs or {})
         self.sum_wa = sum_wa
         self.default_zero = default_zero
 
@@ -731,7 +732,6 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
             self.projsout = [Projection(proj, default_wa_order=None if self.sum_wa else 0) for proj in projsout]
 
         self._set_xw(xin=sep, xout=sep)
-        self.attrs = attrs or {}
         self.run()
 
     def run(self):
@@ -887,6 +887,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
         self.window = window
         self.attrs = {}
         if hasattr(window, 'attrs'): self.attrs.update(window.attrs)
+        self.attrs.update(attrs or {})
         self.sum_wa = sum_wa
         self.default_zero = default_zero
 
@@ -897,7 +898,6 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
             self.projsout = [Projection(proj, default_wa_order=None if self.sum_wa else 0) for proj in projsout]
 
         self._set_xw(xin=self.k, xout=kout)
-        self.attrs = attrs or {}
         self.run()
 
     def run(self):

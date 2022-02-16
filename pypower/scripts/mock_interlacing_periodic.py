@@ -60,11 +60,11 @@ for resampler in ['cic', 'tsc', 'pcs']:
 
 def run_mock(imock=0):
     seed = (imock + 1) * 42
-    nmesh = 700; boxsize = 1000.; boxcenter = 0.; los = 'x'
+    boxsize = 1000.; boxcenter = 0.; los = 'x'
 
     ells = (0, 2, 4); edges = ({'step': 0.005}, np.linspace(-1., 1., 7))
 
-    mock = EulerianLinearMock(pklin, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
+    mock = EulerianLinearMock(pklin, nmesh=700, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
     mock.set_real_delta_field(bias=bias)
     mock.set_rsd(f=f, los=los)
 

@@ -40,13 +40,14 @@ f = cosmo.get_fourier().sigma8_z(z=z, of='theta_cb')/cosmo.get_fourier().sigma8_
 bias = 1.5
 boxsize = 1000.
 boxcenter = np.array([0., 0., 0.])
+window_boxes = (100000, 10000, 2000)
 nbar = 1e-3
 
 # Change paths here if you wish
 base_dir = '_results'
 plot_dir = '_plots'
 mock_fn = os.path.join(base_dir, 'mock_smooth_global_los_{}.npy')
-window_poles_fn = os.path.join(base_dir, 'window_smooth_global_los_poles.npy')
+window_poles_fn = os.path.join(base_dir, 'window_smooth_global_los_poles_{}.npy'.format('-'.join(['{:d}'.format(box) for box in window_boxes])))
 window_fn = os.path.join(base_dir, 'window_smooth_global_los_all.npy')
 plot_window_fn = os.path.join(plot_dir, 'window_smooth_global_los_poles.png')
 plot_window_real_fn = os.path.join(plot_dir, 'window_smooth_global_los_real_poles.png')
@@ -56,9 +57,9 @@ plot_poles_fn = os.path.join(plot_dir, 'power_window_smooth_global_los_poles.png
 
 def run_mock(imock=0):
     seed = (imock + 1) * 42
-    nmesh = 512; los = 'x'
+    los = 'x'
 
-    mock = EulerianLinearMock(pklin, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
+    mock = EulerianLinearMock(pklin, nmesh=512, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
     mock.set_real_delta_field(bias=bias)
     mock.set_rsd(f=f, los=los)
 
@@ -77,8 +78,7 @@ def run_window():
     randoms = RandomBoxCatalog(nbar=10*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=42)
     edges = {'step': 0.0005}
     windows = []
-    boxes = (100000, 10000, 2000)
-    for box in boxes:
+    for box in window_boxes:
         windows.append(CatalogSmoothWindow(randoms_positions1=randoms['Position'], power_ref=power, edges=edges, boxsize=box, position_type='pos'))
     window = CatalogSmoothWindow.concatenate(*windows, frac_nyq=0.8).poles
     window.save(window_poles_fn)

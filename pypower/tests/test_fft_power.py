@@ -163,11 +163,11 @@ def test_field_power():
     ells = (0, 1, 2, 3, 4)
 
     def get_ref_power(mesh, los):
-        from nbodykit.lab import FFTPower
-        return FFTPower(mesh, mode='2d', poles=ells, Nmu=len(muedges) - 1, los=los, dk=dk, kmin=kedges[0], kmax=kedges[-1])
+        from nbodykit.lab import FFTPower, FieldMesh
+        return FFTPower(FieldMesh(mesh), mode='2d', poles=ells, Nmu=len(muedges) - 1, los=los, dk=dk, kmin=kedges[0], kmax=kedges[-1])
 
-    def get_mesh_power(mesh, los, edges=(kedges, muedges)):
-        return MeshFFTPower(mesh, ells=ells, los=los, edges=edges)
+    def get_mesh_power(mesh, los, mesh2=None, edges=(kedges, muedges)):
+        return MeshFFTPower(mesh, mesh2=mesh2, ells=ells, los=los, edges=edges)
 
     def check_wedges(power, ref_power):
         for imu, muavg in enumerate(power.muavg):
@@ -205,6 +205,14 @@ def test_field_power():
         check_poles(power.poles, ref_power.poles)
 
         c_power = get_mesh_power(mesh_complex, los, edges=(ref_kedges, muedges))
+        check_wedges(power.wedges, c_power.wedges)
+        check_poles(power.poles, c_power.poles)
+
+        power = get_mesh_power(mesh_real.r2c(), los, mesh2=mesh_real.r2c(), edges=(ref_kedges, muedges))
+        check_wedges(power.wedges, ref_power.power)
+        check_poles(power.poles, ref_power.poles)
+
+        c_power = get_mesh_power(mesh_complex.r2c(), los, edges=(ref_kedges, muedges))
         check_wedges(power.wedges, c_power.wedges)
         check_poles(power.poles, c_power.poles)
 

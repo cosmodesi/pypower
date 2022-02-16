@@ -243,7 +243,7 @@ class MeshFFTWindow(MeshFFTPower):
         Window matrix.
     """
     def __init__(self, mesh1=None, mesh2=None, edgesin=None, projsin=None, power_ref=None, edges=None, ells=None, los=None, periodic=False, boxcenter=None,
-                 compensations=None, wnorm=None, shotnoise=None, edgesin_type='smooth', **kwargs):
+                 compensations=None, wnorm=None, shotnoise=None, edgesin_type='smooth'):
         """
         Initialize :class:`MeshFFTWindow`.
 
@@ -363,7 +363,7 @@ class MeshFFTWindow(MeshFFTPower):
             else:
                 if power_ref is not None:
                     ialpha2 = np.prod([self.attrs[name]/power_ref.attrs[name] for name in ['sum_data_weights1', 'sum_data_weights2']])
-                    self.wnorm = ialpha2 * power_ref.wnorm
+                    self.wnorm = ialpha2 * _get_attr_in_inst(power_ref, 'wnorm', insts=(None, 'wedges', 'poles'))
                 else:
                     self.wnorm = normalization(mesh1, mesh2)
         self.shotnoise = shotnoise
@@ -456,7 +456,7 @@ class MeshFFTWindow(MeshFFTPower):
         for Ylmin in Ylmins:
 
             for islab, slab in enumerate(rfield.slabs):
-                slab[:] = self.mesh1[islab] * Ylmin(self.xhat[0][islab], self.xhat[1][islab], self.xhat[2][islab]) * Ylmout(self.xhat[0][islab], self.xhat[1][islab], self.xhat[2][islab])
+                slab[:] = self.rfield1[islab] * Ylmin(self.xhat[0][islab], self.xhat[1][islab], self.xhat[2][islab]) * Ylmout(self.xhat[0][islab], self.xhat[1][islab], self.xhat[2][islab])
                 if projin.wa_order != 0: slab[:] /= self.xnorm[islab]**projin.wa_order
             rfield.r2c(out=cfield)
 
@@ -479,8 +479,6 @@ class MeshFFTWindow(MeshFFTPower):
         # We we perform the sum of Q defined in https://fr.overleaf.com/read/hpgbwqzmtcxn
         # projin is \ell^\prime, n
         # deriv is \xi^{(n)}_{\ell^{\prime},\beta \ell^\prime}(s^w)
-        swap = self.los_type == 'endpoint'
-        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1 # swap meshes + complex conjugaison at the end of run()
 
         result = []
         ells = sorted(set(self.ells))
@@ -515,12 +513,10 @@ class MeshFFTWindow(MeshFFTPower):
         del dfield
 
         poles = self.nmesh.prod()**2 * np.array([result[ells.index(ell)] for ell in self.ells]).conj()
-        if swap: poles = poles.conj()
+        if self.swap: poles = poles.conj()
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':0., 'attrs':self.attrs}
         self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
-
-        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1
 
     def _run_global_los(self, projin, deriv):
         # projin is \ell^\prime
@@ -620,7 +616,7 @@ class MeshFFTWindow(MeshFFTPower):
             self.knorm = np.sqrt(sum(kk**2 for kk in self.khat))
             self.khat = [_safe_divide(kk, self.knorm) for kk in self.khat]
         else:
-            self.xwhat = [xx.real.astype('f8') for xx in _wrap_rslab(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))] # this should just give self.mesh1.slabs.optx
+            self.xwhat = [xx.real.astype('f8') for xx in _wrap_rslab(_transform_rslab(RealField(self.pm).slabs.optx, self.boxsize))] # this should just give self.mesh1.slabs.optx
             self.xwnorm = np.sqrt(sum(xx**2 for xx in self.xwhat))
             self.xwhat = [_safe_divide(xx, self.xwnorm) for xx in self.xwhat]
 
@@ -630,14 +626,16 @@ class MeshFFTWindow(MeshFFTPower):
                 run_projin = self._run_periodic
 
             else:
-                cfield2 = cfield1 = self.mesh1.r2c()
+                cfield2 = cfield1 = self._to_complex(self.mesh1)
 
                 if self.autocorr:
                     self._compensate(cfield1, self.compensations[0])
                 else:
                     # We apply all compensation transfer functions to cfield1
                     self._compensate(cfield1, *self.compensations)
-                    cfield2 = self.mesh2.r2c()
+                    cfield2 = self._to_complex(self.mesh2)
+
+                del self.mesh2, self.mesh1
 
                 for islab in range(cfield1.shape[0]):
                     cfield1[islab,...] = cfield1[islab].conj() * cfield2[islab]
@@ -649,31 +647,38 @@ class MeshFFTWindow(MeshFFTPower):
                     for ii in i: mask_zero = mask_zero & (ii == 0)
                     c[mask_zero] -= shotnoise # remove shot noise
 
-                del self.mesh2, self.mesh1, cfield2, cfield1
+                del cfield2, cfield1
                 run_projin = self._run_global_los
 
         else: # local (varying) line-of-sight
 
+            self.swap = self.los_type == 'endpoint'
+            if self.swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1 # swap meshes + complex conjugaison at the end of run()
+
+            self.rfield1 = self._to_real(self.mesh1)
+
             if self.autocorr:
-                self.cfield2 = self.mesh1.r2c()
+                self.cfield2 = self._to_complex(self.mesh1)
                 compensations = [self.compensations[0]] * 2
             else:
-                self.cfield2 = self.mesh2.r2c()
+                self.cfield2 = self._to_complex(self.mesh2)
                 compensations = self.compensations
+
             # We apply all compensation transfer functions to cfield2
             self._compensate(self.cfield2, *compensations)
             #for i, c in zip(self.cfield2.slabs.i, self.cfield2.slabs):
             #    mask_zero = True
             #    for ii in i: mask_zero = mask_zero & (ii == 0)
             #    c[mask_zero] = 0.
+            del self.mesh2, self.mesh1
 
             offset = self.boxcenter - self.boxsize/2.
-            self.xhat = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.mesh1.slabs.optx, self.boxsize))]
+            self.xhat = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(self.rfield1.slabs.optx, self.boxsize))]
             self.xnorm = np.sqrt(sum(xx**2 for xx in self.xhat))
             self.xhat = [_safe_divide(xx, self.xnorm) for xx in self.xhat]
 
             # The Fourier-space grid
-            self.khat = [kk.real.astype('f8') for kk in ComplexField(self.pm).slabs.optx]
+            self.khat = [kk.real.astype('f8') for kk in self.cfield2.slabs.optx]
             knorm = np.sqrt(sum(kk**2 for kk in self.khat))
             self.khat = [_safe_divide(kk, knorm) for kk in self.khat]
             del knorm
@@ -698,7 +703,7 @@ class MeshFFTWindow(MeshFFTPower):
         if wedges:
             self.wedges = PowerSpectrumFFTWindowMatrix.concatenate_proj(*wedges, axis='in')
 
-        for name in ['mesh1', 'mesh2', 'cfield2', 'qfield']:
+        for name in ['mesh1', 'mesh2', 'rfield1', 'cfield2', 'qfield']:
             if hasattr(self, name): delattr(self, name)
 
     @classmethod
@@ -949,11 +954,11 @@ class CatalogFFTWindow(MeshFFTWindow):
                 if position is not None:
                     _wrap_in_place(position, boxsize, boxcenter - boxsize/2.)
 
-        if wnorm is None and power_ref is not None:
-            wsum = [mpicomm.allreduce(sum(weights['R1']) if weights['R1'] is not None else len(positions['R1']))]*2
-            if not autocorr: wsum[1] = mpicomm.allreduce(sum(weights['R2']) if weights['R2'] is not None else len(positions['R2']))
-            ialpha2 = np.prod([wsum[ii]/attrs_ref[name] for ii, name in enumerate(['sum_data_weights1', 'sum_data_weights2'])])
-            wnorm = ialpha2 * _get_attr_in_inst(power_ref, 'wnorm', insts=(None, 'poles', 'wedges'))
+        #if wnorm is None and power_ref is not None:
+        #    wsum = [mpicomm.allreduce(sum(weights['R1']) if weights['R1'] is not None else len(positions['R1']))]*2
+        #    if not autocorr: wsum[1] = mpicomm.allreduce(sum(weights['R2']) if weights['R2'] is not None else len(positions['R2']))
+        #    ialpha2 = np.prod([wsum[ii]/attrs_ref[name] for ii, name in enumerate(['sum_data_weights1', 'sum_data_weights2'])])
+        #    wnorm = ialpha2 * _get_attr_in_inst(power_ref, 'wnorm', insts=(None, 'poles', 'wedges'))
 
         # Get catalog meshes
         def get_mesh(data_positions, data_weights=None, **kwargs):

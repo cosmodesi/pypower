@@ -6,7 +6,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from mockfactory import Catalog
 
-from pypower import CatalogFFTPower, MeshFFTWindow, CatalogFFTWindow, PowerSpectrumFFTWindowMatrix, ParticleMesh, mpi, setup_logging
+from pypower import CatalogFFTPower, CatalogMesh, MeshFFTWindow, CatalogFFTWindow, PowerSpectrumFFTWindowMatrix, ParticleMesh, mpi, setup_logging
 from pypower.fft_window import get_correlation_function_tophat_derivative
 
 from test_fft_power import data_fn, randoms_fn
@@ -134,7 +134,7 @@ def test_fft_window():
     cdtype = 'c16'
     boxcenter = np.array([1e6,0.,0.])[None,:]
 
-    for los in ['x', 'firstpoint', 'endpoint']:
+    for los in ['x', 'firstpoint', 'endpoint'][1:]:
 
         data = Catalog.load_fits(data_fn)
         randoms = Catalog.load_fits(randoms_fn)
@@ -163,6 +163,21 @@ def test_fft_window():
             window.save(fn)
             window = CatalogFFTWindow.load(fn)
             window.save(fn)
+
+        mesh1 = CatalogMesh(data_positions=randoms['Position'], data_weights=randoms['Weight'], nmesh=power.attrs['nmesh'], boxsize=power.attrs['boxsize'], boxcenter=power.attrs['boxcenter'],
+                            resampler=power.attrs['resampler1'], interlacing=power.attrs['interlacing1'], position_type='pos', dtype=dtype)
+        window_mesh = MeshFFTWindow(mesh1, edgesin=edgesin, power_ref=power)
+        assert np.allclose(window_mesh.poles.value, window.poles.value)
+
+        mesh1 = CatalogMesh(data_positions=randoms['Position'], data_weights=randoms['Weight'], nmesh=power.attrs['nmesh'], boxsize=power.attrs['boxsize'], boxcenter=power.attrs['boxcenter'],
+                            resampler=power.attrs['resampler1'], interlacing=power.attrs['interlacing1'], position_type='pos', dtype=dtype).to_mesh()
+        window_mesh = MeshFFTWindow(mesh1, mesh2=mesh1, edgesin=edgesin, power_ref=power, wnorm=window.poles.wnorm, shotnoise=window_mesh.shotnoise)
+        assert np.allclose(window_mesh.poles.value, window.poles.value)
+
+        mesh1 = CatalogMesh(data_positions=randoms['Position'], data_weights=randoms['Weight'], nmesh=power.attrs['nmesh'], boxsize=power.attrs['boxsize'], boxcenter=power.attrs['boxcenter'],
+                            resampler=power.attrs['resampler1'], interlacing=power.attrs['interlacing1'], position_type='pos', dtype=dtype).to_mesh().r2c()
+        window_mesh = MeshFFTWindow(mesh1, edgesin=edgesin, power_ref=power, wnorm=window.poles.wnorm, shotnoise=window_mesh.shotnoise)
+        assert np.allclose(window_mesh.poles.value, window.poles.value)
 
         power_f4 = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
                                 boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype='f4').poles

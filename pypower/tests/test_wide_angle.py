@@ -133,8 +133,6 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    import pypower
-    print(pypower.__file__)
     test_deriv()
     test_matrix()
     test_projection()

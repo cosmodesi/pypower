@@ -40,26 +40,27 @@ f = cosmo.get_fourier().sigma8_z(z=z, of='theta_cb')/cosmo.get_fourier().sigma8_
 bias = 1.5
 boxsize = 1000.
 boxcenter = np.array([600., 0., 0.])
+window_boxes = (100000, 10000, 2000)
 nbar = 1e-3
+los = 'endpoint'
 
 # Change paths here if you wish
 base_dir = '_results'
 plot_dir = '_plots'
-mock_fn = os.path.join(base_dir, 'mock_smooth_local_los_{}.npy')
-window_poles_fn = os.path.join(base_dir, 'window_smooth_local_los_poles_{}.npy')
-window_fn = os.path.join(base_dir, 'window_smooth_local_los_all.npy')
-plot_window_fn = os.path.join(plot_dir, 'window_smooth_local_los_poles.png')
-plot_window_real_fn = os.path.join(plot_dir, 'window_smooth_local_los_real_poles.png')
-plot_poles_fn = os.path.join(plot_dir, 'power_window_smooth_local_los_poles.png')
+mock_fn = os.path.join(base_dir, 'mock_smooth_{}_los_{{}}.npy'.format(los))
+window_poles_fn = os.path.join(base_dir, 'window_smooth_{}_los_poles_{}.npy'.format(los, '-'.join(['{:d}'.format(box) for box in window_boxes])))
+window_fn = os.path.join(base_dir, 'window_smooth_{}_los_all.npy'.format(los))
+plot_window_fn = os.path.join(plot_dir, 'window_smooth_{}_los_poles.png'.format(los))
+plot_window_real_fn = os.path.join(plot_dir, 'window_smooth_{}_los_real_poles.png'.format(los))
+plot_poles_fn = os.path.join(plot_dir, 'power_window_smooth_{}_los_poles.png'.format(los))
 
 
 def run_mock(imock=0):
     seed = (imock + 1) * 42
-    nmesh = 512; los = None
 
-    mock = EulerianLinearMock(pklin, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
+    mock = EulerianLinearMock(pklin, nmesh=512, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
     mock.set_real_delta_field(bias=bias)
-    mock.set_rsd(f=f, los=los)
+    mock.set_rsd(f=f, los=None)
 
     data = RandomBoxCatalog(nbar=nbar, boxsize=boxsize, boxcenter=boxcenter, seed=seed)
     randoms = RandomBoxCatalog(nbar=10*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=seed)
@@ -76,13 +77,10 @@ def run_window():
     randoms = RandomBoxCatalog(nbar=10*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=42)
     edges = {'step': 0.0005}
     windows = []
-    nmesh = 256
-    boxes = (100000, 10000, 2000)
-    for box in boxes:
-        windows.append(CatalogSmoothWindow(randoms_positions1=randoms['Position'], power_ref=power, nmesh=nmesh, resampler='tsc', interlacing=3, edges=edges, boxsize=box, position_type='pos'))
+    for box in window_boxes:
+        windows.append(CatalogSmoothWindow(randoms_positions1=randoms['Position'], power_ref=power, resampler='tsc', interlacing=3, edges=edges, boxsize=box, position_type='pos'))
     window = CatalogSmoothWindow.concatenate(*windows, frac_nyq=0.8).poles
-    window.save(window_poles_fn.format('-'.join(['{:d}'.format(box) for box in boxes])))
-
+    window.save(window_poles_fn)
     projsin = list(power.ells) + PowerSpectrumOddWideAngleMatrix.propose_out(power.ells, wa_orders=1)
     sep = np.geomspace(1e-4, 4e3, 1024*16) # configuration space separation for FFTlog
     wm = PowerSpectrumSmoothWindowMatrix(power.k, projsin=projsin, projsout=power.ells, window=window, sep=sep, kin_rebin=4, kin_lim=(0., 0.5))
@@ -90,8 +88,7 @@ def run_window():
 
 
 def plot_window():
-    boxes = (100000, 10000, 2000)
-    window = PowerSpectrumSmoothWindow.load(window_poles_fn.format('-'.join(['{:d}'.format(box) for box in boxes])))
+    window = PowerSpectrumSmoothWindow.load(window_poles_fn)
     ax = plt.gca()
     for iproj, proj in enumerate(window.projs):
         ax.loglog(window.k, np.abs(window(proj=proj, complex=False)), label=proj.latex(inline=True))

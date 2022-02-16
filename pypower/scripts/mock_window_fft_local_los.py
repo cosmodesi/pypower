@@ -45,24 +45,24 @@ boxsize = 1000.
 boxcenter = np.array([600., 0., 0.])
 nbar = 5e-4
 edgesin = np.linspace(1e-5, 0.25, 51)
+los = 'firstpoint'
 
 # Change paths here if you wish
 base_dir = '_results'
 plot_dir = '_plots'
-mock_fn = os.path.join(base_dir, 'mock_fft_local_los_{}.npy')
-window_fn = os.path.join(base_dir, 'window_fft_local_los_{}.npy')
-plot_window_matrix_fn = os.path.join(plot_dir, 'window_fft_local_los_matrix_poles.png')
-plot_window_integ_fn = os.path.join(plot_dir, 'window_fft_local_los_integ_poles.png')
-plot_poles_fn = os.path.join(plot_dir, 'power_window_fft_local_los_poles.png')
+mock_fn = os.path.join(base_dir, 'mock_fft_{}_los_{{}}.npy'.format(los))
+window_fn = os.path.join(base_dir, 'window_fft_{}_los_{{}}.npy'.format(los))
+plot_window_matrix_fn = os.path.join(plot_dir, 'window_fft_{}_los_matrix_poles.png'.format(los))
+plot_window_integ_fn = os.path.join(plot_dir, 'window_fft_{}_los_integ_poles.png'.format(los))
+plot_poles_fn = os.path.join(plot_dir, 'power_window_fft_{}_los_poles.png'.format(los))
 
 
 def run_mock(imock=0):
     seed = (imock + 1) * 42
-    nmesh = 512; los = None
 
-    mock = EulerianLinearMock(pklin, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
+    mock = EulerianLinearMock(pklin, nmesh=512, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
     mock.set_real_delta_field(bias=bias)
-    mock.set_rsd(f=f, los=los)
+    mock.set_rsd(f=f, los=None)
 
     data = RandomBoxCatalog(nbar=nbar, boxsize=boxsize, boxcenter=boxcenter, seed=seed)
     randoms = RandomBoxCatalog(nbar=10*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=seed)
