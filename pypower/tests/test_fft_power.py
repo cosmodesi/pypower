@@ -167,7 +167,12 @@ def test_field_power():
         return FFTPower(FieldMesh(mesh), mode='2d', poles=ells, Nmu=len(muedges) - 1, los=los, dk=dk, kmin=kedges[0], kmax=kedges[-1])
 
     def get_mesh_power(mesh, los, mesh2=None, edges=(kedges, muedges)):
-        return MeshFFTPower(mesh, mesh2=mesh2, ells=ells, los=los, edges=edges)
+        mesh_bak = mesh.copy()
+        if mesh2 is not None: mesh2_bak = mesh2.copy()
+        toret = MeshFFTPower(mesh, mesh2=mesh2, ells=ells, los=los, edges=edges)
+        assert np.allclose(mesh.value, mesh_bak.value)
+        if mesh2 is not None: assert np.allclose(mesh2.value, mesh2_bak.value)
+        return toret
 
     def check_wedges(power, ref_power):
         for imu, muavg in enumerate(power.muavg):
@@ -377,6 +382,21 @@ def test_catalog_power():
                            boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
         return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)
 
+    def get_mesh_power(data, randoms, dtype=dtype, as_complex=False, as_cross=False):
+        mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
+                           boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
+        wnorm = np.real(normalization(mesh))
+        shotnoise = mesh.unnormalized_shotnoise()/wnorm
+        field = mesh.to_mesh()
+        if as_complex: field = field.r2c()
+        field2 = None
+        if as_cross: field2 = field
+        field_bak = field.copy()
+        toret = MeshFFTPower(field, mesh2=field2, ells=ells, los=los, edges=kedges, wnorm=wnorm, shotnoise=shotnoise, compensations=[mesh.compensation, mesh.compensation], boxcenter=mesh.boxcenter)
+        assert np.allclose(field.value, field_bak.value)
+        if as_cross: assert np.allclose(field2.value, field_bak.value)
+        return toret
+
     def check_poles(power, ref_power):
         norm = power.wnorm
         ref_norm = ref_power.attrs['randoms.norm']
@@ -395,9 +415,9 @@ def test_catalog_power():
 
     list_options = []
     list_options.append({'position_type':'pos'})
-    #list_options.append({'position_type':'xyz'})
-    #list_options.append({'position_type':'rdd'})
-    #list_options.append({'edges':{'min':ref_kedges[0],'max':ref_kedges[-1],'step':ref_kedges[1] - ref_kedges[0]}})
+    list_options.append({'position_type':'xyz'})
+    list_options.append({'position_type':'rdd'})
+    list_options.append({'edges':{'min':ref_kedges[0],'max':ref_kedges[-1],'step':ref_kedges[1] - ref_kedges[0]}})
 
     for options in list_options:
         power = get_catalog_power(data, randoms, **options)
@@ -418,6 +438,14 @@ def test_catalog_power():
     for ell in ells:
         assert np.allclose(power_mesh.poles(ell=ell), f_power.poles(ell=ell))
 
+    power_mesh = get_mesh_power(data, randoms, as_complex=False)
+    for ell in ells:
+        assert np.allclose(power_mesh.poles(ell=ell), f_power.poles(ell=ell))
+
+    power_mesh = get_mesh_power(data, randoms, as_complex=True, as_cross=True)
+    for ell in ells:
+        assert np.allclose(power_mesh.poles(ell=ell), f_power.poles(ell=ell))
+
     def get_catalog_power_cross(data, randoms):
         return CatalogFFTPower(data_positions1=data['Position'].T, data_weights1=data['Weight'], randoms_positions1=randoms['Position'].T, randoms_weights1=randoms['Weight'],
                                data_positions2=data['Position'].T, data_weights2=data['Weight'], randoms_positions2=randoms['Position'].T, randoms_weights2=randoms['Weight'],
@@ -434,14 +462,14 @@ def test_catalog_power():
 
     boxsize = 600.
 
-    def get_mesh_no_randoms_power(data):
+    def get_catalog_mesh_no_randoms_power(data):
         mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, wrap=True, resampler=resampler, interlacing=interlacing, position_type='pos')
         return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)
 
     def get_catalog_no_randoms_power(data):
         return CatalogFFTPower(data_positions1=data['Position'], ells=ells, los=los, edges=kedges, boxsize=boxsize, nmesh=nmesh, wrap=True, resampler=resampler, interlacing=interlacing, position_type='pos')
 
-    ref_power = get_mesh_no_randoms_power(data)
+    ref_power = get_catalog_mesh_no_randoms_power(data)
     power = get_catalog_no_randoms_power(data)
     for ell in ells:
         assert np.allclose(power.poles(ell=ell), ref_power.poles(ell=ell))

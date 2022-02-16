@@ -71,13 +71,13 @@ def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, defa
     return toret
 
 
-def _format_positions(positions, position_type='xyz', dtype=None, mpicomm=None, mpiroot=None):
+def _format_positions(positions, position_type='xyz', dtype=None, copy=True, mpicomm=None, mpiroot=None):
     # Format input array of positions
     # position_type in ["xyz", "rdd", "pos"]
 
     def __format_positions(positions, position_type=position_type, dtype=dtype):
         if position_type == 'pos': # array of shape (N, 3)
-            positions = np.asarray(positions, dtype=dtype)
+            positions = np.array(positions, dtype=dtype, copy=copy)
             if positions.shape[-1] != 3:
                 return None, 'For position type = {}, please provide a (N, 3) array for positions'.format(position_type)
             return positions, None
@@ -127,8 +127,7 @@ def _format_weights(weights, weight_type='auto', size=None, dtype=None, mpicomm=
             return [], 0
         if np.ndim(weights[0]) == 0:
             weights = [weights]
-        individual_weights = []
-        bitwise_weights = []
+        individual_weights, bitwise_weights = [], []
         for w in weights:
             if np.issubdtype(w.dtype, np.integer):
                 if weight_type == 'product_individual': # enforce float individual weight

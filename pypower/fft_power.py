@@ -1149,8 +1149,9 @@ class MeshFFTPower(BaseClass):
             raise NotImplementedError('For odd sizes pmesh k-coordinates are not wrapped in [-knyq, knyq]; please use even sizes for now')
 
     @staticmethod
-    def _to_complex(mesh):
+    def _to_complex(mesh, copy=True):
         if isinstance(mesh, ComplexField):
+            if copy: return mesh.copy()
             return mesh
         return mesh.r2c()
 
@@ -1304,15 +1305,15 @@ class MeshFFTPower(BaseClass):
         start = time.time()
         # Calculate the 3d power spectrum, slab-by-slab to save memory
         # FFT 1st density field and apply the resampler transfer kernel
-        cfield2 = cfield1 = self._to_complex(self.mesh1) # pmesh r2c convention is 1/N^3 e^{-ikr}
+        cfield2 = cfield1 = self._to_complex(self.mesh1, copy=True) # copy because will be modified in-place
         del self.mesh1
-        #print(cfield1.value.sum(), cfield1.value.dtype, cfield1.value.shape)
-        self._compensate(cfield1, self.compensations[0])
+        # We will apply all compensation transfer functions to cfield1
+        compensations = [self.compensations[0]] if self.autocorr else self.compensations
+        self._compensate(cfield1, *compensations)
 
         if not self.autocorr:
-            cfield2 = self._to_complex(self.mesh2)
-            del self.mesh2
-            self._compensate(cfield2, self.compensations[1])
+            cfield2 = self._to_complex(self.mesh2, copy=False)
+        del self.mesh2
 
         # cfield1.conj() * cfield2
         for i, c1, c2 in zip(cfield1.slabs.i, cfield1.slabs, cfield2.slabs):
@@ -1353,9 +1354,11 @@ class MeshFFTPower(BaseClass):
         nonzeroells = ells = sorted(set(self.ells))
         if nonzeroells[0] == 0: nonzeroells = nonzeroells[1:]
 
+        if nonzeroells:
+            rfield1 = self._to_real(self.mesh1)
+
         # FFT 1st density field and apply the resampler transfer kernel
-        A0 = self._to_complex(self.mesh2) # pmesh r2c convention is 1/N^3 e^{-ikr}
-        del self.mesh2
+        A0 = self._to_complex(self.mesh2, copy=True) # pmesh r2c convention is 1/N^3 e^{-ikr}
         # Set mean value or real field to 0
         for i, c in zip(A0.slabs.i, A0.slabs):
             mask_zero = True
@@ -1382,8 +1385,10 @@ class MeshFFTPower(BaseClass):
                 self._compensate(A0, compensations[0])
         else:
             # Cross-correlation, all windows on A0
-            if 0 in self.ells: Aell = self._to_complex(self.mesh1)
+            if 0 in self.ells: Aell = self._to_complex(self.mesh1, copy=True) # mesh1 != mesh2!
             self._compensate(A0, *compensations)
+
+        del self.mesh2, self.mesh1
 
         if 0 in self.ells:
 
@@ -1406,9 +1411,6 @@ class MeshFFTPower(BaseClass):
             rfield = RealField(self.pm)
             cfield = ComplexField(self.pm)
             Aell = ComplexField(self.pm)
-
-            rfield1 = self._to_real(self.mesh1)
-            del self.mesh1
 
             # Spherical harmonic kernels (for ell > 0)
             Ylms = [[get_real_Ylm(ell, m) for m in range(-ell, ell+1)] for ell in nonzeroells]

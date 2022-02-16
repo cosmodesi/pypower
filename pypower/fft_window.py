@@ -332,7 +332,9 @@ class MeshFFTWindow(MeshFFTPower):
 
             if edges is None: edges = _get_attr_in_inst(power_ref, 'edges', insts=(None, 'wedges', 'poles'))
             attrs_ref = _get_attr_in_inst(power_ref, 'attrs', insts=(None, 'wedges', 'poles'))
-            if los is None: los = attrs_ref['los']
+            los_type = attrs_ref['los_type']
+            los = attrs_ref['los']
+            if los_type != 'global': los = los_type
             if boxcenter is None: boxcenter = attrs_ref['boxcenter']
             if compensations is None: compensations = attrs_ref['compensations']
             if ells is None: ells = _get_attr_in_inst(power_ref, 'ells', insts=(None, 'poles'))
@@ -626,16 +628,15 @@ class MeshFFTWindow(MeshFFTPower):
                 run_projin = self._run_periodic
 
             else:
-                cfield2 = cfield1 = self._to_complex(self.mesh1)
+                cfield2 = cfield1 = self._to_complex(self.mesh1, copy=True) # copy because will be modified in-place
+                del self.mesh1
+                # We will apply all compensation transfer functions to cfield1
+                compensations = [self.compensations[0]] if self.autocorr else self.compensations
+                self._compensate(cfield1, *compensations)
 
-                if self.autocorr:
-                    self._compensate(cfield1, self.compensations[0])
-                else:
-                    # We apply all compensation transfer functions to cfield1
-                    self._compensate(cfield1, *self.compensations)
-                    cfield2 = self._to_complex(self.mesh2)
-
-                del self.mesh2, self.mesh1
+                if not self.autocorr:
+                    cfield2 = self._to_complex(self.mesh2, copy=False)
+                del self.mesh2
 
                 for islab in range(cfield1.shape[0]):
                     cfield1[islab,...] = cfield1[islab].conj() * cfield2[islab]
@@ -658,10 +659,10 @@ class MeshFFTWindow(MeshFFTPower):
             self.rfield1 = self._to_real(self.mesh1)
 
             if self.autocorr:
-                self.cfield2 = self._to_complex(self.mesh1)
+                self.cfield2 = self._to_complex(self.mesh1, copy=True) # copy because will be modified in-place
                 compensations = [self.compensations[0]] * 2
             else:
-                self.cfield2 = self._to_complex(self.mesh2)
+                self.cfield2 = self._to_complex(self.mesh2, copy=True) # copy because will be modified in-place
                 compensations = self.compensations
 
             # We apply all compensation transfer functions to cfield2
