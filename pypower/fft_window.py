@@ -220,13 +220,13 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
 
     def resum_input_odd_wide_angle(self, **kwargs):
         """
-        Resum odd wide-angle orders. By default, line-of-sight is chosen as that save in :attr:`attrs` (``attrs['los_type']``).
-        To override, use input ``kwargs`` which will be passed to :attr:`PowerSpectrumOddWideAngleMatrix`.
+        Resum odd wide-angle orders.
+        Input ``kwargs`` will be passed to :attr:`PowerSpectrumOddWideAngleMatrix`.
         """
         projsin = [proj for proj in self.projsin if proj.wa_order == 0]
         if projsin == self.projsin: return
-        if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
-        matrix = PowerSpectrumOddWideAngleMatrix(self.xin[0], projsin=projsin, projsout=self.projsin, **kwargs)
+        # The theory wide-angle expansion uses first point line-of-sight
+        matrix = PowerSpectrumOddWideAngleMatrix(self.xin[0], projsin=projsin, projsout=self.projsin, los='firstpoint', **kwargs)
         self.__dict__.update(self.join(matrix, self).__dict__)
 
 
