@@ -243,13 +243,13 @@ class MeshFFTWindow(MeshFFTPower):
         Window matrix.
     """
     def __init__(self, mesh1=None, mesh2=None, edgesin=None, projsin=None, power_ref=None, edges=None, ells=None, los=None, periodic=False, boxcenter=None,
-                 compensations=None, wnorm=None, shotnoise=None, edgesin_type='smooth'):
+                 compensations=None, wnorm=None, shotnoise=None, edgesin_type='smooth', **kwargs):
         """
         Initialize :class:`MeshFFTWindow`.
 
         Parameters
         ----------
-        mesh1 : CatalogMesh, RealField
+        mesh1 : CatalogMesh, RealField, default=None
             First mesh.
 
         mesh2 : CatalogMesh, RealField, default=None
@@ -296,6 +296,8 @@ class MeshFFTWindow(MeshFFTPower):
 
         periodic : bool, default=False
             If ``True``, selection function is assumed uniform, periodic.
+            In this case, ``mesh1`` may be ``None``; in this case ``nmesh`` and ``boxsize`` default to that of ``power_ref``,
+            else may be set with ``kwargs``.
 
         boxcenter : float, array, default=None
             Box center; defaults to 0.
@@ -327,14 +329,19 @@ class MeshFFTWindow(MeshFFTPower):
             Technique to transpose ``edgesin`` to Fourier space, relevant only if ``periodic`` is ``False``.
             'smooth' uses :func:`get_correlation_function_tophat_derivative`;
             'fourier-grid' paints ``edgesin`` on the Fourier mesh (akin to the periodic case), then takes the FFT.
+
+        kwargs : dict
+            Arguments for :class:`ParticleMesh` in case ``mesh1`` is not provided (as may be the case if ``periodic`` is ``True``),
+            typically ``boxsize``, ``nmesh``, ``mpicomm``.
         """
         if power_ref is not None:
 
             if edges is None: edges = _get_attr_in_inst(power_ref, 'edges', insts=(None, 'wedges', 'poles'))
             attrs_ref = _get_attr_in_inst(power_ref, 'attrs', insts=(None, 'wedges', 'poles'))
-            los_type = attrs_ref['los_type']
-            los = attrs_ref['los']
-            if los_type != 'global': los = los_type
+            if los is None:
+                los_type = attrs_ref['los_type']
+                los = attrs_ref['los']
+                if los_type != 'global': los = los_type
             if boxcenter is None: boxcenter = attrs_ref['boxcenter']
             if compensations is None: compensations = attrs_ref['compensations']
             if ells is None: ells = _get_attr_in_inst(power_ref, 'ells', insts=(None, 'poles'))

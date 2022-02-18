@@ -134,7 +134,7 @@ def test_fft_window():
     cdtype = 'c16'
     boxcenter = np.array([1e6,0.,0.])[None,:]
 
-    for los in ['x', 'firstpoint', 'endpoint'][1:]:
+    for los in ['x', 'firstpoint', 'endpoint']:
 
         data = Catalog.load_fits(data_fn)
         randoms = Catalog.load_fits(randoms_fn)

@@ -147,7 +147,6 @@ def plot_poles(sort_by='resampler'):
                 lax[ill+1].set_ylabel(r'$\Delta P_{{{0:d}}} / P_{{0}}$'.format(ell))
         for ax in lax: ax.grid(True)
         lax[0].legend()
-        lax[0].grid(True)
         lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         lax[-1].set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
         fn = plot_poles_fn.format(sort_by, option1)
