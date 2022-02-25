@@ -9,7 +9,6 @@ import _version
 version = _version.__version__
 
 
-
 setup(name=package_basename,
       version=version,
       author='cosmodesi',

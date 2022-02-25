@@ -437,7 +437,7 @@ class CatalogSmoothWindow(MeshFFTPower):
             Else, one can also provide :math:`\mu-edges` (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
             ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
-            'dk' (in which case :func:`find_unique_edges` is used to find unique :math:`k` (norm) values).
+            'step' (if not provided :func:`find_unique_edges` is used to find unique :math:`k` (norm) values between 'min' and 'max').
 
         projs : list, default=None
             List of :class:`Projection` instances or (multipole, wide-angle order) tuples.

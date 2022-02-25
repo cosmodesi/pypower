@@ -220,7 +220,7 @@ def ArrayMesh(array, boxsize, mpiroot=0, mpicomm=MPI.COMM_WORLD):
     if mpicomm.rank == mpiroot:
         array = array.ravel() # ignore data from other ranks
     else:
-        array = empty
+        array = np.empty((0,), dtype)
     mesh.unravel(array)
     return mesh
 
