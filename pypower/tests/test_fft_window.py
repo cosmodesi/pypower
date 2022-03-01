@@ -215,7 +215,7 @@ def test_fft_window():
         randoms['Position'][0] -= boxsize
         projsin = [(ell, 0) for ell in ells]
         if los in ['firstpoint', 'endpoint']: projsin += [(ell, 1) for ell in range(1, max(ells)+2, 2)]
-        alpha = data.sum('Weight')/randoms.sum('Weight')
+        alpha = data.csum('Weight')/randoms.csum('Weight')
         window_noref = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, projsin=projsin, edges=edges, ells=ells, los=los,
                                         boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=power.poles.wnorm/alpha**2, dtype=dtype)
         assert np.allclose(window_noref.poles.value, window.poles.value)

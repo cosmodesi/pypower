@@ -150,7 +150,6 @@ def test_fft_window():
 
         edges = {'step':0.01}
         window1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos').poles
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             window1.save(fn)
@@ -176,36 +175,41 @@ def test_fft_window():
         windowc = PowerSpectrumSmoothWindow.concatenate_proj(windowp1, windowp2)
         assert np.allclose(windowc.power, window1.power)
 
-        window2 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges=edges, position_type='pos', boxsize=1000., dtype=dtype).poles
-        windowc = window.concatenate_x(window1, window2)
+        window1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges={'step': 0.0005}, position_type='pos').poles
+        window2 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges={'step': 0.0005}, position_type='pos', boxsize=1000., dtype=dtype).poles
+        windowc = PowerSpectrumSmoothWindow.concatenate_x(window1, window2)
         assert windowc.k[-1] > window1.k[-1]
         for name in ['power', 'k', 'nmodes']:
-            assert np.allclose(getattr(windowc, name)[...,:len(window1.k)], getattr(window1, name))
-            assert np.allclose(getattr(windowc, name)[...,len(window1.k):], getattr(window2, name)[...,len(windowc.k)-len(window1.k):])
+            assert np.allclose(getattr(windowc, name)[...,:len(window1.k)], getattr(window1, name), equal_nan=True)
+            assert np.allclose(getattr(windowc, name)[...,len(window1.k):], getattr(window2, name)[...,len(windowc.k)-len(window1.k):], equal_nan=True)
+        windowc2 = PowerSpectrumSmoothWindow.concatenate_x(window2, window1)
+        mask = np.flatnonzero(window2.nmodes[:len(window1.nmodes)] != window1.nmodes)
+        assert np.allclose(windowc2.power[:,mask], windowc.power[:,mask], equal_nan=True)
+        assert np.allclose(windowc2.modes[0], windowc.modes[0], equal_nan=True)
 
         frac_nyq = 0.8
-        windowc = window.concatenate_x(window1, window2, frac_nyq=frac_nyq)
+        windowc = PowerSpectrumSmoothWindow.concatenate_x(window1, window2, frac_nyq=frac_nyq)
         assert windowc.k[-1] > window1.k[-1]
         knyq1 = np.pi*np.min(window1.attrs['nmesh']/window1.attrs['boxsize'])
         knyq2 = np.pi*np.min(window2.attrs['nmesh']/window2.attrs['boxsize'])
         for name in ['power', 'k', 'nmodes']:
-            assert np.allclose(getattr(windowc, name)[...,windowc.k<=frac_nyq*knyq1], getattr(window1, name)[...,window1.k<=frac_nyq*knyq1])
-            assert np.allclose(getattr(windowc, name)[...,windowc.k>frac_nyq*knyq1], getattr(window2, name)[...,(window2.k>frac_nyq*knyq1) & (window2.k<=frac_nyq*knyq2)])
+            assert np.allclose(getattr(windowc, name)[...,windowc.kedges[1:]<=frac_nyq*knyq1], getattr(window1, name)[...,window1.kedges[1:]<=frac_nyq*knyq1], equal_nan=True)
+            assert np.allclose(getattr(windowc, name)[...,windowc.kedges[1:]>frac_nyq*knyq1], getattr(window2, name)[...,(window2.kedges[1:]>frac_nyq*knyq1) & (window2.kedges[1:]<=frac_nyq*knyq2)], equal_nan=True)
 
         assert windowc[1:5:2].shape[0] == 2
 
-        windowc = window.concatenate_x(window1, window2, frac_nyq=(frac_nyq, ))
+        windowc = PowerSpectrumSmoothWindow.concatenate_x(window1, window2, frac_nyq=(frac_nyq, ))
         assert windowc.k[-1] > window1.k[-1]
         knyq1 = np.pi*np.min(window1.attrs['nmesh']/window1.attrs['boxsize'])
         for name in ['power', 'k', 'nmodes']:
-            assert np.allclose(getattr(windowc, name)[...,windowc.k<=frac_nyq*knyq1], getattr(window1, name)[...,window1.k<=frac_nyq*knyq1])
-            assert np.allclose(getattr(windowc, name)[...,windowc.k>frac_nyq*knyq1], getattr(window2, name)[...,(window2.k>frac_nyq*knyq1)])
+            assert np.allclose(getattr(windowc, name)[...,windowc.kedges[1:]<=frac_nyq*knyq1], getattr(window1, name)[...,window1.kedges[1:]<=frac_nyq*knyq1], equal_nan=True)
+            assert np.allclose(getattr(windowc, name)[...,windowc.kedges[1:]>frac_nyq*knyq1], getattr(window2, name)[...,(window2.kedges[1:]>frac_nyq*knyq1)], equal_nan=True)
 
         randoms['Position'][0] -= boxsize
         projsin = [(ell, 0) for ell in range(0, 2*max(ells)+1, 2)]
         if los in ['firstpoint', 'endpoint']:
             projsin += [(ell, 1) for ell in range(1, 2*max(ells)+2, 2)]
-        alpha = data.sum('Weight')/randoms.sum('Weight')
+        alpha = data.csum('Weight')/randoms.csum('Weight')
         window_noref = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edges=edges, projs=projsin, los=los,
                                                 boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=poles.wnorm/alpha**2, dtype=dtype).poles
         assert np.allclose(window_noref.power, window.power)

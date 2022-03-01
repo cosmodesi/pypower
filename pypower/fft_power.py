@@ -570,9 +570,9 @@ class BasePowerSpectrumStatistics(BaseClass):
             tmp = getattr(self, name, None)
             if tmp is None: continue
             if isinstance(tmp, list):
-                setattr(self, name, [tt[slices] for tt in tmp])
+                setattr(self, name, [tt[(Ellipsis,)*(tt.ndim - self.ndim) + slices] for tt in tmp])
             else:
-                setattr(self, name, tmp[slices])
+                setattr(self, name, tmp[(Ellipsis,)*(tmp.ndim - self.ndim) + slices])
         self.edges = [edges[eslice] for edges, eslice in zip(self.edges, eslices)]
         if not all(f == 1 for f in factor):
             self.rebin(factor=factor)

@@ -153,7 +153,12 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
     def concatenate_x(cls, *others, select='nmodes', frac_nyq=None):
         """
         Concatenate input window functions, along k-coordinates.
-        If several input windows have value for a given k-bin, choose the one with largest number of modes.
+        k-edges and k-coordinates are taken from the first provided window;
+        then expanded by those of other provided windows, if they cover a wider range.
+        Eventually, for each bin (low, high), loop through all windows and select that with the largest number of modes
+        in the given bin, if exists (bins are declared equal when exact floating point matching of (low, high)).
+        In case two windows have the same number of modes in the same bin, the first provided one is selected.
+        Therefore, different results may be obtained when changing the order of input windows.
 
         Parameters
         ----------
@@ -185,14 +190,15 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             self = others[ind]
             if frac_nyq[ind] is None:
                 return np.ones(self.shape[0], dtype='?')
-            return self.k <= frac_nyq[ind] * np.pi * np.min(self.attrs['nmesh']/self.attrs['boxsize'])
+            return self.edges[0][1:] <= frac_nyq[ind] * np.pi * np.min(self.attrs['nmesh']/self.attrs['boxsize'])
 
+        # Start with edges/modes of the first window
         mask_nyq = np.flatnonzero(get_mask_nqy(0))
         for name in names:
             setattr(new, name, getattr(new, name)[...,mask_nyq])
-        new.modes[0] = new.modes[0][mask_nyq]
         new.edges[0] = new.edges[0][np.append(mask_nyq, mask_nyq[-1] + 1)]
-        # First set common edges
+        new.modes[0] = new.modes[0][mask_nyq]
+        # Then expand with edges/modes of other windows, if those have a wider range
         for iother, other in enumerate(others[1:]):
             mid = (other.edges[0][:-1] + other.edges[0][1:])/2.
             mask_nyq = get_mask_nqy(iother+1)
@@ -202,15 +208,16 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
                 setattr(new, name, np.concatenate([getattr(other, name)[...,mask_low], getattr(new, name), getattr(other, name)[...,mask_high]], axis=-1))
             new.modes[0] = np.concatenate([other.modes[0][...,mask_low], new.modes[0], other.modes[0][...,mask_high]], axis=-1)
 
+        # For each bin, loop through all windows and select that with the largest number of modes in the given bin, if exists
         tedges = list(zip(new.edges[0][:-1], new.edges[0][1:]))
         for other in others[1:]:
             for iother, tedge in enumerate(zip(other.edges[0][:-1], other.edges[0][1:])):
-                if tedge in tedges: # search for k-bin in other
+                if tedge in tedges: # Search for k-bin in other window, requiring *exact* matching of floating point numbers...
                     inew = tedges.index(tedge)
                     if other.nmodes[iother] > new.nmodes[inew]:
                         for name in names:
                             getattr(new, name)[...,inew] = getattr(other, name)[...,iother] # replace by value in window with highest number of modes
-                        new.modes[0][...,inew] = other.modes[0][inew]
+                        new.modes[0][...,inew] = other.modes[0][...,iother]
         return new
 
     @classmethod
