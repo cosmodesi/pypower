@@ -129,6 +129,7 @@ def test_window():
     assert np.allclose(window.to_real(sep=1./window.k[window.k>0][::-1]).corr, window_real.corr)
     assert np.allclose(window.to_real(k=window.k, smooth=0.).corr, window.to_real(k=window.k).corr)
     assert np.allclose(window.to_real(smooth=0.5).corr, window.to_real(smooth=np.exp(-(0.5 * window.k)**2)).corr)
+    assert not np.isnan(window2_nan.to_real().corr).any()
 
     window.power_zero_nonorm[0] = 10.
     window_real2 = window.to_real()
