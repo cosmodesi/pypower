@@ -130,6 +130,10 @@ def test_window():
     assert np.allclose(window.to_real(k=window.k, smooth=0.).corr, window.to_real(k=window.k).corr)
     assert np.allclose(window.to_real(smooth=0.5).corr, window.to_real(smooth=np.exp(-(0.5 * window.k)**2)).corr)
 
+    window.power_zero_nonorm[0] = 10.
+    window_real2 = window.to_real()
+    assert np.allclose(window_real2.corr, window_real.corr)
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         fn = os.path.join(tmp_dir, 'tmp.npy')
         window_real.save(fn)

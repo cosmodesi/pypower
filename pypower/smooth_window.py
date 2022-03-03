@@ -442,7 +442,9 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
     sum_on_window = k is None
     if sum_on_window:
         k = fourier_window.k
-        volume = fourier_window.volume
+        mask_finite = ~np.isnan(k) & ~np.isnan(fourier_window.power).any(axis=0)
+        k = k[mask_finite]
+        volume = fourier_window.volume[mask_finite]
     else:
         dk = np.diff(k)
         volume = 4.*np.pi * np.append(dk, dk[-1]) * k**2
