@@ -9,7 +9,7 @@ from mockfactory import LagrangianLinearMock, Catalog
 from mockfactory.make_survey import RandomBoxCatalog
 
 from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, PowerSpectrumStatistics, mpi, utils, setup_logging
-from pypower.fft_power import normalization, normalization_from_nbar, find_unique_edges, get_real_Ylm
+from pypower.fft_power import normalization, normalization_from_nbar, find_unique_edges, get_real_Ylm, project_to_basis
 
 
 base_dir = 'catalog'
@@ -87,6 +87,7 @@ def test_power_statistic():
             assert np.isnan(power(k=-1., ell=0, complex=complex))
             assert not np.isnan(power(k=modes, complex=complex)).any()
             assert power(k=[0.1,0.2]).shape == (len(power.ells), 2)
+            assert np.allclose(power(k=[0.1,0.2], ell=power.ells), power(k=[0.1,0.2]))
 
         edges = (edges, np.linspace(0., 1., 21))
         modes = np.meshgrid(*((e[:-1] + e[1:])/2 for e in edges), indexing='ij')
@@ -108,7 +109,7 @@ def test_power_statistic():
         assert np.all(power2.modes[1] <= 0.5)
 
         for complex in [False, True]:
-            assert not np.isnan(power(0.,0., complex=complex))
+            assert not np.isnan(power(0., 0., complex=complex))
             assert np.isnan(power([-1.]*5, 0., complex=complex)).all()
             assert np.isnan(power(-1., [0.]*5, complex=complex)).all()
             assert power(k=[0.1,0.2], mu=[0.3]).shape == (2, 1)
@@ -142,9 +143,25 @@ def test_project():
     mock = LagrangianLinearMock(power, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=42, unitary_amplitude=False)
     # This is Lagrangian bias, Eulerian bias - 1
     mock.set_real_delta_field(bias=bias-1)
-    mesh_real = mock.mesh_delta_r + 1.
-
-    power = MeshFFTPower(mesh_real, ells=(0, 2), los='x', edges=({'step':0.001}, np.linspace(-1., 1., 3)))
+    mesh = mock.mesh_delta_r + 1.
+    sum = mesh.csum()
+    mesh = mesh.r2c()
+    for islab in range(mesh.shape[0]):
+        mesh[islab] = mesh[islab].conj() * mesh[islab]
+    edges = (np.linspace(0., 0.1, 11), np.linspace(-1., 1., 5))
+    result = project_to_basis(mesh, edges, los=(0, 0, 1), ells=None, antisymmetric=False, exclude_zero=False)
+    assert len(result) == 2
+    assert result[1] is None
+    result = project_to_basis(mesh, edges, los=(0, 0, 1), ells=(0,), antisymmetric=False, exclude_zero=False)
+    assert len(result) == 2
+    assert result[1] is not None
+    ells = (0, 2)
+    result = project_to_basis(mesh, edges, los=(0, 0, 1), ells=ells, antisymmetric=False, exclude_zero=True)
+    zero = sum**2/mesh.pm.Nmesh.prod()**2
+    assert np.allclose(result[0][-1], [((e[0] <= 0.) & (e[1] > 0.))*zero for e in zip(edges[1][:-1], edges[1][1:])])
+    from scipy import special
+    assert np.allclose(result[1][-1], [(2*ell+1) * zero * special.legendre(ell)(0.) for ell in ells])
+    #power = MeshFFTPower(mesh_real, ells=(0, 2), los='x', edges=({'step':0.001}, np.linspace(-1., 1., 3)))
 
 
 def test_field_power():
@@ -176,11 +193,14 @@ def test_field_power():
 
     def check_wedges(power, ref_power):
         for imu, muavg in enumerate(power.muavg):
+            mask = power.nmodes[:,imu] > 0
             if hasattr(ref_power, 'k'):
                 k, mu, modes, pk = ref_power.k[:,imu], ref_power.mu[:,imu], ref_power.nmodes[:,imu], ref_power.power[:,imu] + ref_power.shotnoise
             else:
                 k, mu, modes, pk = ref_power['k'][:,imu], ref_power['mu'][:,imu], ref_power['modes'][:,imu], ref_power['power'][:,imu].conj()
-            mask = power.nmodes[:,imu] > 0
+                #n = (power.edges[1][imu] <= 0.) & (power.edges[1][imu+1] > 0.)
+                #assert power.nmodes[0, imu] == modes[0] - n # we do not include k = 0
+                #mask &= (power.edges[0][:-1] > 0.)
             assert np.allclose(power.nmodes[mask,imu], modes[mask], atol=1e-6, rtol=3e-3, equal_nan=True)
             assert np.allclose(power.k[mask,imu], k[mask], atol=1e-6, rtol=3e-3, equal_nan=True)
             assert np.allclose(power.mu[mask,imu], mu[mask], atol=1e-6, rtol=3e-3, equal_nan=True)
@@ -188,14 +208,18 @@ def test_field_power():
 
     def check_poles(power, ref_power):
         for ell in power.ells:
+            mask = power.nmodes > 0
             if hasattr(ref_power, 'k'):
                 k, modes, pk = ref_power.k, ref_power.nmodes, ref_power(ell=ell) + ref_power.shotnoise
             else:
                 k, modes, pk = ref_power['k'], ref_power['modes'], ref_power['power_{}'.format(ell)].conj()
-            mask = power.nmodes > 0
+                #assert power.nmodes[0] == modes[0] - 1
+                #mask &= (power.edges[0][:-1] > 0.)
             assert np.allclose(power.nmodes[mask], modes[mask], atol=1e-6, rtol=5e-3)
             assert np.allclose(power.k[mask], k[mask], atol=1e-6, rtol=5e-3)
+            mask[0] = False
             assert np.allclose(power(ell=ell)[mask] + (ell == 0)*power.shotnoise, pk[mask], atol=1e-3, rtol=1e-6)
+            assert np.allclose(power(ell=ell)[0] + (ell == 0)*power.shotnoise, pk[0], atol=1e-3, rtol=2e-3)
 
     from pypower import ParticleMesh
     pm = ParticleMesh(BoxSize=mesh_real.pm.BoxSize, Nmesh=mesh_real.pm.Nmesh, dtype='c16', comm=mesh_real.pm.comm)
@@ -221,6 +245,12 @@ def test_field_power():
         check_wedges(power.wedges, c_power.wedges)
         check_poles(power.poles, c_power.poles)
 
+        #power = get_mesh_power(mesh_real, los, edges=(np.insert(ref_kedges, 0, -0.1), muedges))
+        #assert np.allclose(power.wedges.nmodes[0], [0, 0, 1, 0, 0]) and power.wedges.k[0,2] == 0.
+        #assert power.poles.nmodes[0] == 1 and power.poles.k[0] == 0.
+        #check_wedges(power.wedges[1:], ref_power.power)
+        #check_poles(power.poles[1:], ref_power.poles)
+
 
 def test_mesh_power():
     boxsize = 600.
@@ -239,7 +269,7 @@ def test_mesh_power():
         los_array = [1. if ax == los else 0. for ax in 'xyz']
         from nbodykit.lab import FFTPower
         mesh = data.to_nbodykit().to_mesh(position='Position', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
-        return FFTPower(mesh, mode='2d', poles=ells, Nmu=len(muedges) - 1, los=los_array, dk=dk, kmin=kedges[0])
+        return FFTPower(mesh, mode='2d', poles=ells, Nmu=len(muedges) - 1, los=los_array, dk=dk, kmin=kedges[0], kmax=kedges[-1])
 
     def get_mesh_power(data, los, edges=(kedges, muedges), dtype=dtype, as_cross=False):
         mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
@@ -287,7 +317,6 @@ def test_mesh_power():
                 power.save(fn)
                 power = MeshFFTPower.load(fn)
                 power.save(fn)
-
             check_wedges(power.wedges, ref_power.power)
 
             if power.wedges.edges[1][-1] == 1.:
@@ -570,7 +599,7 @@ if __name__ == '__main__':
     #save_lognormal()
     #test_mesh_power()
     #test_interlacing()
-    #test_project()
+    #test_mesh_power()
     test_power_statistic()
     test_find_edges()
     test_ylm()

@@ -517,7 +517,7 @@ class MeshFFTWindow(MeshFFTPower):
 
             proj_result = project_to_basis(wfield, self.edges, antisymmetric=bool(ellout % 2))[0]
             result.append(np.squeeze(proj_result[2]))
-            k, nmodes = proj_result[0], proj_result[-1]
+            k, nmodes = proj_result[0], proj_result[3]
 
         del dfield
 

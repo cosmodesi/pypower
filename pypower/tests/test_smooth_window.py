@@ -89,7 +89,7 @@ def test_power_spectrum_window_matrix():
 
 def test_window():
 
-    edges = np.linspace(1e-4, 10, 1001)
+    edges = np.linspace(0., 10, 1001)
     k = (edges[:-1] + edges[1:])/2.
     win = np.exp(-(k*10)**2)
     y, projs = [], []
@@ -110,7 +110,19 @@ def test_window():
         fn = os.path.join(tmp_dir, 'tmp.npy')
         window.save(fn)
         test = PowerSpectrumSmoothWindow.load(fn)
+
     assert np.allclose(test(projs[0], k), window.power_nonorm[0])
+
+    window2 = PowerSpectrumSmoothWindow(edges, k, y, nmodes, projs, power_zero_nonorm=[10.] + [0.]*(len(projs) - 1), attrs={'boxsize':boxsize})
+    assert np.allclose(window2(proj=0, k=0., remove_zero=False), win[0])
+    assert np.allclose(window2(proj=0, k=0., remove_zero=True), win[0] - 10.)
+
+    y = np.array(y)
+    y2 = y.copy()
+    y2[:,1::2] = np.nan
+    window2 = PowerSpectrumSmoothWindow(edges, k[::2], y[:,::2], nmodes[::2], projs, attrs={'boxsize':boxsize})
+    window2_nan = PowerSpectrumSmoothWindow(edges, k, y2, nmodes, projs, attrs={'boxsize':boxsize})
+    assert np.allclose(window2_nan(projs[0], k), window2(projs[0], k))
 
     window_real = window.to_real()
     assert np.allclose(window.to_real(sep=1./window.k[window.k>0][::-1]).corr, window_real.corr)

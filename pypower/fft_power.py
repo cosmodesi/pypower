@@ -138,7 +138,7 @@ def get_real_Ylm(ell, m, modules=None):
     return Ylm
 
 
-def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
+def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, exclude_zero=False):
     r"""
     Project a 3D statistic on to the specified basis. The basis will be one of:
 
@@ -228,8 +228,8 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
     nmu = len(muedges) - 1
     xdtype = max(xedges.dtype, muedges.dtype)
     # Always make sure first ell value is monopole, which is just (x, mu) projection since legendre of ell = 0 is 1
+    return_poles = ells is not None
     ells = ells or []
-    do_poles = len(ells) > 0
     unique_ells = sorted(set([0]) | set(ells))
     legpoly = [legendre(ell) for ell in unique_ells]
     nell = len(unique_ells)
@@ -239,12 +239,14 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
         raise ValueError('Multipole numbers must be non-negative integers')
 
     # Initialize the binning arrays
-    musum = np.zeros((nx+2, nmu+2))
-    xsum = np.zeros((nx+2, nmu+2))
-    ysum = np.zeros((nell, nx+2, nmu+2), dtype=y3d.dtype) # extra dimension for multipoles
-    nsum = np.zeros((nx+2, nmu+2), dtype='i8')
-
+    musum = np.zeros((nx+3, nmu+3))
+    xsum = np.zeros((nx+3, nmu+3))
+    ysum = np.zeros((nell, nx+3, nmu+3), dtype=y3d.dtype) # extra dimension for multipoles
+    nsum = np.zeros((nx+3, nmu+3), dtype='i8')
     # If input array is Hermitian symmetric, only half of the last  axis is stored in `y3d`
+
+    cellsize = y3d.BoxSize/y3d.Nmesh if isinstance(y3d, RealField) else 2.*np.pi/y3d.BoxSize
+    mincell = np.min(cellsize)
 
     # Iterate over y-z planes of the coordinate mesh
     for islab in range(x3d[0].shape[0]):
@@ -258,11 +260,13 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
 
         # Get the bin indices for x on the slab
         dig_x = np.digitize(xnorm.flat, xedges, right=False)
+        mask_zero = xnorm < mincell/2.
+        #y3d[islab, mask_zero[0]] = 0.
+        dig_x[mask_zero.flat] = nx+2
 
         # Get the bin indices for mu on the slab
         mu = sum(xx*ll for xx, ll in zip(xvec, los))
-        nonzero = xnorm != 0.
-        mu[nonzero] /= xnorm[nonzero]
+        mu[~mask_zero] /= xnorm[~mask_zero]
 
         if hermitian_symmetric == 0:
             mus = [mu]
@@ -277,8 +281,9 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
             # Make the multi-index
             dig_mu = np.digitize(mu.flat, muedges, right=False) # this is bins[i-1] <= x < bins[i]
             dig_mu[mu.real.flat == muedges[-1]] = nmu # last mu inclusive
+            dig_mu[mask_zero.flat] = nmu + 2
 
-            multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx+2, nmu+2))
+            multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx+3, nmu+3))
 
             if hermitian_symmetric and imu:
                 multi_index = multi_index[nonsingular.flat]
@@ -319,34 +324,43 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False):
     # Our treatment of hermitian symmetric field would sum this frequency twice (mu and -mu)
     # But this would appear only once in uncompressed field
     # As a default, set frequencies beyond to NaN
-    xmax = y3d.Nmesh * (y3d.BoxSize/2/y3d.Nmesh if isinstance(y3d, RealField) else np.pi/y3d.BoxSize)
+    xmax = y3d.Nmesh//2 * cellsize
     mask_beyond_nyq = np.flatnonzero(xedges >= np.min(xmax))
     xsum[mask_beyond_nyq] = np.nan
     musum[mask_beyond_nyq] = np.nan
-    ysum[:,mask_beyond_nyq] = np.nan
+    ysum[:, mask_beyond_nyq] = np.nan
     nsum[mask_beyond_nyq] = 0
 
     # Reshape and slice to remove out of bounds points
-    sl = slice(1, -1)
+    sl = slice(1, -2)
+    if not exclude_zero:
+        dig_zero = tuple(np.digitize(0., edges, right=False) for edges in [xedges, muedges])
+        xsum[dig_zero] += xsum[nx+2, nmu+2]
+        musum[dig_zero] += musum[nx+2, nmu+2]
+        ysum[(Ellipsis,) + dig_zero] += ysum[:, nx+2, nmu+2]
+        nsum[dig_zero] += nsum[nx+2, nmu+2]
+
     with np.errstate(invalid='ignore', divide='ignore'):
 
         # 2D binned results
-        y2d = (ysum[0,...] / nsum)[sl, sl] # ell=0 is first index
+        y2d = (ysum[0, ...] / nsum)[sl, sl] # ell=0 is first index
         xmean2d  = (xsum / nsum)[sl, sl]
         mumean2d = (musum / nsum)[sl, sl]
         n2d = nsum[sl, sl]
+        zero2d = ysum[0, nx+2, nmu+2]
 
         # 1D multipole results (summing over mu (last) axis)
-        if do_poles:
+        if return_poles:
             n1d = nsum[sl, sl].sum(axis=-1)
             xmean1d = xsum[sl, sl].sum(axis=-1) / n1d
             poles = ysum[:, sl, sl].sum(axis=-1) / n1d
-            poles = poles[[unique_ells.index(ell) for ell in ells],...]
+            poles_zero = ysum[:, nx+2, nmu+2]
+            poles, poles_zero = (tmp[[unique_ells.index(ell) for ell in ells],...] for tmp in (poles, poles_zero))
 
     # Return y(x,mu) + (possibly empty) multipoles
-    result = (xmean2d, mumean2d, y2d, n2d)
-    result_poles = (xmean1d, poles, n1d) if do_poles else None
-    return result, result_poles
+    toret = [(xmean2d, mumean2d, y2d, n2d, zero2d)]
+    toret.append((xmean1d, poles, n1d, poles_zero) if return_poles else None)
+    return toret
 
 
 def find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD):
@@ -414,11 +428,11 @@ class BasePowerSpectrumStatistics(BaseClass):
     Specific power statistic should extend this class.
     """
     name = 'base'
-    _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'power_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm', 'attrs']
+    _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm', 'attrs']
     _tosum = ['nmodes']
     _toaverage = ['modes', 'power_nonorm', 'power_direct_nonorm']
 
-    def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., power_direct_nonorm=None, attrs=None):
+    def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., power_zero_nonorm=None, power_direct_nonorm=None, attrs=None):
         r"""
         Initialize :class:`BasePowerSpectrumStatistics`.
 
@@ -442,6 +456,12 @@ class BasePowerSpectrumStatistics(BaseClass):
         shotnoise_nonorm : float, default=0.
             Shot noise, *without* normalization.
 
+        power_zero_nonorm : float, array, default=0.
+            Value of power spectrum at :math:`k = 0`.
+
+        power_direct_nonorm : array, default=0.
+            Value of direct power spectrum estimation (that e.g. copes with small scales), to be added to :attr:`power_nonorm`.
+
         attrs : dict, default=None
             Dictionary of other attributes.
         """
@@ -450,6 +470,11 @@ class BasePowerSpectrumStatistics(BaseClass):
         self.edges = list(np.asarray(edge) for edge in edges)
         self.modes = list(np.asarray(mode) for mode in modes)
         self.power_nonorm = np.asarray(power_nonorm)
+        self.power_zero_nonorm = power_zero_nonorm
+        if power_zero_nonorm is None:
+            self.power_zero_nonorm = np.zeros(self.power_nonorm.shape[:self.power_nonorm.ndim - self.ndim], dtype=self.power_nonorm.dtype)
+        else:
+            self.power_zero_nonorm = np.asarray(power_zero_nonorm)
         self.power_direct_nonorm = power_direct_nonorm
         if power_direct_nonorm is None:
             self.power_direct_nonorm = np.zeros_like(self.power_nonorm)
@@ -460,10 +485,52 @@ class BasePowerSpectrumStatistics(BaseClass):
         self.shotnoise_nonorm = shotnoise_nonorm
         self.attrs = attrs or {}
 
+    def get_power(self, add_direct=True, remove_shotnoise=True, remove_zero=True, divide_wnorm=True, complex=True):
+        """
+        Return power spectrum, computed using various options.
+
+        Parameters
+        ----------
+        add_direct : bool, default=True
+            Add direct power spectrum measurement.
+
+        remove_shotnoise : bool, default=True
+            Remove estimated shot noise.
+
+        remove_zero : bool, default=True
+            Remove power spectrum at :math:`k = 0` (if within :attr:`edges`).
+
+        divide_wnorm : bool, default=True
+            Divide by estimated power spectrum normalization.
+
+        complex : bool, default=True
+            Whether (``True``) to return the complex power spectrum,
+            or (``False``) return its real part only.
+
+        Results
+        -------
+        power : array
+        """
+        toret = self.power_nonorm.copy()
+        if add_direct:
+            toret += self.power_direct_nonorm
+        if remove_shotnoise:
+            toret -= self.shotnoise_nonorm
+        if remove_zero:
+            dig_zero = tuple(np.digitize(0., edges, right=False) - 1 for edges in self.edges)
+            if all(0 <= dig_zero[ii] < self.shape[ii] for ii in range(self.ndim)):
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    toret[(Ellipsis,)*(toret.ndim - self.ndim) + dig_zero] -= self.power_zero_nonorm/self.nmodes[dig_zero]
+        if divide_wnorm:
+            toret /= self.wnorm
+        if not complex and np.iscomplexobj(toret):
+            toret = toret.real
+        return toret
+
     @property
     def power(self):
         """Power spectrum, normalized and with shot noise removed."""
-        return (self.power_nonorm + self.power_direct_nonorm - self.shotnoise_nonorm) / self.wnorm
+        return self.get_power()
 
     @property
     def shotnoise(self):
@@ -621,6 +688,11 @@ class BasePowerSpectrumStatistics(BaseClass):
                 state[name] = getattr(self, name)
         return state
 
+    def __setstate__(self, state):
+        super(BasePowerSpectrumStatistics, self).__setstate__(state)
+        if not hasattr(self, 'power_zero_nonorm'): # for backward-compatibility; to be removed soon!
+            self.power_zero_nonorm = np.zeros(self.power_nonorm.shape[:self.power_nonorm.ndim - self.ndim], dtype=self.power_nonorm.dtype)
+
     def __copy__(self):
         new = super(BasePowerSpectrumStatistics, self).__copy__()
         for name in ['edges', 'modes', 'attrs']:
@@ -686,9 +758,9 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
         r""":math:`\mu`-edges."""
         return self.edges[1]
 
-    def __call__(self, k=None, mu=None, complex=True):
+    def __call__(self, k=None, mu=None, complex=True, **kwargs):
         r"""
-        Return :attr:`power` (shot noise removed), optionally performing linear interpolation over :math:`k` and :math:`\mu`.
+        Return power spectrum, optionally performing linear interpolation over :math:`k` and :math:`\mu`.
 
         Parameters
         ----------
@@ -708,13 +780,15 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
             Whether (``True``) to return the complex power spectrum,
             or (``False``) return its real part only.
 
+        kwargs : dict
+            Other arguments for :meth:`get_power`.
+
         Returns
         -------
         toret : array
             (Optionally interpolated) power spectrum.
         """
-        tmp = self.power
-        if not complex and np.iscomplexobj(tmp): tmp = tmp.real
+        tmp = self.get_power(complex=complex, **kwargs)
         if k is None and mu is None:
             return tmp
         kavg, muavg = self.kavg, self.muavg
@@ -728,11 +802,12 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
         toret = np.nan * np.zeros((k.size, mu.size), dtype=tmp.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
         mask_mu = (mu >= self.edges[1][0]) & (mu <= self.edges[1][-1])
+        k, mu = k[mask_k], mu[mask_mu]
         if mask_k.any() and mask_mu.any():
             if muavg.size == 1:
-                interp = lambda array: UnivariateSpline(kavg, array, k=1, ext=3)(k[mask_k])[:, None]
+                interp = lambda array: UnivariateSpline(kavg, array, k=1, s=0, ext='const')(k)[:, None]
             else:
-                interp = lambda array: RectBivariateSpline(kavg, muavg, array, kx=1, ky=1, s=0)(k[mask_k], mu[mask_mu], grid=True)
+                interp = lambda array: RectBivariateSpline(kavg, muavg, array, kx=1, ky=1, s=0)(k, mu, grid=True)
             toret[np.ix_(mask_k, mask_mu)] = interp(tmp.real)
             if complex and np.iscomplexobj(tmp):
                 toret[np.ix_(mask_k, mask_mu)] += 1j * interp(tmp.imag)
@@ -780,21 +855,48 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         """Mode-weighted average wavenumber = :attr:`k`."""
         return self.k
 
-    @property
-    def power(self):
-        """Power spectrum, normalized and with shot noise removed from monopole."""
-        power = (self.power_nonorm + self.power_direct_nonorm) / self.wnorm
-        if 0 in self.ells:
-            power[self.ells.index(0)] -= self.shotnoise
-        return power
-
-    def __call__(self, ell=None,  k=None, complex=True):
-        r"""
-        Return :attr:`power` (shot noise removed), optionally performing linear interpolation over :math:`k`.
+    def get_power(self, add_direct=True, remove_shotnoise=True, remove_zero=True, divide_wnorm=True, complex=True):
+        """
+        Return power spectrum, computed using various options.
 
         Parameters
         ----------
-        ell : int, default=None
+        add_direct : bool, default=True
+            Add direct power spectrum measurement.
+
+        remove_shotnoise : bool, default=True
+            Remove estimated shot noise.
+
+        remove_zero : bool, default=True
+            Remove power spectrum at :math:`k = 0` (if within :attr:`edges`).
+
+        divide_wnorm : bool, default=True
+            Divide by estimated power spectrum normalization.
+
+        complex : bool, default=True
+            Whether (``True``) to return the complex power spectrum,
+            or (``False``) return its real part if even multipoles, imaginary part if odd multipole.
+
+        Results
+        -------
+        power : array
+        """
+        toret = super(PowerSpectrumMultipoles, self).get_power(add_direct=add_direct, remove_shotnoise=False, remove_zero=remove_zero, divide_wnorm=False, complex=True)
+        if remove_shotnoise and 0 in self.ells:
+            toret[self.ells.index(0)] -= self.shotnoise_nonorm
+        if divide_wnorm:
+            toret /= self.wnorm
+        if not complex and np.iscomplexobj(toret):
+            toret = np.array([toret[ill].real if ell % 2 == 0 else toret[ill].imag for ill, ell in enumerate(self.ells)], dtype=toret.real.dtype)
+        return toret
+
+    def __call__(self, ell=None,  k=None, complex=True, **kwargs):
+        r"""
+        Return power spectrum, optionally performing linear interpolation over :math:`k`.
+
+        Parameters
+        ----------
+        ell : int, list, default=None
             Multipole order. Defaults to all multipoles.
 
         k : float, array, default=None
@@ -805,7 +907,10 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
 
         complex : bool, default=True
             Whether (``True``) to return the complex power spectrum,
-            or (``False``) return its real part only if ``ell`` is even, imaginary part if ``ell`` is odd.
+            or (``False``) return its real part if ``ell`` is even, imaginary part if ``ell`` is odd.
+
+        kwargs : dict
+            Other arguments for :meth:`get_power`.
 
         Returns
         -------
@@ -813,21 +918,30 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
             (Optionally interpolated) power spectrum.
         """
         if ell is None:
-            return np.array([self(ell=ell, k=k, complex=complex) for ell in self.ells])
-        tmp = self.power[self.ells.index(ell)]
-        if not complex and np.iscomplexobj(tmp): tmp = tmp.real if ell % 2 == 0 else tmp.imag
+            isscalar = False
+            ell = self.ells
+        else:
+            isscalar = np.ndim(ell) == 0
+            if isscalar: ell = [ell]
+        ells = ell
+        tmp = self.get_power(complex=complex, **kwargs)
+        tmp = tmp[[self.ells.index(ell) for ell in ells]]
         if k is None:
+            if isscalar: return tmp[0]
             return tmp
         kavg = self.k
-        mask_finite_k = ~np.isnan(kavg)
-        kavg, tmp = kavg[mask_finite_k], tmp[mask_finite_k]
+        mask_finite_k = ~np.isnan(kavg) & ~np.isnan(tmp).any(axis=0)
+        kavg, tmp = kavg[mask_finite_k], tmp[:,mask_finite_k]
         k = np.asarray(k)
-        toret = np.nan * np.zeros(k.shape, dtype=tmp.dtype)
+        toret = np.nan * np.zeros((len(ells),) + k.shape, dtype=tmp.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
+        k = k[mask_k]
         if mask_k.any():
-            interp = lambda array: UnivariateSpline(kavg, array, k=1, ext=3)(k[mask_k])
-            toret[mask_k] = interp(tmp.real)
-            if complex and np.iscomplexobj(tmp): toret[mask_k] = toret[mask_k] + 1j * interp(tmp.imag)
+            interp = lambda array: np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
+            toret[..., mask_k] = interp(tmp.real)
+            if complex and np.iscomplexobj(tmp): toret[...,mask_k] = toret[..., mask_k] + 1j * interp(tmp.imag)
+        if isscalar:
+            toret = toret[0]
         return toret
 
 
@@ -1318,31 +1432,31 @@ class MeshFFTPower(BaseClass):
         # cfield1.conj() * cfield2
         for i, c1, c2 in zip(cfield1.slabs.i, cfield1.slabs, cfield2.slabs):
             c1[...] = c1.conj() * c2
-            mask_zero = True
-            for ii in i: mask_zero = mask_zero & (ii == 0)
-            c1[mask_zero] = 0.
+            #mask_zero = True
+            #for ii in i: mask_zero = mask_zero & (ii == 0)
+            #c1[mask_zero] = 0.
 
         #from nbodykit.algorithms.fftpower import project_to_basis
         #result, result_poles = project_to_basis(cfield1, self.edges, poles=self.ells or [], los=self.los)
-        result, result_poles = project_to_basis(cfield1, self.edges, ells=self.ells, los=self.los)
+        result, result_poles = project_to_basis(cfield1, self.edges, ells=self.ells, los=self.los, exclude_zero=False)
 
         stop = time.time()
         if rank == 0:
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
 
-        # Format the power results into :class:`PowerSpectrumWedges` instance
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
-        k, mu, power, nmodes = result[:4]
+        k, mu, power, nmodes, zero = result
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-        power = self.nmesh.prod()**2 * power.conj()
-        self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
+        power, zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, zero))
+        # Format the power results into :class:`PowerSpectrumWedges` instance
+        self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, power_zero_nonorm=zero, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PowerSpectrumMultipoles` instance
-            k, power, nmodes = result_poles[:3]
+            k, power, nmodes, zero = result_poles
             # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-            power = self.nmesh.prod()**2 * power.conj()
-            self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
+            power, zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, zero))
+            self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def _run_local_los(self):
 
@@ -1360,10 +1474,10 @@ class MeshFFTPower(BaseClass):
         # FFT 1st density field and apply the resampler transfer kernel
         A0 = self._to_complex(self.mesh2, copy=True) # pmesh r2c convention is 1/N^3 e^{-ikr}
         # Set mean value or real field to 0
-        for i, c in zip(A0.slabs.i, A0.slabs):
-            mask_zero = True
-            for ii in i: mask_zero = mask_zero & (ii == 0)
-            c[mask_zero] = 0.
+        #for i, c in zip(A0.slabs.i, A0.slabs):
+        #    mask_zero = True
+        #    for ii in i: mask_zero = mask_zero & (ii == 0)
+        #    c[mask_zero] = 0.
 
         # We will apply all compensation transfer functions to A0_1 (faster than applying to each Aell)
         compensations = [self.compensations[0]] * 2 if self.autocorr else self.compensations
@@ -1397,9 +1511,9 @@ class MeshFFTPower(BaseClass):
 
             # the 1D monopole
             #from nbodykit.algorithms.fftpower import project_to_basis
-            proj_result = project_to_basis(Aell, self.edges)[0]
-            result.append(np.squeeze(proj_result[2]))
-            k, nmodes = proj_result[0], proj_result[-1]
+            proj_result = project_to_basis(Aell, self.edges, exclude_zero=False)[0]
+            result.append((np.squeeze(proj_result[2]), np.squeeze(proj_result[-1])))
+            k, nmodes = proj_result[0], proj_result[3]
 
             if rank == 0:
                 self.log_info('ell = {:d} done; {:d} r2c completed'.format(0, 1))
@@ -1476,20 +1590,20 @@ class MeshFFTPower(BaseClass):
                 Aell[islab,...] = Aell[islab].conj() * A0[islab]
 
             # Project on to 1d k-basis (averaging over mu=[-1,1])
-            proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2))[0]
-            result.append(4 * np.pi * np.squeeze(proj_result[2]))
-            k, nmodes = proj_result[0], proj_result[-1]
+            proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
+            result.append((4 * np.pi * np.squeeze(proj_result[2]), 4 * np.pi * np.squeeze(proj_result[-1])))
+            k, nmodes = proj_result[0], proj_result[3]
 
         stop = time.time()
         if rank == 0:
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-        poles = self.nmesh.prod()**2 * np.array([result[ells.index(ell)] for ell in self.ells]).conj()
-        if swap: poles = poles.conj()
+        poles, poles_zero = (self.nmesh.prod()**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
+        if swap: poles, poles_zero = (tmp.conj() for tmp in (poles, poles_zero))
         # Format the power results into :class:`PowerSpectrumMultipoles` instance
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
-        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
+        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=poles, power_zero_nonorm=poles_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
 
 class CatalogFFTPower(MeshFFTPower):

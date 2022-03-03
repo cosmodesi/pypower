@@ -10,6 +10,7 @@ from fractions import Fraction
 import logging
 
 import numpy as np
+from scipy.interpolate import UnivariateSpline
 from scipy import special
 
 from .utils import BaseClass
@@ -34,7 +35,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
     _attrs = BasePowerSpectrumStatistics._attrs + ['volume', 'projs']
     _tosum = ['nmodes', 'volume']
 
-    def __init__(self, edges, modes, power_nonorm, nmodes, projs, wnorm=1., shotnoise_nonorm=0., **kwargs):
+    def __init__(self, edges, modes, power_nonorm, nmodes, projs, **kwargs):
         r"""
         Initialize :class:`PowerSpectrumSmoothWindow`.
 
@@ -55,39 +56,64 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         projs : list
             List of :class:`Projection` instances or (multipole, wide-angle order) tuples.
 
-        wnorm : float, default=1.
-            Window function normalization.
-
-        shotnoise_nonorm : float, default=0.
-            Shot noise, *without* normalization.
-
         kwargs : dict
             Other arguments for :attr:`BasePowerSpectrumStatistics`.
         """
         self.projs = [Projection(proj) for proj in projs]
-        super(PowerSpectrumSmoothWindow, self).__init__(edges, modes, power_nonorm, nmodes, wnorm=wnorm, shotnoise_nonorm=shotnoise_nonorm, **kwargs)
+        super(PowerSpectrumSmoothWindow, self).__init__(edges, modes, power_nonorm, nmodes, **kwargs)
         if np.ndim(self.shotnoise_nonorm) == 0:
-            self.shotnoise_nonorm = _make_array(0., len(self.power_nonorm), dtype='f8')
+            shotnoise_nonorm = self.shotnoise_nonorm
+            self.shotnoise_nonorm = _make_array(0., len(self.power_nonorm), dtype=self.power_nonorm.dtype)
             for iproj, proj in enumerate(self.projs):
                 if proj.ell == 0: self.shotnoise_nonorm[iproj] = shotnoise_nonorm
-        self.wnorm = _make_array(wnorm, len(self.power_nonorm), dtype='f8')
+        self.wnorm = _make_array(self.wnorm, len(self.power_nonorm), dtype=self.power_nonorm.dtype)
         self.volume = None
         if 'boxsize' in self.attrs:
             self.volume = (2.*np.pi)**3 / np.prod(self.attrs['boxsize']) * self.nmodes
-
-    @property
-    def power(self):
-        """Power spectrum, normalized and with shot noise removed from monopole."""
-        return (self.power_nonorm + self.power_direct_nonorm) / self.wnorm[:,None] - self.shotnoise[:,None]
 
     @property
     def kavg(self):
         """Mode-weighted average wavenumber = :attr:`k`."""
         return self.k
 
-    def __call__(self, proj, k=None, complex=True, default_zero=False):
+    def get_power(self, add_direct=True, remove_shotnoise=True, remove_zero=True, divide_wnorm=True, complex=True):
+        """
+        Return power spectrum, computed using various options.
+
+        Parameters
+        ----------
+        add_direct : bool, default=True
+            Add direct power spectrum measurement.
+
+        remove_shotnoise : bool, default=True
+            Remove estimated shot noise.
+
+        remove_zero : bool, default=True
+            Remove power spectrum at :math:`k = 0` (if within :attr:`edges`).
+
+        divide_wnorm : bool, default=True
+            Divide by estimated power spectrum normalization.
+
+        complex : bool, default=True
+            Whether (``True``) to return the complex power spectrum,
+            or (``False``) return its real part if even multipoles, imaginary part if odd multipole.
+
+        Results
+        -------
+        power : array
+        """
+        toret = super(PowerSpectrumSmoothWindow, self).get_power(add_direct=add_direct, remove_shotnoise=False, remove_zero=remove_zero, divide_wnorm=False, complex=True)
+        if remove_shotnoise:
+            toret -= self.shotnoise_nonorm[:, None]
+        if divide_wnorm:
+            toret /= self.wnorm[:, None]
+        if not complex and np.iscomplexobj(toret):
+            toret = np.array([toret[iproj].real if proj.ell % 2 == 0 else toret[iproj].imag for iproj, proj in enumerate(self.projs)], dtype=toret.real.dtype)
+        return toret
+
+    def __call__(self, proj=None,  k=None, complex=True, default_zero=False, **kwargs):
         r"""
-        Return :attr:`power`, optionally performing linear interpolation over :math:`k`.
+        Return window function, optionally performing linear interpolation over :math:`k`.
 
         Parameters
         ----------
@@ -102,30 +128,51 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
 
         complex : bool, default=True
             Whether (``True``) to return the complex power spectrum,
-            or (``False``) return its real part only if ``ell`` is even, imaginary part if ``ell`` is odd.
+            or (``False``) return its real part if ``proj.ell`` is even, imaginary part if ``proj.ell`` is odd.
 
-        default_zero : bool, default=False
-            If input ``proj`` is not in :attr:`projs` (not computed), and ``default_zero`` is ``True``, return 0.
-            If ``default_zero`` is ``False``, raise an :class:`IndexError`.
+        kwargs : dict
+            Other arguments for :meth:`get_power`.
 
         Returns
         -------
         toret : array
             (Optionally interpolated) window function.
         """
+        isscalar = True
         if proj is None:
-            return np.array([self(proj=proj, k=k, complex=complex, default_zero=default_zero) for proj in self.projs])
-        if k is None: k = self.k
-        proj = Projection(proj)
-        if proj not in self.projs:
-            if default_zero:
-                self.log_info('No window provided for projection {}, defaulting to 0.'.format(proj))
-                return np.zeros_like(k)
-            raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
-        tmp = self.power[self.projs.index(proj)]
-        complex = complex
-        if not complex and np.iscomplexobj(tmp): tmp = tmp.real if proj.ell % 2 == 0 else tmp.imag
-        return np.interp(k, self.k, tmp)
+            isscalar = False
+            proj = self.projs
+        else:
+            proj = [Projection(proj)]
+        projs = proj
+        power = self.get_power(complex=complex, **kwargs)
+        tmp = []
+        for proj in projs:
+            if proj not in self.projs:
+                if default_zero:
+                    self.log_info('No window provided for projection {}, defaulting to 0.'.format(proj))
+                    tmp.append(np.zeros_like(power[0]))
+                raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
+            else:
+                tmp.append(power[self.projs.index(proj)])
+        tmp = np.asarray(tmp)
+        if k is None:
+            if isscalar: return tmp[0]
+            return tmp
+        kavg = self.k
+        mask_finite_k = ~np.isnan(kavg) & ~np.isnan(tmp).any(axis=0)
+        kavg, tmp = kavg[mask_finite_k], tmp[:,mask_finite_k]
+        k = np.asarray(k)
+        toret = np.nan * np.zeros((len(projs),) + k.shape, dtype=tmp.dtype)
+        mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
+        k = k[mask_k]
+        if mask_k.any():
+            interp = lambda array: np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
+            toret[..., mask_k] = interp(tmp.real)
+            if complex and np.iscomplexobj(tmp): toret[...,mask_k] = toret[..., mask_k] + 1j * interp(tmp.imag)
+        if isscalar:
+            toret = toret[0]
+        return toret
 
     @classmethod
     def from_power(cls, power, wa_order=0):
@@ -159,6 +206,10 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         in the given bin, if exists (bins are declared equal when exact floating point matching of (low, high)).
         In case two windows have the same number of modes in the same bin, the first provided one is selected.
         Therefore, different results may be obtained when changing the order of input windows.
+
+        Note
+        ----
+        Typically, you will want to input windows with decreasing box size (largest box size first).
 
         Parameters
         ----------
@@ -237,7 +288,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         new = others[0].deepcopy()
         new.projs = []
         for other in others: new.projs += other.projs
-        names = ['power_nonorm', 'power_direct_nonorm', 'wnorm', 'shotnoise_nonorm']
+        names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'wnorm', 'shotnoise_nonorm']
         for name in names:
             tmp = [getattr(other, name) for other in others]
             setattr(new, name, np.concatenate(tmp, axis=0))
@@ -297,7 +348,7 @@ class CorrelationFunctionSmoothWindow(BaseClass):
 
     def __call__(self, proj=None, sep=None, default_zero=False):
         r"""
-        Return :attr:`corr`, optionally performing linear interpolation over :math:`s`.
+        Return window function, optionally performing linear interpolation over :math:`s`.
 
         Parameters
         ----------
@@ -319,16 +370,33 @@ class CorrelationFunctionSmoothWindow(BaseClass):
         toret : array
             (Optionally interpolated) window function.
         """
+        isscalar = True
         if proj is None:
-            return np.array([self(proj=proj, sep=sep, default_zero=default_zero) for proj in self.projs])
+            isscalar = False
+            proj = self.projs
+        else:
+            proj = [Projection(proj)]
+        projs = proj
+        tmp = []
+        for proj in projs:
+            if proj not in self.projs:
+                if default_zero:
+                    self.log_info('No window provided for projection {}, defaulting to 0.'.format(proj))
+                    tmp.append(np.zeros_like(self.corr[0]))
+                raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
+            else:
+                tmp.append(self.corr[self.projs.index(proj)])
+        tmp = np.asarray(tmp)
         if sep is None:
-            sep = self.sep
-        if proj not in self.projs:
-            if default_zero:
-                self.log_info('No window provided for projection {}, defaulting to 0.'.format(proj))
-                return np.zeros_like(sep)
-            raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
-        return np.interp(sep, self.sep, self.corr[self.projs.index(proj)])
+            if isscalar: return tmp[0]
+            return tmp
+        sepavg = self.sep
+        mask_finite_sep = ~np.isnan(sepavg) & ~np.isnan(tmp).any(axis=0)
+        sepavg, tmp = sepavg[mask_finite_sep], tmp[:,mask_finite_sep]
+        toret = np.array([UnivariateSpline(sepavg, arr, k=1, s=0, ext='const')(sep) for arr in tmp], dtype=tmp.dtype)
+        if isscalar:
+            toret = toret[0]
+        return toret
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -386,16 +454,16 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
         smoothing = np.asarray(smooth)
         if smoothing.size != k.size:
             raise ValueError('smoothing kernel must be of the same size as k coordinates i.e. {:d}'.format(k.size))
-    mask = k > 0
-    k = k[mask]; volume = volume[mask]
+    #mask = k > 0
+    #k = k[mask]; volume = volume[mask]
     if sep is None:
-        sep = 1./k[::-1]
+        sep = 1./k[k>0][::-1]
     else:
         sep = np.asarray(sep)
     window = []
     _slab_npoints_max = 10 * 1000
     for proj in fourier_window.projs:
-        wk = fourier_window(proj, k, complex=False) * smoothing
+        wk = fourier_window(proj, k, complex=False, remove_zero=False) * smoothing
         block = np.empty_like(sep)
         nslabs = min(max(len(k) * len(sep) // _slab_npoints_max, 1), len(sep))
         for islab in range(nslabs): # proceed by slab to save memory
