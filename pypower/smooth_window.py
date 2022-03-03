@@ -76,7 +76,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         """Mode-weighted average wavenumber = :attr:`k`."""
         return self.k
 
-    def get_power(self, add_direct=True, remove_shotnoise=True, remove_zero=True, divide_wnorm=True, complex=True):
+    def get_power(self, add_direct=True, remove_shotnoise=True, null_zero_mode=False, divide_wnorm=True, complex=True):
         """
         Return power spectrum, computed using various options.
 
@@ -88,7 +88,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         remove_shotnoise : bool, default=True
             Remove estimated shot noise.
 
-        remove_zero : bool, default=True
+        null_zero_mode : bool, default=True
             Remove power spectrum at :math:`k = 0` (if within :attr:`edges`).
 
         divide_wnorm : bool, default=True
@@ -102,7 +102,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         -------
         power : array
         """
-        toret = super(PowerSpectrumSmoothWindow, self).get_power(add_direct=add_direct, remove_shotnoise=False, remove_zero=remove_zero, divide_wnorm=False, complex=True)
+        toret = super(PowerSpectrumSmoothWindow, self).get_power(add_direct=add_direct, remove_shotnoise=False, null_zero_mode=null_zero_mode, divide_wnorm=False, complex=True)
         if remove_shotnoise:
             toret -= self.shotnoise_nonorm[:, None]
         if divide_wnorm:
@@ -163,7 +163,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         mask_finite_k = ~np.isnan(kavg) & ~np.isnan(tmp).any(axis=0)
         kavg, tmp = kavg[mask_finite_k], tmp[:,mask_finite_k]
         k = np.asarray(k)
-        toret = np.nan * np.zeros((len(projs),) + k.shape, dtype=tmp.dtype)
+        toret = np.zeros((len(projs),) + k.shape, dtype=tmp.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
         k = k[mask_k]
         if mask_k.any():
@@ -463,7 +463,7 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
     window = []
     _slab_npoints_max = 10 * 1000
     for proj in fourier_window.projs:
-        wk = fourier_window(proj, k, complex=False, remove_zero=False) * smoothing
+        wk = fourier_window(proj, k, complex=False, null_zero_mode=False) * smoothing
         block = np.empty_like(sep)
         nslabs = min(max(len(k) * len(sep) // _slab_npoints_max, 1), len(sep))
         for islab in range(nslabs): # proceed by slab to save memory

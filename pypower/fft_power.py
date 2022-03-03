@@ -485,7 +485,7 @@ class BasePowerSpectrumStatistics(BaseClass):
         self.shotnoise_nonorm = shotnoise_nonorm
         self.attrs = attrs or {}
 
-    def get_power(self, add_direct=True, remove_shotnoise=True, remove_zero=True, divide_wnorm=True, complex=True):
+    def get_power(self, add_direct=True, remove_shotnoise=True, null_zero_mode=True, divide_wnorm=True, complex=True):
         """
         Return power spectrum, computed using various options.
 
@@ -497,7 +497,7 @@ class BasePowerSpectrumStatistics(BaseClass):
         remove_shotnoise : bool, default=True
             Remove estimated shot noise.
 
-        remove_zero : bool, default=True
+        null_zero_mode : bool, default=True
             Remove power spectrum at :math:`k = 0` (if within :attr:`edges`).
 
         divide_wnorm : bool, default=True
@@ -516,7 +516,7 @@ class BasePowerSpectrumStatistics(BaseClass):
             toret += self.power_direct_nonorm
         if remove_shotnoise:
             toret -= self.shotnoise_nonorm
-        if remove_zero:
+        if null_zero_mode:
             dig_zero = tuple(np.digitize(0., edges, right=False) - 1 for edges in self.edges)
             if all(0 <= dig_zero[ii] < self.shape[ii] for ii in range(self.ndim)):
                 with np.errstate(divide='ignore', invalid='ignore'):
@@ -855,7 +855,7 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         """Mode-weighted average wavenumber = :attr:`k`."""
         return self.k
 
-    def get_power(self, add_direct=True, remove_shotnoise=True, remove_zero=True, divide_wnorm=True, complex=True):
+    def get_power(self, add_direct=True, remove_shotnoise=True, null_zero_mode=True, divide_wnorm=True, complex=True):
         """
         Return power spectrum, computed using various options.
 
@@ -867,7 +867,7 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         remove_shotnoise : bool, default=True
             Remove estimated shot noise.
 
-        remove_zero : bool, default=True
+        null_zero_mode : bool, default=True
             Remove power spectrum at :math:`k = 0` (if within :attr:`edges`).
 
         divide_wnorm : bool, default=True
@@ -881,7 +881,7 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         -------
         power : array
         """
-        toret = super(PowerSpectrumMultipoles, self).get_power(add_direct=add_direct, remove_shotnoise=False, remove_zero=remove_zero, divide_wnorm=False, complex=True)
+        toret = super(PowerSpectrumMultipoles, self).get_power(add_direct=add_direct, remove_shotnoise=False, null_zero_mode=null_zero_mode, divide_wnorm=False, complex=True)
         if remove_shotnoise and 0 in self.ells:
             toret[self.ells.index(0)] -= self.shotnoise_nonorm
         if divide_wnorm:

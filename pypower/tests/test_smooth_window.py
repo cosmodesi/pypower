@@ -112,10 +112,11 @@ def test_window():
         test = PowerSpectrumSmoothWindow.load(fn)
 
     assert np.allclose(test(projs[0], k), window.power_nonorm[0])
+    assert np.allclose(test(projs[0], 10.), 0.)
 
     window2 = PowerSpectrumSmoothWindow(edges, k, y, nmodes, projs, power_zero_nonorm=[10.] + [0.]*(len(projs) - 1), attrs={'boxsize':boxsize})
-    assert np.allclose(window2(proj=0, k=0., remove_zero=False), win[0])
-    assert np.allclose(window2(proj=0, k=0., remove_zero=True), win[0] - 10.)
+    assert np.allclose(window2(proj=0, k=0., null_zero_mode=False), win[0])
+    assert np.allclose(window2(proj=0, k=0., null_zero_mode=True), win[0] - 10.)
 
     y = np.array(y)
     y2 = y.copy()
