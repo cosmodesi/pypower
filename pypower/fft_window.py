@@ -484,48 +484,25 @@ class MeshFFTWindow(MeshFFTPower):
 
         return toret
 
-    def _run_local_los(self, projin, deriv):
-        # We we perform the sum of Q defined in https://fr.overleaf.com/read/hpgbwqzmtcxn
-        # projin is \ell^\prime, n
-        # deriv is \xi^{(n)}_{\ell^{\prime},\beta \ell^\prime}(s^w)
+    def _run_periodic(self, projin, deriv):
+        legendre = special.legendre(projin.ell)
+        for islab, slab in enumerate(self.qfield.slabs):
+            tmp = deriv(self.knorm[islab])
+            if projin.ell:
+                mu = sum(xx[islab]*ll for xx, ll in zip(self.khat, self.los))
+                tmp *= legendre(mu)
+            slab[:] = tmp
 
-        result = []
-        ells = sorted(set(self.ells))
-
-        dfield = RealField(self.pm)
-        for islab, slab in enumerate(dfield.slabs):
-            #tmp = np.zeros_like(self.xwnorm[islab])
-            #mask_nonzero = self.xwnorm[islab] != 0.
-            #tmp[mask_nonzero] = deriv(self.xwnorm[islab][mask_nonzero])
-            #tmp = deriv(self.xwnorm[islab])
-            #if projin.wa_order != 0: tmp *= self.xwnorm[islab]**projin.wa_order # s_w^n
-            #slab[:] = tmp
-            slab[:] = deriv(self.xwnorm[islab])
-
-        for ellout in ells:
-
-            wfield = ComplexField(self.pm)
-            wfield[:] = 0.
-            for mout in range(-ellout, ellout+1):
-                Ylm = get_real_Ylm(ellout, mout)
-                qfield = self._get_q(ellout=ellout, mout=mout, projin=projin)
-                qfield[:] *= dfield[:]
-                cfield = qfield.r2c()
-                for islab, slab in enumerate(cfield.slabs):
-                    slab[:] *= 4.*np.pi * Ylm(self.khat[0][islab], self.khat[1][islab], self.khat[2][islab])
-                wfield[:] += cfield[:]
-
-            proj_result = project_to_basis(wfield, self.edges, antisymmetric=bool(ellout % 2))[0]
-            result.append(np.squeeze(proj_result[2]))
-            k, nmodes = proj_result[0], proj_result[3]
-
-        del dfield
-
-        poles = self.nmesh.prod()**2 * np.array([result[ells.index(ell)] for ell in self.ells]).conj()
-        if self.swap: poles = poles.conj()
-        k, nmodes = np.squeeze(k), np.squeeze(nmodes)
+        result, result_poles = project_to_basis(self.qfield, self.edges, ells=self.ells, los=self.los)
+        # Format the power results into :class:`PowerSpectrumWedges` instance
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':0., 'attrs':self.attrs}
-        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=poles, nmodes=nmodes, ells=self.ells, **kwargs)
+        k, mu, power, nmodes, power_zero = result
+        self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, **kwargs)
+
+        if result_poles:
+            # Format the power results into :class:`PolePowerSpectrum` instance
+            k, power, nmodes, power_zero = result_poles
+            self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def _run_global_los(self, projin, deriv):
         # projin is \ell^\prime
@@ -568,35 +545,58 @@ class MeshFFTWindow(MeshFFTPower):
         result, result_poles = project_to_basis(wfield, self.edges, ells=self.ells, los=self.los)
         # Format the power results into :class:`PowerSpectrumWedges` instance
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':0., 'attrs':self.attrs}
-        k, mu, power, nmodes = result[:4]
-        power = self.nmesh.prod()**2 * power.conj()
-        self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
+        k, mu, power, nmodes, power_zero = result
+        power, power_zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, power_zero))
+        self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PolePowerSpectrum` instance
-            k, power, nmodes = result_poles[:3]
-            power = self.nmesh.prod()**2 * power.conj()
-            self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
+            k, power, nmodes, power_zero = result_poles
+            power, power_zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, power_zero))
+            self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
-    def _run_periodic(self, projin, deriv):
-        legendre = special.legendre(projin.ell)
-        for islab, slab in enumerate(self.qfield.slabs):
-            tmp = deriv(self.knorm[islab])
-            if projin.ell:
-                mu = sum(xx[islab]*ll for xx, ll in zip(self.khat, self.los))
-                tmp *= legendre(mu)
-            slab[:] = tmp
+    def _run_local_los(self, projin, deriv):
+        # We we perform the sum of Q defined in https://fr.overleaf.com/read/hpgbwqzmtcxn
+        # projin is \ell^\prime, n
+        # deriv is \xi^{(n)}_{\ell^{\prime},\beta \ell^\prime}(s^w)
 
-        result, result_poles = project_to_basis(self.qfield, self.edges, ells=self.ells, los=self.los)
-        # Format the power results into :class:`PowerSpectrumWedges` instance
+        result = []
+        ells = sorted(set(self.ells))
+
+        dfield = RealField(self.pm)
+        for islab, slab in enumerate(dfield.slabs):
+            #tmp = np.zeros_like(self.xwnorm[islab])
+            #mask_nonzero = self.xwnorm[islab] != 0.
+            #tmp[mask_nonzero] = deriv(self.xwnorm[islab][mask_nonzero])
+            #tmp = deriv(self.xwnorm[islab])
+            #if projin.wa_order != 0: tmp *= self.xwnorm[islab]**projin.wa_order # s_w^n
+            #slab[:] = tmp
+            slab[:] = deriv(self.xwnorm[islab])
+
+        for ellout in ells:
+
+            wfield = ComplexField(self.pm)
+            wfield[:] = 0.
+            for mout in range(-ellout, ellout+1):
+                Ylm = get_real_Ylm(ellout, mout)
+                qfield = self._get_q(ellout=ellout, mout=mout, projin=projin)
+                qfield[:] *= dfield[:]
+                cfield = qfield.r2c()
+                for islab, slab in enumerate(cfield.slabs):
+                    slab[:] *= 4.*np.pi * Ylm(self.khat[0][islab], self.khat[1][islab], self.khat[2][islab])
+                wfield[:] += cfield[:]
+
+            proj_result = project_to_basis(wfield, self.edges, antisymmetric=bool(ellout % 2))[0]
+            result.append(tuple(np.squeeze(proj_result[ii]) for ii in [2, -1]))
+            k, nmodes = proj_result[0], proj_result[3]
+
+        del dfield
+
+        power, power_zero = (self.nmesh.prod()**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
+        if self.swap: power, power_zero = (tmp.conj() for tmp in (power, power_zero))
+        k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':0., 'attrs':self.attrs}
-        k, mu, power, nmodes = result[:4]
-        self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, nmodes=nmodes, **kwargs)
-
-        if result_poles:
-            # Format the power results into :class:`PolePowerSpectrum` instance
-            k, power, nmodes = result_poles[:3]
-            self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, nmodes=nmodes, ells=self.ells, **kwargs)
+        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def run(self):
 

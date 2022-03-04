@@ -426,6 +426,9 @@ class BasePowerSpectrumStatistics(BaseClass):
     """
     Base template power statistic class.
     Specific power statistic should extend this class.
+
+    We recommend accessing power spectrum measurements through :meth:`get_power`,
+    or :meth:`__call__` (accessed through ``my_power_statistic_instance()``).
     """
     name = 'base'
     _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm', 'attrs']
@@ -566,8 +569,8 @@ class BasePowerSpectrumStatistics(BaseClass):
         return toret
 
     def __call__(self):
-        """Return :attr:`power`."""
-        return self.power
+        """Method that interpolates power spectrum measurements at any point."""
+        raise NotImplementedError('Implement method "__call__" in your {}'.format(self.__class__.__name__))
 
     def __getitem__(self, slices):
         """Call :meth:`slice`."""
@@ -1445,18 +1448,18 @@ class MeshFFTPower(BaseClass):
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
 
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
-        k, mu, power, nmodes, zero = result
+        k, mu, power, nmodes, power_zero = result
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-        power, zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, zero))
+        power, power_zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, power_zero))
         # Format the power results into :class:`PowerSpectrumWedges` instance
-        self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, power_zero_nonorm=zero, nmodes=nmodes, **kwargs)
+        self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PowerSpectrumMultipoles` instance
-            k, power, nmodes, zero = result_poles
+            k, power, nmodes, power_zero = result_poles
             # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-            power, zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, zero))
-            self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=zero, nmodes=nmodes, ells=self.ells, **kwargs)
+            power, power_zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, power_zero))
+            self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def _run_local_los(self):
 
@@ -1512,7 +1515,7 @@ class MeshFFTPower(BaseClass):
             # the 1D monopole
             #from nbodykit.algorithms.fftpower import project_to_basis
             proj_result = project_to_basis(Aell, self.edges, exclude_zero=False)[0]
-            result.append((np.squeeze(proj_result[2]), np.squeeze(proj_result[-1])))
+            result.append(tuple(np.squeeze(proj_result[ii]) for ii in [2, -1]))
             k, nmodes = proj_result[0], proj_result[3]
 
             if rank == 0:
@@ -1591,19 +1594,19 @@ class MeshFFTPower(BaseClass):
 
             # Project on to 1d k-basis (averaging over mu=[-1,1])
             proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
-            result.append((4 * np.pi * np.squeeze(proj_result[2]), 4 * np.pi * np.squeeze(proj_result[-1])))
+            result.append(tuple(4 * np.pi * np.squeeze(proj_result[ii]) for ii in [2, -1]))
             k, nmodes = proj_result[0], proj_result[3]
 
         stop = time.time()
         if rank == 0:
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-        poles, poles_zero = (self.nmesh.prod()**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
-        if swap: poles, poles_zero = (tmp.conj() for tmp in (poles, poles_zero))
+        power, power_zero = (self.nmesh.prod()**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
+        if swap: power, power_zero = (tmp.conj() for tmp in (power, power_zero))
         # Format the power results into :class:`PowerSpectrumMultipoles` instance
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
-        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=poles, power_zero_nonorm=poles_zero, nmodes=nmodes, ells=self.ells, **kwargs)
+        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
 
 class CatalogFFTPower(MeshFFTPower):

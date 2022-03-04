@@ -152,7 +152,8 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
                 if default_zero:
                     self.log_info('No window provided for projection {}, defaulting to 0.'.format(proj))
                     tmp.append(np.zeros_like(power[0]))
-                raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
+                else:
+                    raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
             else:
                 tmp.append(power[self.projs.index(proj)])
         tmp = np.asarray(tmp)
@@ -383,7 +384,8 @@ class CorrelationFunctionSmoothWindow(BaseClass):
                 if default_zero:
                     self.log_info('No window provided for projection {}, defaulting to 0.'.format(proj))
                     tmp.append(np.zeros_like(self.corr[0]))
-                raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
+                else:
+                    raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
             else:
                 tmp.append(self.corr[self.projs.index(proj)])
         tmp = np.asarray(tmp)

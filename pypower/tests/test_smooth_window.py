@@ -1,5 +1,6 @@
 import os
 import tempfile
+import pytest
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -125,11 +126,19 @@ def test_window():
     window2_nan = PowerSpectrumSmoothWindow(edges, k, y2, nmodes, projs, attrs={'boxsize':boxsize})
     assert np.allclose(window2_nan(projs[0], k), window2(projs[0], k))
 
+    with pytest.raises(IndexError):
+        window((18,2))
+    assert np.allclose(window((18,2), default_zero=True), 0.)
+
     window_real = window.to_real()
     assert np.allclose(window.to_real(sep=1./window.k[window.k>0][::-1]).corr, window_real.corr)
     assert np.allclose(window.to_real(k=window.k, smooth=0.).corr, window.to_real(k=window.k).corr)
     assert np.allclose(window.to_real(smooth=0.5).corr, window.to_real(smooth=np.exp(-(0.5 * window.k)**2)).corr)
     assert not np.isnan(window2_nan.to_real().corr).any()
+
+    with pytest.raises(IndexError):
+        window_real((18,2))
+    assert np.allclose(window_real((18,2), default_zero=True), 0.)
 
     window.power_zero_nonorm[0] = 10.
     window_real2 = window.to_real()
