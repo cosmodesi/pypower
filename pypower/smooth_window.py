@@ -1,7 +1,7 @@
 """
 Implementation of (approximate) window function estimation and convolution.
 Typically, the window function will be estimated through :class:`CatalogSmoothWindow`,
-and window function matrices using :class:`PowerSpectrumOddWideAngleMatrix`,
+and window function matrices using :class:`PowerSpectrumSmoothWindowMatrix`,
 following https://arxiv.org/abs/2106.06324.
 """
 
