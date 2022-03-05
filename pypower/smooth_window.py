@@ -1,7 +1,7 @@
 """
 Implementation of (approximate) window function estimation and convolution.
 Typically, the window function will be estimated through :class:`CatalogSmoothWindow`,
-and window function matrices using :class:`PowerSpectrumOddWideAngleMatrix`,
+and window function matrices using :class:`PowerSpectrumSmoothWindowMatrix`,
 following https://arxiv.org/abs/2106.06324.
 """
 
@@ -70,6 +70,10 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         self.volume = None
         if 'boxsize' in self.attrs:
             self.volume = (2.*np.pi)**3 / np.prod(self.attrs['boxsize']) * self.nmodes
+
+    @property
+    def _power_names(self):
+        return ['W{:d},{:d}(k)'.format(proj.ell, proj.wa_order) for proj in self.projs]
 
     @property
     def kavg(self):
@@ -156,21 +160,21 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
                     raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
             else:
                 tmp.append(power[self.projs.index(proj)])
-        tmp = np.asarray(tmp)
+        power = np.asarray(tmp)
         if k is None:
-            if isscalar: return tmp[0]
-            return tmp
+            if isscalar: return power[0]
+            return power
         kavg = self.k
-        mask_finite_k = ~np.isnan(kavg) & ~np.isnan(tmp).any(axis=0)
-        kavg, tmp = kavg[mask_finite_k], tmp[:,mask_finite_k]
+        mask_finite_k = ~np.isnan(kavg) & ~np.isnan(power).any(axis=0)
+        kavg, power = kavg[mask_finite_k], power[:,mask_finite_k]
         k = np.asarray(k)
-        toret = np.zeros((len(projs),) + k.shape, dtype=tmp.dtype)
+        toret = np.zeros((len(projs),) + k.shape, dtype=power.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
         k = k[mask_k]
         if mask_k.any():
             interp = lambda array: np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
-            toret[..., mask_k] = interp(tmp.real)
-            if complex and np.iscomplexobj(tmp): toret[...,mask_k] = toret[..., mask_k] + 1j * interp(tmp.imag)
+            toret[..., mask_k] = interp(power.real)
+            if complex and np.iscomplexobj(power): toret[...,mask_k] = toret[..., mask_k] + 1j * interp(power.imag)
         if isscalar:
             toret = toret[0]
         return toret
@@ -291,8 +295,8 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         for other in others: new.projs += other.projs
         names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'wnorm', 'shotnoise_nonorm']
         for name in names:
-            tmp = [getattr(other, name) for other in others]
-            setattr(new, name, np.concatenate(tmp, axis=0))
+            array = [getattr(other, name) for other in others]
+            setattr(new, name, np.concatenate(array, axis=0))
         return new
 
     def to_real(self, **kwargs):
@@ -388,14 +392,14 @@ class CorrelationFunctionSmoothWindow(BaseClass):
                     raise IndexError('No window provided for projection {}. If you want to ignore this error (set the corresponding window to zero), pass defaut_zero = True'.format(proj))
             else:
                 tmp.append(self.corr[self.projs.index(proj)])
-        tmp = np.asarray(tmp)
+        corr = np.asarray(tmp)
         if sep is None:
-            if isscalar: return tmp[0]
-            return tmp
+            if isscalar: return corr[0]
+            return corr
         sepavg = self.sep
-        mask_finite_sep = ~np.isnan(sepavg) & ~np.isnan(tmp).any(axis=0)
-        sepavg, tmp = sepavg[mask_finite_sep], tmp[:,mask_finite_sep]
-        toret = np.array([UnivariateSpline(sepavg, arr, k=1, s=0, ext='const')(sep) for arr in tmp], dtype=tmp.dtype)
+        mask_finite_sep = ~np.isnan(sepavg) & ~np.isnan(corr).any(axis=0)
+        sepavg, corr = sepavg[mask_finite_sep], corr[:,mask_finite_sep]
+        toret = np.array([UnivariateSpline(sepavg, arr, k=1, s=0, ext='const')(sep) for arr in corr], dtype=corr.dtype)
         if isscalar:
             toret = toret[0]
         return toret
@@ -522,9 +526,10 @@ class CatalogSmoothWindow(MeshFFTPower):
             List of :class:`Projection` instances or (multipole, wide-angle order) tuples.
             If ``None``, and ``power_ref`` is provided, the list of projections is set
             to be able to compute window convolution of theory power spectrum multipoles of orders ``power_ref.ells``.
-            Namely, for maximum theory and output multipoles :math:`\ell_{\mathrm{max}}`,
+            Namely, for maximum theory and output multipole :math:`\ell_{\mathrm{max}}`,
             window function multipoles will be computed at wide-angle order 0 up to :math:`2 \ell_{\mathrm{max}}`
-            (maximum order yielded by the product of any theory and output multipole).
+            (maximum order yielded by the product of any theory and output Legendre polynomial,
+            see e.g. eq. C8 of https://arxiv.org/pdf/2106.06324.pdf).
             In addition, if chosen line-of-sight is local (either 'firstpoint' or 'endpoint'),
             odd poles of the window function will be computed at wide-angle order 1, up to :math:`2 \ell_{\mathrm{max}} + 1`
             (maximum non-zero odd pole of wide angle order 1 generated by even poles up to :math:`\ell_{\mathrm{max}}` is :math:`\ell_{\mathrm{max}} + 1`).
@@ -861,7 +866,7 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
     @property
     def value(self):
         if getattr(self, '_value', None) is None:
-            self._value = np.bmat([[np.diag(tmp) for tmp in line] for line in self.projvalue]).A
+            self._value = np.bmat([[np.diag(block) for block in line] for line in self.projvalue]).A
         return self._value
 
     @value.setter
@@ -1063,7 +1068,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
 def wigner3j_square(ellout, ellin, prefactor=True):
     r"""
     Return the coefficients corresponding to the product of two Legendre polynomials, corresponding to :math:`C_{\ell \ell^{\prime} L}`
-    of e.g. arXiv:2106.06324 eq. 2.2, with :math:`\ell` corresponding to ``projout.ell`` and :math:`\ell^{\prime}` to ``projin.ell``.
+    of e.g. eq. 2.2 of https://arxiv.org/pdf/2106.06324.pdf, with :math:`\ell` corresponding to ``ellout`` and :math:`\ell^{\prime}` to ``ellin``.
 
     Parameters
     ----------
@@ -1074,12 +1079,12 @@ def wigner3j_square(ellout, ellin, prefactor=True):
         Input order.
 
     prefactor : bool, default=True
-        Whether to include prefactor :math:`(2 \ell + 1)/(2 \ell^{\prime} + 1)` for window convolution.
+        Whether to include prefactor :math:`(2 \ell + 1)/(2 L + 1)` for window convolution.
 
     Returns
     -------
     ells : list
-        List of mulipole orders.
+        List of mulipole orders :math:`L`.
 
     coeffs : list
         List of corresponding window coefficients.

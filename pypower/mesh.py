@@ -382,6 +382,12 @@ class CatalogMesh(BaseClass):
             raise ValueError('Provide at least an array of data positions')
         self.randoms_positions = _format_positions(randoms_positions, position_type=self.position_type, dtype=self.rdtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
         self.shifted_positions = _format_positions(shifted_positions, position_type=self.position_type, dtype=self.rdtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.data_size = len(self.data_positions)
+        self.shifted_size, self.randoms_size = 0, 0
+        if self.with_shifted:
+            self.shifted_size = len(self.shifted_positions)
+        if self.with_randoms:
+            self.randoms_size = len(self.randoms_positions)
 
     def _set_weights(self, data_weights, randoms_weights=None, shifted_weights=None, mpiroot=None):
         # Set data and optionally shifted and randoms weights and their sum, scattering on all ranks if not already
@@ -412,7 +418,8 @@ class CatalogMesh(BaseClass):
                 return self.mpicomm.allreduce(len(positions))*weights
             return self.mpicomm.allreduce(sum(weights))
 
-        self.sum_shifted_weights = self.sum_randoms_weights = self.sum_data_weights = sum_weights(self.data_positions, self.data_weights)
+        self.sum_data_weights = sum_weights(self.data_positions, self.data_weights)
+        self.sum_randoms_weights = self.sum_shifted_weights = 0.
         if self.with_shifted:
             self.sum_shifted_weights = sum_weights(self.shifted_positions, self.shifted_weights)
         if self.with_randoms:

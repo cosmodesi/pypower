@@ -80,8 +80,13 @@ def test_power_statistic():
             test = PowerSpectrumStatistics.load(fn)
             assert np.all(test.power == power.power)
         power2 = power.copy()
-        power2.modes[0] = 1.
+        power2.modes[0] = 1
         assert np.all(power.modes[0] == test.modes[0])
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            #tmp_dir = '_tests'
+            fn = os.path.join(tmp_dir, 'tmp_poles.txt')
+            power.save_txt(fn, complex=True)
 
         for complex in [False, True]:
             assert np.isnan(power(k=-1., ell=0, complex=complex))
@@ -107,6 +112,11 @@ def test_power_statistic():
         power2 = power_ref.copy()
         power2.select(None, (0., 0.5))
         assert np.all(power2.modes[1] <= 0.5)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            #tmp_dir = '_tests'
+            fn = os.path.join(tmp_dir, 'tmp_wedges.txt')
+            power.save_txt(fn, complex=True)
 
         for complex in [False, True]:
             assert not np.isnan(power(0., 0., complex=complex))
@@ -314,9 +324,11 @@ def test_mesh_power():
             power = get_mesh_power(data, **options)
             with tempfile.TemporaryDirectory() as tmp_dir:
                 fn = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
+                fn_txt = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.txt'), root=0)
                 power.save(fn)
                 power = MeshFFTPower.load(fn)
                 power.save(fn)
+                power.poles.save_txt(fn_txt)
             check_wedges(power.wedges, ref_power.power)
 
             if power.wedges.edges[1][-1] == 1.:
@@ -453,9 +465,12 @@ def test_catalog_power():
         power = get_catalog_power(data, randoms, **options)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dir = '_tests'
             fn = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
+            fn_txt = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.txt'), root=0)
             power.save(fn)
             power = CatalogFFTPower.load(fn)
+            power.poles.save_txt(fn_txt)
 
         check_poles(power.poles, ref_power)
         for ell in ells:

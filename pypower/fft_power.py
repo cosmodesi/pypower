@@ -8,6 +8,7 @@ https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/convpower/fkp.p
 - FKP weights are treated as other weights
 """
 
+import os
 import time
 
 import numpy as np
@@ -434,6 +435,8 @@ class BasePowerSpectrumStatistics(BaseClass):
     _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm', 'attrs']
     _tosum = ['nmodes']
     _toaverage = ['modes', 'power_nonorm', 'power_direct_nonorm']
+    _coords_names = ['k']
+    _power_names = ['P(k)']
 
     def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., power_zero_nonorm=None, power_direct_nonorm=None, attrs=None):
         r"""
@@ -569,7 +572,7 @@ class BasePowerSpectrumStatistics(BaseClass):
         return toret
 
     def __call__(self):
-        """Method that interpolates power spectrum measurements at any point."""
+        """Method that interpolates power spectrum measurement at any point."""
         raise NotImplementedError('Implement method "__call__" in your {}'.format(self.__class__.__name__))
 
     def __getitem__(self, slices):
@@ -637,12 +640,12 @@ class BasePowerSpectrumStatistics(BaseClass):
             factor.append(step)
         slices = tuple(slices)
         for name in self._tosum + self._toaverage:
-            tmp = getattr(self, name, None)
-            if tmp is None: continue
-            if isinstance(tmp, list):
-                setattr(self, name, [tt[(Ellipsis,)*(tt.ndim - self.ndim) + slices] for tt in tmp])
+            array = getattr(self, name, None)
+            if array is None: continue
+            if isinstance(array, list):
+                setattr(self, name, [arr[(Ellipsis,)*(arr.ndim - self.ndim) + slices] for arr in array])
             else:
-                setattr(self, name, tmp[(Ellipsis,)*(tmp.ndim - self.ndim) + slices])
+                setattr(self, name, array[(Ellipsis,)*(array.ndim - self.ndim) + slices])
         self.edges = [edges[eslice] for edges, eslice in zip(self.edges, eslices)]
         if not all(f == 1 for f in factor):
             self.rebin(factor=factor)
@@ -662,25 +665,25 @@ class BasePowerSpectrumStatistics(BaseClass):
         new_shape = tuple(s//f for s,f in zip(self.shape, factor))
         nmodes = self.nmodes
         for name in self._tosum:
-            tmp = getattr(self, name, None)
-            if tmp is None: continue
-            if isinstance(tmp, list):
-                tmp = [utils.rebin(tt, new_shape, statistic=np.sum) for tt in tmp]
+            array = getattr(self, name, None)
+            if array is None: continue
+            if isinstance(array, list):
+                array = [utils.rebin(arr, new_shape, statistic=np.sum) for arr in array]
             else:
-                tmp = utils.rebin(tmp, new_shape, statistic=np.sum)
-            setattr(self, name, tmp)
+                array = utils.rebin(array, new_shape, statistic=np.sum)
+            setattr(self, name, array)
         for name in self._toaverage:
-            tmp = getattr(self, name, None)
-            if tmp is None: continue
-            if isinstance(tmp, list):
+            array = getattr(self, name, None)
+            if array is None: continue
+            if isinstance(array, list):
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    tmp = [utils.rebin(_nan_to_zero(tt)*nmodes, new_shape, statistic=np.sum)/self.nmodes for tt in tmp]
+                    array = [utils.rebin(_nan_to_zero(arr)*nmodes, new_shape, statistic=np.sum)/self.nmodes for arr in array]
             else:
-                extradim = tmp.ndim > self.ndim
+                extradim = array.ndim > self.ndim
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    tmp = np.asarray([utils.rebin(_nan_to_zero(tt)*nmodes, new_shape, statistic=np.sum)/self.nmodes for tt in tmp.reshape((-1,) + self.shape)])
-                    tmp.shape = (-1,)*extradim + new_shape
-            setattr(self, name, tmp)
+                    array = np.asarray([utils.rebin(_nan_to_zero(arr)*nmodes, new_shape, statistic=np.sum)/self.nmodes for arr in array.reshape((-1,) + self.shape)])
+                    array.shape = (-1,)*extradim + new_shape
+            setattr(self, name, array)
         self.edges = [edges[::f] for edges, f in zip(self.edges, factor)]
 
     def __getstate__(self):
@@ -705,6 +708,78 @@ class BasePowerSpectrumStatistics(BaseClass):
     def deepcopy(self):
         import copy
         return copy.deepcopy(self)
+
+    def save_txt(self, filename, fmt='%.12e', delimiter=' ', header=None, comments='# ', **kwargs):
+        """
+        Save power spectrum as txt file.
+
+        Warning
+        -------
+        Attributes are not all saved, hence there is :meth:`load_txt` method.
+
+        Parameters
+        ----------
+        filename : str
+            File name.
+
+        fmt : str, default='%.12e'
+            Format for floating types.
+
+        delimiter : str, default=' '
+            String or character separating columns.
+
+        header : str, list, default=None
+            String that will be written at the beginning of the file.
+            If multiple lines, provide a list of one-line strings.
+
+        comments : str, default=' #'
+            String that will be prepended to the header string.
+
+        kwargs : dict
+            Arguments for :meth:`get_power`.
+        """
+        self.log_info('Saving {}.'.format(filename))
+        utils.mkdir(os.path.dirname(filename))
+        formatter = {'int_kind': lambda x: '%d' % x, 'float_kind': lambda x: fmt % x, 'complex_kind': lambda x: '{}+{}j'.format(fmt % x.real, fmt % x.imag)}
+        if header is None: header = []
+        elif isinstance(header, str): header = [header]
+        else: header = list(header)
+        for name in ['autocorr', 'data_size1', 'data_size2', 'sum_data_weights1', 'sum_data_weights2',
+                     'randoms_size1','randoms_size2', 'sum_randoms_weights1', 'sum_randoms_weights2',
+                     'los_type', 'los', 'nmesh', 'boxsize', 'boxcenter', 'resampler1', 'resampler2',
+                     'interlacing1', 'interlacing2', 'shotnoise', 'wnorm']:
+            value = self.attrs.get(name, getattr(self, name, None))
+            if value is None:
+                value = 'None'
+            elif any(name.startswith(key) for key in ['los_type', 'resampler', 'compensations']):
+                value = str(value)
+            else:
+                value = np.array2string(np.array(value), formatter=formatter).replace('\n', '')
+            header.append('{} = {}'.format(name, value))
+            #value = value.split('\n')
+            #header.append('{} = {}'.format(name, value[0]))
+            #for arr in value[1:]: header.append(' '*(len(name) + 3) + arr)
+        labels = ['nmodes']
+        for name in self._coords_names:
+            labels += ['{}mid'.format(name), '{}avg'.format(name)]
+        labels += self._power_names
+        power = self.get_power(**kwargs)
+        columns = [self.nmodes.flat]
+        mids = np.meshgrid(*[(edges[:-1] + edges[1:])/2. for edges in self.edges], indexing='ij')
+        for idim, name in enumerate(self._coords_names):
+            columns += [mids[idim].flat, self.modes[idim].flat]
+        for column in power.reshape((-1,)*(power.ndim == self.ndim) + power.shape):
+            columns += [column.flat]
+        columns = [[np.array2string(value, formatter=formatter) for value in column] for column in columns]
+        widths = [max(max(map(len, column)), len(label)) for column, label in zip(columns, labels)]
+        widths[-1] = 0 # no need to leave a space
+        header.append((' '*len(delimiter)).join(['{:<{width}}'.format(label, width=width) for label, width in zip(labels, widths)]))
+        widths[0] += len(comments)
+        with open(filename, 'w') as file:
+            for line in header:
+                file.write(comments + line + '\n')
+            for irow in range(len(columns[0])):
+                file.write(delimiter.join(['{:<{width}}'.format(column[irow], width=width) for column, width in zip(columns, widths)]) + '\n')
 
 
 def get_power_statistic(statistic='wedge'):
@@ -740,6 +815,8 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
     r"""Power spectrum binned in :math:`(k, \mu)`."""
 
     name = 'wedge'
+    _coords_names = ['k', 'mu']
+    _power_names = ['P(k,mu)']
 
     @property
     def kavg(self):
@@ -791,18 +868,18 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
         toret : array
             (Optionally interpolated) power spectrum.
         """
-        tmp = self.get_power(complex=complex, **kwargs)
+        power = self.get_power(complex=complex, **kwargs)
         if k is None and mu is None:
-            return tmp
+            return power
         kavg, muavg = self.kavg, self.muavg
         if k is None: k = kavg
         if mu is None: mu = muavg
         mask_finite_k, mask_finite_mu = ~np.isnan(kavg), ~np.isnan(muavg)
-        kavg, muavg, tmp = kavg[mask_finite_k], muavg[mask_finite_mu], tmp[np.ix_(mask_finite_k, mask_finite_mu)]
+        kavg, muavg, power = kavg[mask_finite_k], muavg[mask_finite_mu], power[np.ix_(mask_finite_k, mask_finite_mu)]
         k, mu = np.asarray(k), np.asarray(mu)
         isscalar = k.ndim == 0 or mu.ndim == 0
         k, mu = np.atleast_1d(k), np.atleast_1d(mu)
-        toret = np.nan * np.zeros((k.size, mu.size), dtype=tmp.dtype)
+        toret = np.nan * np.zeros((k.size, mu.size), dtype=power.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
         mask_mu = (mu >= self.edges[1][0]) & (mu <= self.edges[1][-1])
         k, mu = k[mask_k], mu[mask_mu]
@@ -811,9 +888,9 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
                 interp = lambda array: UnivariateSpline(kavg, array, k=1, s=0, ext='const')(k)[:, None]
             else:
                 interp = lambda array: RectBivariateSpline(kavg, muavg, array, kx=1, ky=1, s=0)(k, mu, grid=True)
-            toret[np.ix_(mask_k, mask_mu)] = interp(tmp.real)
-            if complex and np.iscomplexobj(tmp):
-                toret[np.ix_(mask_k, mask_mu)] += 1j * interp(tmp.imag)
+            toret[np.ix_(mask_k, mask_mu)] = interp(power.real)
+            if complex and np.iscomplexobj(power):
+                toret[np.ix_(mask_k, mask_mu)] += 1j * interp(power.imag)
         if isscalar:
             return toret.ravel()
         return toret
@@ -852,6 +929,10 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         """
         self.ells = tuple(ells)
         super(PowerSpectrumMultipoles, self).__init__(edges, modes, power_nonorm, nmodes, **kwargs)
+
+    @property
+    def _power_names(self):
+        return ['P{:d}(k)'.format(ell) for ell in self.ells]
 
     @property
     def kavg(self):
@@ -927,22 +1008,22 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
             isscalar = np.ndim(ell) == 0
             if isscalar: ell = [ell]
         ells = ell
-        tmp = self.get_power(complex=complex, **kwargs)
-        tmp = tmp[[self.ells.index(ell) for ell in ells]]
+        power = self.get_power(complex=complex, **kwargs)
+        power = power[[self.ells.index(ell) for ell in ells]]
         if k is None:
-            if isscalar: return tmp[0]
-            return tmp
+            if isscalar: return power[0]
+            return power
         kavg = self.k
-        mask_finite_k = ~np.isnan(kavg) & ~np.isnan(tmp).any(axis=0)
-        kavg, tmp = kavg[mask_finite_k], tmp[:,mask_finite_k]
+        mask_finite_k = ~np.isnan(kavg) & ~np.isnan(power).any(axis=0)
+        kavg, power = kavg[mask_finite_k], power[:,mask_finite_k]
         k = np.asarray(k)
-        toret = np.nan * np.zeros((len(ells),) + k.shape, dtype=tmp.dtype)
+        toret = np.nan * np.zeros((len(ells),) + k.shape, dtype=power.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
         k = k[mask_k]
         if mask_k.any():
             interp = lambda array: np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
-            toret[..., mask_k] = interp(tmp.real)
-            if complex and np.iscomplexobj(tmp): toret[...,mask_k] = toret[..., mask_k] + 1j * interp(tmp.imag)
+            toret[..., mask_k] = interp(power.real)
+            if complex and np.iscomplexobj(power): toret[...,mask_k] = toret[..., mask_k] + 1j * interp(power.imag)
         if isscalar:
             toret = toret[0]
         return toret
@@ -1230,22 +1311,28 @@ class MeshFFTPower(BaseClass):
                         self.log_warning('Provided compensation {} is not the same as that of provided {} instance ({})'.format(self.compensations[i], mesh.__class__.__name__, compensation))
                 else:
                     self.compensations[i] = compensation
+                self.attrs['data_size{:d}'.format(i+1)] = mesh.data_size
+                self.attrs['randoms_size{:d}'.format(i+1)] = mesh.randoms_size
                 self.attrs['sum_data_weights{:d}'.format(i+1)] = mesh.sum_data_weights
                 self.attrs['sum_randoms_weights{:d}'.format(i+1)] = mesh.sum_randoms_weights
                 self.attrs['resampler{:d}'.format(i+1)] = mesh.compensation['resampler']
                 self.attrs['interlacing{:d}'.format(i+1)] = mesh.interlacing
             else:
                 setattr(self, name, mesh)
+                data_size = mesh.pm.Nmesh.prod()
+                self.attrs['data_size{:d}'.format(i+1)] = data_size
+                self.attrs['randoms_size{:d}'.format(i+1)] = 0
                 if isinstance(mesh, ComplexField):
-                    sum_data = mesh.pm.Nmesh.prod()
+                    sum_data = data_size
                 else:
                     sum_data = mesh.csum().real
-                self.attrs['sum_data_weights{:d}'.format(i+1)] = self.attrs['sum_randoms_weights{:d}'.format(i+1)] = sum_data
+                self.attrs['sum_data_weights{:d}'.format(i+1)] = sum_data
+                self.attrs['sum_randoms_weights{:d}'.format(i+1)] = 0.
                 self.attrs['resampler{:d}'.format(i+1)] = not self.compensations[i]['resampler'] if self.compensations[i] is not None else None
                 self.attrs['interlacing{:d}'.format(i+1)] = not self.compensations[i]['shotnoise'] if self.compensations[i] is not None else False
 
         if self.autocorr:
-            for name in ['sum_data_weights', 'sum_randoms_weights', 'resampler', 'interlacing']:
+            for name in ['data_size', 'randoms_size', 'sum_data_weights', 'sum_randoms_weights', 'resampler', 'interlacing']:
                 self.attrs['{}2'.format(name)] = self.attrs['{}1'.format(name)]
 
         if self.autocorr:
