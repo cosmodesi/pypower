@@ -753,10 +753,10 @@ class BasePowerSpectrumStatistics(BaseClass):
             value = self.attrs.get(name, getattr(self, name, None))
             if value is None:
                 value = 'None'
-            elif any(name.startswith(key) for key in ['los_type', 'resampler', 'compensations']):
+            elif any(name.startswith(key) for key in ['los_type', 'resampler']):
                 value = str(value)
             else:
-                value = np.array2string(np.array(value), formatter=formatter).replace('\n', '')
+                value = np.array2string(np.array(value), separator=delimiter, formatter=formatter).replace('\n', '')
             header.append('{} = {}'.format(name, value))
             #value = value.split('\n')
             #header.append('{} = {}'.format(name, value[0]))
@@ -841,7 +841,7 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
         r""":math:`\mu`-edges."""
         return self.edges[1]
 
-    def __call__(self, k=None, mu=None, complex=True, **kwargs):
+    def __call__(self, k=None, mu=None, return_k=False, return_mu=False, complex=True, **kwargs):
         r"""
         Return power spectrum, optionally performing linear interpolation over :math:`k` and :math:`\mu`.
 
@@ -859,6 +859,14 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
             outside :attr:`edges[1]` to nan.
             Defaults to :attr:`muavg`.
 
+        return_k : bool, default=False
+            Whether (``True``) to return :math:`k`-modes (see ``k``).
+            If ``None``, return :math:`k`-modes if ``k`` is ``None``.
+
+        return_mu : bool, default=False
+            Whether (``True``) to return :math:`\mu`-modes (see ``mu``).
+            If ``None``, return :math:`\mu`-modes if ``mu`` is ``None``.
+
         complex : bool, default=True
             Whether (``True``) to return the complex power spectrum,
             or (``False``) return its real part only.
@@ -868,19 +876,33 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
 
         Returns
         -------
-        toret : array
+        k : array
+            Optionally, :math:`k`-modes.
+
+        mu : array
+            Optionally, :math:`\mu`-modes.
+
+        power : array
             (Optionally interpolated) power spectrum.
         """
         power = self.get_power(complex=complex, **kwargs)
-        if k is None and mu is None:
-            return power
         kavg, muavg = self.kavg, self.muavg
+        if return_k is None:
+            return_k = k is None
+        if return_mu is None:
+            return_mu = mu is None
+        if k is None and mu is None:
+            if return_k:
+                if return_mu:
+                    return kavg, muavg, power
+            return power
         if k is None: k = kavg
         if mu is None: mu = muavg
         mask_finite_k, mask_finite_mu = ~np.isnan(kavg), ~np.isnan(muavg)
         kavg, muavg, power = kavg[mask_finite_k], muavg[mask_finite_mu], power[np.ix_(mask_finite_k, mask_finite_mu)]
         k, mu = np.asarray(k), np.asarray(mu)
-        isscalar = k.ndim == 0 or mu.ndim == 0
+        is1d = k.ndim == 0 or mu.ndim == 0
+        isscalar = k.ndim == mu.ndim == 0
         k, mu = np.atleast_1d(k), np.atleast_1d(mu)
         toret = np.nan * np.zeros((k.size, mu.size), dtype=power.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
@@ -894,8 +916,14 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
             toret[np.ix_(mask_k, mask_mu)] = interp(power.real)
             if complex and np.iscomplexobj(power):
                 toret[np.ix_(mask_k, mask_mu)] += 1j * interp(power.imag)
+        if is1d:
+            toret = toret.ravel()
         if isscalar:
-            return toret.ravel()
+            toret = toret[0]
+        if return_k:
+            if return_mu:
+                return k, mu, toret
+            return k, toret
         return toret
 
 
@@ -977,7 +1005,7 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
             toret = np.array([toret[ill].real if ell % 2 == 0 else toret[ill].imag for ill, ell in enumerate(self.ells)], dtype=toret.real.dtype)
         return toret
 
-    def __call__(self, ell=None,  k=None, complex=True, **kwargs):
+    def __call__(self, ell=None,  k=None, return_k=False, complex=True, **kwargs):
         r"""
         Return power spectrum, optionally performing linear interpolation over :math:`k`.
 
@@ -992,6 +1020,10 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
             outside :attr:`edges[0]` to nan.
             Defaults to :attr:`kavg` (no interpolation performed).
 
+        return_k : bool, default=False
+            Whether (``True``) to return :math:`k`-modes (see ``k``).
+            If ``None``, return :math:`k`-modes if ``k`` is ``None``.
+
         complex : bool, default=True
             Whether (``True``) to return the complex power spectrum,
             or (``False``) return its real part if ``ell`` is even, imaginary part if ``ell`` is odd.
@@ -1001,7 +1033,10 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
 
         Returns
         -------
-        toret : array
+        k : array
+            Optionally, :math:`k`-modes.
+
+        power : array
             (Optionally interpolated) power spectrum.
         """
         if ell is None:
@@ -1013,10 +1048,16 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         ells = ell
         power = self.get_power(complex=complex, **kwargs)
         power = power[[self.ells.index(ell) for ell in ells]]
+        kavg = self.k.copy()
+        if return_k is None:
+            return_k = k is None
         if k is None:
-            if isscalar: return power[0]
-            return power
-        kavg = self.k
+            toret = power
+            if isscalar:
+                toret = power[0]
+            if return_k:
+                return kavg, toret
+            return toret
         mask_finite_k = ~np.isnan(kavg) & ~np.isnan(power).any(axis=0)
         kavg, power = kavg[mask_finite_k], power[:, mask_finite_k]
         k = np.asarray(k)
@@ -1029,6 +1070,8 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
             if complex and np.iscomplexobj(power): toret[...,mask_k] = toret[..., mask_k] + 1j * interp(power.imag)
         if isscalar:
             toret = toret[0]
+        if return_k:
+            return k, toret
         return toret
 
 

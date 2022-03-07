@@ -98,7 +98,7 @@ def kaiser_model(k, ell=0):
 def mock_mean(name='poles'):
     powers = []
     for fn in glob.glob(mock_fn.format('*')):
-        powers.append(getattr(CatalogFFTPower.load(fn), name)(complex=False))
+        powers.append(getattr(CatalogFFTPower.load(fn), name)(complex=False)[-1])
     return np.mean(powers, axis=0), np.std(powers, axis=0, ddof=1)/len(powers)**0.5
 
 
@@ -107,7 +107,7 @@ def plot_window():
     window = PowerSpectrumSmoothWindow.load(window_poles_fn)
     ax = plt.gca()
     for iproj, proj in enumerate(window.projs):
-        ax.loglog(window.k, np.abs(window(proj=proj, complex=False)), label=proj.latex(inline=True))
+        ax.loglog(window.k, np.abs(window(proj=proj, complex=False, return_k=False)), label=proj.latex(inline=True))
     ax.legend(loc=1)
     ax.grid(True)
     ax.set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
@@ -120,7 +120,7 @@ def plot_window():
     window_real = window.to_real(sep=np.geomspace(1e-2, 4e3, 2048))
     ax = plt.gca()
     for iproj, proj in enumerate(window_real.projs):
-        ax.plot(window_real.sep, window_real(proj=proj), label=proj.latex(inline=True))
+        ax.plot(window_real.sep, window_real(proj=proj, return_sep=False), label=proj.latex(inline=True))
     ax.legend()
     ax.grid(True)
     ax.set_xscale('log')

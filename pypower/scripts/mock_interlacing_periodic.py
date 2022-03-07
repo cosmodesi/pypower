@@ -106,7 +106,7 @@ def kaiser_model_wedges(k, wedge):
 def mock_mean(name='poles', **options):
     powers = []
     for fn in glob.glob(mock_fn.format(**options, imock='*')):
-        powers.append(getattr(CatalogFFTPower.load(fn), name)(complex=False))
+        powers.append(getattr(CatalogFFTPower.load(fn), name)(complex=False)[-1])
     return np.mean(powers, axis=0), np.std(powers, axis=0, ddof=1)/len(powers)**0.5
 
 

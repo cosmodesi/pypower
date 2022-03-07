@@ -115,7 +115,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             toret = np.array([toret[iproj].real if proj.ell % 2 == 0 else toret[iproj].imag for iproj, proj in enumerate(self.projs)], dtype=toret.real.dtype)
         return toret
 
-    def __call__(self, proj=None,  k=None, complex=True, default_zero=False, **kwargs):
+    def __call__(self, proj=None,  k=None, return_k=False, complex=True, default_zero=False, **kwargs):
         r"""
         Return window function, optionally performing linear interpolation over :math:`k`.
 
@@ -130,6 +130,10 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             Defaults to :attr:`kavg` (no interpolation performed).
             Values outside :attr:`k` are set to the first/last window value.
 
+        return_k : bool, default=False
+            Whether (``True``) to return :math:`k`-modes (see ``k``).
+            If ``None``, return :math:`k`-modes if ``k`` is ``None``.
+
         complex : bool, default=True
             Whether (``True``) to return the complex power spectrum,
             or (``False``) return its real part if ``proj.ell`` is even, imaginary part if ``proj.ell`` is odd.
@@ -139,7 +143,10 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
 
         Returns
         -------
-        toret : array
+        k : array
+            Optionally, :math:`k`-modes.
+
+        power : array
             (Optionally interpolated) window function.
         """
         isscalar = True
@@ -161,10 +168,14 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             else:
                 tmp.append(power[self.projs.index(proj)])
         power = np.asarray(tmp)
+        kavg = self.k.copy()
         if k is None:
-            if isscalar: return power[0]
-            return power
-        kavg = self.k
+            toret = power
+            if isscalar:
+                toret = power[0]
+            if return_k:
+                return kavg, toret
+            return toret
         mask_finite_k = ~np.isnan(kavg) & ~np.isnan(power).any(axis=0)
         kavg, power = kavg[mask_finite_k], power[:,mask_finite_k]
         k = np.asarray(k)
@@ -173,6 +184,8 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         if complex and np.iscomplexobj(power): toret = toret + 1j * interp(power.imag)
         if isscalar:
             toret = toret[0]
+        if return_k:
+            return k, toret
         return toret
 
     @classmethod
@@ -348,7 +361,7 @@ class CorrelationFunctionSmoothWindow(BaseClass):
         self.projs = [Projection(proj) for proj in projs]
         self.corr = np.asarray(corr)
 
-    def __call__(self, proj=None, sep=None, default_zero=False):
+    def __call__(self, proj=None, sep=None, return_sep=False, default_zero=False):
         r"""
         Return window function, optionally performing linear interpolation over :math:`s`.
 
@@ -363,13 +376,20 @@ class CorrelationFunctionSmoothWindow(BaseClass):
             Values outside :attr:`sep` are set to the first/last window value.
             Defaults to :attr:`sep` (no interpolation performed).
 
+        return_sep : bool, default=False
+            Whether (``True``) to return :math:`s` (see ``sep``).
+            If ``None``, return :math:`s` if ``sep`` is ``None``.
+
         default_zero : bool, default=False
             If input ``proj`` is not in :attr:`projs` (not computed), and ``default_zero`` is ``True``, return 0.
             If ``default_zero`` is ``False``, raise an :class:`IndexError`.
 
         Returns
         -------
-        toret : array
+        sep : array
+            Optionally, :math:`s`.
+
+        corr : array
             (Optionally interpolated) window function.
         """
         isscalar = True
@@ -390,15 +410,23 @@ class CorrelationFunctionSmoothWindow(BaseClass):
             else:
                 tmp.append(self.corr[self.projs.index(proj)])
         corr = np.asarray(tmp)
+        sepavg = self.sep.copy()
+        if return_sep is None:
+            return_sep = sep is None
         if sep is None:
-            if isscalar: return corr[0]
-            return corr
-        sepavg = self.sep
+            toret = corr
+            if isscalar:
+                toret = corr[0]
+            if return_sep:
+                return sep, toret
+            return toret
         mask_finite_sep = ~np.isnan(sepavg) & ~np.isnan(corr).any(axis=0)
         sepavg, corr = sepavg[mask_finite_sep], corr[:,mask_finite_sep]
         toret = np.array([UnivariateSpline(sepavg, arr, k=1, s=0, ext='const')(sep) for arr in corr], dtype=corr.dtype)
         if isscalar:
             toret = toret[0]
+        if return_sep:
+            return sep, toret
         return toret
 
     def __getstate__(self):
@@ -468,7 +496,7 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
     window = []
     _slab_npoints_max = 10 * 1000
     for proj in fourier_window.projs:
-        wk = fourier_window(proj, k, complex=False, null_zero_mode=False) * smoothing
+        wk = fourier_window(proj=proj, k=k, complex=False, null_zero_mode=False) * smoothing
         block = np.empty_like(sep)
         nslabs = min(max(len(k) * len(sep) // _slab_npoints_max, 1), len(sep))
         for islab in range(nslabs): # proceed by slab to save memory
@@ -855,7 +883,7 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
                     # sum over L = ell, coeff is C_{\ell \ell^{\prime} L}, window is Q_{L}
                     for ell, coeff in zip(ellsw, coeffs):
                         proj = projin.clone(ell=ell)
-                        block += coeff*window(proj, sep, default_zero=self.default_zero)
+                        block += coeff*window(proj=proj, sep=sep, default_zero=self.default_zero)
                 line.append(block)
             self.projvalue.append(line)
         self.projvalue = np.array(self.projvalue) # (in, out)

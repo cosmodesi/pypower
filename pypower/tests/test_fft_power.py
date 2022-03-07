@@ -89,6 +89,8 @@ def test_power_statistic():
             power.save_txt(fn, complex=True)
 
         for complex in [False, True]:
+            assert np.allclose(power(complex=complex, return_k=True)[1], power.get_power(complex=complex), equal_nan=True)
+            assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
             assert np.isnan(power(k=-1., ell=0, complex=complex))
             assert not np.isnan(power(k=modes, complex=complex)).any()
             assert power(k=[0.1,0.2]).shape == (len(power.ells), 2)
@@ -119,6 +121,9 @@ def test_power_statistic():
             power.save_txt(fn, complex=True)
 
         for complex in [False, True]:
+            assert np.allclose(power(complex=complex, return_k=True, return_mu=True)[2], power.get_power(complex=complex), equal_nan=True)
+            assert np.allclose(power(complex=complex, return_k=True)[1], power.get_power(complex=complex), equal_nan=True)
+            assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
             assert not np.isnan(power(0., 0., complex=complex))
             assert np.isnan(power([-1.]*5, 0., complex=complex)).all()
             assert np.isnan(power(-1., [0.]*5, complex=complex)).all()
@@ -466,7 +471,7 @@ def test_catalog_power():
         power = get_catalog_power(data, randoms, **options)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_dir = '_tests'
+            #tmp_dir = '_tests'
             fn = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             fn_txt = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.txt'), root=0)
             power.save(fn)
