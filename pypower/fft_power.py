@@ -466,7 +466,9 @@ class BasePowerSpectrumStatistics(BaseClass):
             Value of power spectrum at :math:`k = 0`.
 
         power_direct_nonorm : array, default=0.
-            Value of direct power spectrum estimation (that e.g. copes with small scales), to be added to :attr:`power_nonorm`.
+            Value of pair-count-based 'direct' power spectrum estimation,
+            (e.g. PIP and angular upweights correction, eq. 26 of https://arxiv.org/abs/1912.08803),
+            to be added to :attr:`power_nonorm`.
 
         attrs : dict, default=None
             Dictionary of other attributes.
@@ -498,7 +500,7 @@ class BasePowerSpectrumStatistics(BaseClass):
         Parameters
         ----------
         add_direct : bool, default=True
-            Add direct power spectrum measurement.
+            Add pair-count-based 'direct' power spectrum measurement.
 
         remove_shotnoise : bool, default=True
             Remove estimated shot noise.
@@ -760,18 +762,19 @@ class BasePowerSpectrumStatistics(BaseClass):
             #header.append('{} = {}'.format(name, value[0]))
             #for arr in value[1:]: header.append(' '*(len(name) + 3) + arr)
         labels = ['nmodes']
+        assert len(self._coords_names) == self.ndim
         for name in self._coords_names:
             labels += ['{}mid'.format(name), '{}avg'.format(name)]
         labels += self._power_names
         power = self.get_power(**kwargs)
         columns = [self.nmodes.flat]
         mids = np.meshgrid(*[(edges[:-1] + edges[1:])/2. for edges in self.edges], indexing='ij')
-        for idim, name in enumerate(self._coords_names):
+        for idim in range(self.ndim):
             columns += [mids[idim].flat, self.modes[idim].flat]
         for column in power.reshape((-1,)*(power.ndim == self.ndim) + power.shape):
             columns += [column.flat]
         columns = [[np.array2string(value, formatter=formatter) for value in column] for column in columns]
-        widths = [max(max(map(len, column)), len(label)) for column, label in zip(columns, labels)]
+        widths = [max(max(map(len, column)) - len(comments) * (icol == 0), len(label)) for icol, (column, label) in enumerate(zip(columns, labels))]
         widths[-1] = 0 # no need to leave a space
         header.append((' '*len(delimiter)).join(['{:<{width}}'.format(label, width=width) for label, width in zip(labels, widths)]))
         widths[0] += len(comments)
@@ -846,13 +849,13 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
         ----------
         k : float, array, default=None
             :math:`k` where to interpolate the power spectrum.
-            Values outside :attr:`kavg` are set to the first/last power value;
+            Values outside :attr:`kavg` are set to the first/last power spectrum value;
             outside :attr:`edges[0]` to nan.
             Defaults to :attr:`kavg`.
 
         mu : float, array, default=None
             :math:`\mu` where to interpolate the power spectrum.
-            Values outside :attr:`muavg` are set to the first/last power value;
+            Values outside :attr:`muavg` are set to the first/last power spectrum value;
             outside :attr:`edges[1]` to nan.
             Defaults to :attr:`muavg`.
 
@@ -981,11 +984,11 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         Parameters
         ----------
         ell : int, list, default=None
-            Multipole order. Defaults to all multipoles.
+            Multipole(s). Defaults to all multipoles.
 
         k : float, array, default=None
             :math:`k` where to interpolate the power spectrum.
-            Values outside :attr:`kavg` are set to the first/last power value;
+            Values outside :attr:`kavg` are set to the first/last power spectrum value;
             outside :attr:`edges[0]` to nan.
             Defaults to :attr:`kavg` (no interpolation performed).
 
@@ -1015,7 +1018,7 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
             return power
         kavg = self.k
         mask_finite_k = ~np.isnan(kavg) & ~np.isnan(power).any(axis=0)
-        kavg, power = kavg[mask_finite_k], power[:,mask_finite_k]
+        kavg, power = kavg[mask_finite_k], power[:, mask_finite_k]
         k = np.asarray(k)
         toret = np.nan * np.zeros((len(ells),) + k.shape, dtype=power.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
@@ -1201,9 +1204,11 @@ class MeshFFTPower(BaseClass):
         Parameters
         ----------
         mesh1 : CatalogMesh, RealField, ComplexField
-            First mesh. In case of :class:`ComplexField`, assumed to be the FFT of :math:`\delta` (or :math:`1 + \delta`), i.e. unit density.
+            First mesh.
+            If ``RealField``, assumed to be :math:`1 + \delta` or :math:`\bar{n} (1 + \delta)`.
+            In case of :class:`ComplexField`, assumed to be the FFT of :math:`\delta` (or :math:`1 + \delta`), i.e. unit density.
 
-        mesh2 : CatalogMesh, RealField, ComplexField, efault=None
+        mesh2 : CatalogMesh, RealField, ComplexField, default=None
             In case of cross-correlation, second mesh, with same size and physical extent (``boxsize`` and ``boxcenter``) that ``mesh1``.
 
         edges : tuple, array, default=None

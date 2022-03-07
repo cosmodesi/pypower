@@ -168,13 +168,9 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         mask_finite_k = ~np.isnan(kavg) & ~np.isnan(power).any(axis=0)
         kavg, power = kavg[mask_finite_k], power[:,mask_finite_k]
         k = np.asarray(k)
-        toret = np.zeros((len(projs),) + k.shape, dtype=power.dtype)
-        mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
-        k = k[mask_k]
-        if mask_k.any():
-            interp = lambda array: np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
-            toret[..., mask_k] = interp(power.real)
-            if complex and np.iscomplexobj(power): toret[...,mask_k] = toret[..., mask_k] + 1j * interp(power.imag)
+        interp = lambda array: np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
+        toret = interp(power.real)
+        if complex and np.iscomplexobj(power): toret = toret + 1j * interp(power.imag)
         if isscalar:
             toret = toret[0]
         return toret
@@ -274,6 +270,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
                         for name in names:
                             getattr(new, name)[...,inew] = getattr(other, name)[...,iother] # replace by value in window with highest number of modes
                         new.modes[0][...,inew] = other.modes[0][...,iother]
+
         return new
 
     @classmethod

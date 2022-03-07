@@ -323,6 +323,7 @@ def test_mesh_power():
         for options in list_options:
             power = get_mesh_power(data, **options)
             with tempfile.TemporaryDirectory() as tmp_dir:
+                #tmp_dir = '_tests'
                 fn = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
                 fn_txt = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.txt'), root=0)
                 power.save(fn)

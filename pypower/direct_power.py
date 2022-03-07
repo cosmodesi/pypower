@@ -34,7 +34,7 @@ def _vlogical_and(*arrays):
 def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, default_value=0., dtype='f8'):
     r"""
     Return inverse probability weight given input bitwise weights.
-    Inverse probability weight is computed as::math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2} \& ...))`.
+    Inverse probability weight is computed as: :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2} \& ...))`.
     If denominator is 0, weight is set to default_value.
 
     Parameters
@@ -165,7 +165,7 @@ def get_direct_power_engine(engine='kdtree'):
     Parameters
     ----------
     engine : string, default='kdtree'
-        Name of direct power engine, one of ["kdtree"].
+        Name of direct power engine, one of ['kdtree'].
 
     Returns
     -------
@@ -197,7 +197,7 @@ class DirectPower(metaclass=MetaDirectPower):
     Parameters
     ----------
     engine : string, default='kdtree'
-        Name of direct power engine, one of ["kdtree"].
+        Name of direct power engine, one of ['kdtree'].
 
     args : list
         Arguments for direct power engine, see :class:`BaseDirectPowerEngine`.
