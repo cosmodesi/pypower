@@ -189,7 +189,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         return toret
 
     @classmethod
-    def from_power(cls, power, wa_order=0):
+    def from_power(cls, power, wa_order=0, **kwargs):
         """
         Build window function from input :class:`PowerSpectrumMultipoless`.
 
@@ -208,7 +208,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         state = power.__getstate__()
         state.pop('name', None)
         state['projs'] = [Projection(ell=ell, wa_order=wa_order) for ell in state.pop('ells')]
-        return cls(**state)
+        return cls(**state, **kwargs)
 
     @classmethod
     def concatenate_x(cls, *others, select='nmodes', frac_nyq=None):
@@ -778,7 +778,7 @@ class CatalogSmoothWindow(MeshFFTPower):
             super(CatalogSmoothWindow, self).__init__(mesh1=mesh1_wa, mesh2=mesh2_wa, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
             if autocorr and shotnoise is None and wa_order != 0: # when providing 2 meshes, shot noise estimate is 0; correct this here
                 self.poles.shotnoise_nonorm = mesh1_wa.mpicomm.allreduce(sum(mesh1_wa.data_weights*mesh2_wa.data_weights))
-            poles.append(PowerSpectrumSmoothWindow.from_power(self.poles, wa_order=wa_order))
+            poles.append(PowerSpectrumSmoothWindow.from_power(self.poles, wa_order=wa_order, mpicomm=self.mpicomm))
 
         self.poles = PowerSpectrumSmoothWindow.concatenate_proj(*poles)
         del self.ells

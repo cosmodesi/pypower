@@ -438,7 +438,7 @@ class BasePowerSpectrumStatistics(BaseClass):
     _coords_names = ['k']
     _power_names = ['P(k)']
 
-    def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., power_zero_nonorm=None, power_direct_nonorm=None, attrs=None):
+    def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., power_zero_nonorm=None, power_direct_nonorm=None, attrs=None, mpicomm=None):
         r"""
         Initialize :class:`BasePowerSpectrumStatistics`.
 
@@ -472,6 +472,9 @@ class BasePowerSpectrumStatistics(BaseClass):
 
         attrs : dict, default=None
             Dictionary of other attributes.
+
+        mpicomm : MPI communicator, default=None
+            The MPI communicator, only used when saving (:meth:`save` and :meth:`save_txt`) statistics.
         """
         if np.ndim(edges[0]) == 0: edges = (edges,)
         if np.ndim(modes[0]) == 0: modes = (modes,)
@@ -491,6 +494,7 @@ class BasePowerSpectrumStatistics(BaseClass):
         self.nmodes = np.asarray(nmodes)
         self.wnorm = wnorm
         self.shotnoise_nonorm = shotnoise_nonorm
+        self.mpicomm = mpicomm
         self.attrs = attrs or {}
 
     def get_power(self, add_direct=True, remove_shotnoise=True, null_zero_mode=True, divide_wnorm=True, complex=True):
@@ -709,7 +713,10 @@ class BasePowerSpectrumStatistics(BaseClass):
 
     def deepcopy(self):
         import copy
-        return copy.deepcopy(self)
+        new = copy.deepcopy(self)
+        if hasattr(self, 'mpicomm'):
+            new.mpicomm = self.mpicomm
+        return new
 
     def save_txt(self, filename, fmt='%.12e', delimiter=' ', header=None, comments='# ', **kwargs):
         """
@@ -740,49 +747,53 @@ class BasePowerSpectrumStatistics(BaseClass):
         kwargs : dict
             Arguments for :meth:`get_power`.
         """
-        self.log_info('Saving {}.'.format(filename))
-        utils.mkdir(os.path.dirname(filename))
-        formatter = {'int_kind': lambda x: '%d' % x, 'float_kind': lambda x: fmt % x, 'complex_kind': lambda x: '{}+{}j'.format(fmt % x.real, fmt % x.imag)}
-        if header is None: header = []
-        elif isinstance(header, str): header = [header]
-        else: header = list(header)
-        for name in ['autocorr', 'data_size1', 'data_size2', 'sum_data_weights1', 'sum_data_weights2',
-                     'randoms_size1','randoms_size2', 'sum_randoms_weights1', 'sum_randoms_weights2',
-                     'los_type', 'los', 'nmesh', 'boxsize', 'boxcenter', 'resampler1', 'resampler2',
-                     'interlacing1', 'interlacing2', 'shotnoise', 'wnorm']:
-            value = self.attrs.get(name, getattr(self, name, None))
-            if value is None:
-                value = 'None'
-            elif any(name.startswith(key) for key in ['los_type', 'resampler']):
-                value = str(value)
-            else:
-                value = np.array2string(np.array(value), separator=delimiter, formatter=formatter).replace('\n', '')
-            header.append('{} = {}'.format(name, value))
-            #value = value.split('\n')
-            #header.append('{} = {}'.format(name, value[0]))
-            #for arr in value[1:]: header.append(' '*(len(name) + 3) + arr)
-        labels = ['nmodes']
-        assert len(self._coords_names) == self.ndim
-        for name in self._coords_names:
-            labels += ['{}mid'.format(name), '{}avg'.format(name)]
-        labels += self._power_names
-        power = self.get_power(**kwargs)
-        columns = [self.nmodes.flat]
-        mids = np.meshgrid(*[(edges[:-1] + edges[1:])/2. for edges in self.edges], indexing='ij')
-        for idim in range(self.ndim):
-            columns += [mids[idim].flat, self.modes[idim].flat]
-        for column in power.reshape((-1,)*(power.ndim == self.ndim) + power.shape):
-            columns += [column.flat]
-        columns = [[np.array2string(value, formatter=formatter) for value in column] for column in columns]
-        widths = [max(max(map(len, column)) - len(comments) * (icol == 0), len(label)) for icol, (column, label) in enumerate(zip(columns, labels))]
-        widths[-1] = 0 # no need to leave a space
-        header.append((' '*len(delimiter)).join(['{:<{width}}'.format(label, width=width) for label, width in zip(labels, widths)]))
-        widths[0] += len(comments)
-        with open(filename, 'w') as file:
-            for line in header:
-                file.write(comments + line + '\n')
-            for irow in range(len(columns[0])):
-                file.write(delimiter.join(['{:<{width}}'.format(column[irow], width=width) for column, width in zip(columns, widths)]) + '\n')
+        if not self.with_mpi or self.mpicomm.rank == 0:
+            self.log_info('Saving {}.'.format(filename))
+            utils.mkdir(os.path.dirname(filename))
+            formatter = {'int_kind': lambda x: '%d' % x, 'float_kind': lambda x: fmt % x, 'complex_kind': lambda x: '{}+{}j'.format(fmt % x.real, fmt % x.imag)}
+            if header is None: header = []
+            elif isinstance(header, str): header = [header]
+            else: header = list(header)
+            for name in ['autocorr', 'data_size1', 'data_size2', 'sum_data_weights1', 'sum_data_weights2',
+                         'randoms_size1','randoms_size2', 'sum_randoms_weights1', 'sum_randoms_weights2',
+                         'los_type', 'los', 'nmesh', 'boxsize', 'boxcenter', 'resampler1', 'resampler2',
+                         'interlacing1', 'interlacing2', 'shotnoise', 'wnorm']:
+                value = self.attrs.get(name, getattr(self, name, None))
+                if value is None:
+                    value = 'None'
+                elif any(name.startswith(key) for key in ['los_type', 'resampler']):
+                    value = str(value)
+                else:
+                    value = np.array2string(np.array(value), separator=delimiter, formatter=formatter).replace('\n', '')
+                header.append('{} = {}'.format(name, value))
+                #value = value.split('\n')
+                #header.append('{} = {}'.format(name, value[0]))
+                #for arr in value[1:]: header.append(' '*(len(name) + 3) + arr)
+            labels = ['nmodes']
+            assert len(self._coords_names) == self.ndim
+            for name in self._coords_names:
+                labels += ['{}mid'.format(name), '{}avg'.format(name)]
+            labels += self._power_names
+            power = self.get_power(**kwargs)
+            columns = [self.nmodes.flat]
+            mids = np.meshgrid(*[(edges[:-1] + edges[1:])/2. for edges in self.edges], indexing='ij')
+            for idim in range(self.ndim):
+                columns += [mids[idim].flat, self.modes[idim].flat]
+            for column in power.reshape((-1,)*(power.ndim == self.ndim) + power.shape):
+                columns += [column.flat]
+            columns = [[np.array2string(value, formatter=formatter) for value in column] for column in columns]
+            widths = [max(max(map(len, column)) - len(comments) * (icol == 0), len(label)) for icol, (column, label) in enumerate(zip(columns, labels))]
+            widths[-1] = 0 # no need to leave a space
+            header.append((' '*len(delimiter)).join(['{:<{width}}'.format(label, width=width) for label, width in zip(labels, widths)]))
+            widths[0] += len(comments)
+            with open(filename, 'w') as file:
+                for line in header:
+                    file.write(comments + line + '\n')
+                for irow in range(len(columns[0])):
+                    file.write(delimiter.join(['{:<{width}}'.format(column[irow], width=width) for column, width in zip(columns, widths)]) + '\n')
+
+        if self.with_mpi:
+            self.mpicomm.Barrier()
 
 
 def get_power_statistic(statistic='wedge'):
@@ -1397,6 +1408,7 @@ class MeshFFTPower(BaseClass):
         if self.mesh2.pm.comm is not self.mesh1.pm.comm:
             raise ValueError('Communicator mismatch between input meshes')
         self.pm = self.mesh1.pm
+        self.mpicomm = self.pm.comm
         if np.any(self.nmesh % 2):
             raise NotImplementedError('For odd sizes pmesh k-coordinates are not wrapped in [-knyq, knyq]; please use even sizes for now')
 
@@ -1481,11 +1493,6 @@ class MeshFFTPower(BaseClass):
             self.los = los/utils.distance(los)
 
     @property
-    def mpicomm(self):
-        """Current MPI communicator."""
-        return self.pm.comm
-
-    @property
     def boxsize(self):
         """Physical box size."""
         return self.pm.BoxSize
@@ -1529,7 +1536,7 @@ class MeshFFTPower(BaseClass):
 
     def __getstate__(self):
         """Return this class state dictionary."""
-        state = {'attrs':self.attrs}
+        state = {'attrs': self.attrs}
         for name in ['wedges', 'poles']:
             if hasattr(self, name):
                 state[name] = getattr(self, name).__getstate__()
@@ -1541,15 +1548,6 @@ class MeshFFTPower(BaseClass):
         for name in ['wedges', 'poles']:
             if name in state:
                 setattr(self, name, get_power_statistic(statistic=state[name].pop('name')).from_state(state[name]))
-
-    def save(self, filename):
-        """Save power to ``filename``."""
-        try:
-            if self.mpicomm.rank == 0:
-                super(MeshFFTPower, self).save(filename)
-            self.mpicomm.Barrier()
-        except AttributeError:
-            super(MeshFFTPower, self).save(filename)
 
     def _run_global_los(self):
 
@@ -1582,7 +1580,7 @@ class MeshFFTPower(BaseClass):
         if rank == 0:
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
 
-        kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
+        kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs, 'mpicomm':self.mpicomm}
         k, mu, power, nmodes, power_zero = result
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
         power, power_zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, power_zero))
@@ -1740,7 +1738,7 @@ class MeshFFTPower(BaseClass):
         if swap: power, power_zero = (tmp.conj() for tmp in (power, power_zero))
         # Format the power results into :class:`PowerSpectrumMultipoles` instance
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
-        kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs}
+        kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs, 'mpicomm':self.mpicomm}
         self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
 

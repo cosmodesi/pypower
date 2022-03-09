@@ -472,11 +472,6 @@ class BaseDirectPowerEngine(BaseClass):
         return get_inverse_probability_weight(*weights, noffset=self.weight_attrs['noffset'], nrealizations=self.weight_attrs['nrealizations'],
                                               default_value=self.weight_attrs['default_value'], dtype=self.dtype)
 
-    @property
-    def with_mpi(self):
-        """Whether to use MPI."""
-        return self.mpicomm.size > 1
-
     def _mpi_decompose(self):
         positions1, positions2 = self.positions1, self.positions2
         weights1, weights2 = self.weights1, self.weights2
@@ -510,16 +505,6 @@ class BaseDirectPowerEngine(BaseClass):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
-
-    def save(self, filename):
-        """Save direct power to ``filename``."""
-        try:
-            if not self.with_mpi or self.mpicomm.rank == 0:
-                super(BaseDirectPowerEngine, self).save(filename)
-            self.mpicomm.Barrier()
-        except AttributeError:
-            super(BaseDirectPowerEngine, self).save(filename)
-
 
 class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
 

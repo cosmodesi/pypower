@@ -127,7 +127,7 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
 
     """Window matrix, relating "theory" input to "observed" output."""
 
-    def __init__(self, matrix, xin, xout, projsin, projsout, nmodes, wnorm=1., attrs=None):
+    def __init__(self, matrix, xin, xout, projsin, projsout, nmodes, wnorm=1., attrs=None, mpicomm=None):
         """
         Initialize :class:`PowerSpectrumFFTWindowMatrix`.
 
@@ -158,6 +158,9 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
 
         attrs : dict, default=None
             Dictionary of other attributes.
+
+        mpicomm : MPI communicator, default=None
+            The MPI communicator, only used when saving (:meth:`save`) matrix.
         """
         super(PowerSpectrumFFTWindowMatrix, self).__init__(matrix, xin, xout, projsin, projsout, weightsout=nmodes, attrs=attrs)
         self.cvalue = self.value # let us just keep the original value somewhere
@@ -171,6 +174,7 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
             nout = slout.stop
         self.value = np.concatenate(value, axis=-1)
         self.wnorm = wnorm
+        self.mpicomm = mpicomm
 
     @property
     def nmodes(self):
@@ -181,7 +185,7 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
         self.weightsout = nmodes
 
     @classmethod
-    def from_power(cls, power, xin, projin=(0, 0)):
+    def from_power(cls, power, xin, projin=(0, 0), **kwargs):
         """
         Create window function from input :class:`PowerSpectrumMultipoles`.
 
@@ -209,7 +213,7 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
         matrix = np.atleast_2d(power.power.ravel())
         attrs = power.attrs.copy()
         attrs['edges'] = power.edges
-        return cls(matrix, xin, xout, projsin, projsout, weights, wnorm=power.wnorm, attrs=attrs)
+        return cls(matrix, xin, xout, projsin, projsout, weights, wnorm=power.wnorm, attrs=attrs, **kwargs)
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -399,6 +403,7 @@ class MeshFFTWindow(MeshFFTPower):
                 self.pm = mesh1
             else:
                 self.pm = mesh1.pm
+            self.mpicomm = self.pm.comm
             self.boxcenter = _make_array(boxcenter if boxcenter is not None else 0., 3, dtype='f8')
         else:
             super(MeshFFTWindow, self)._set_mesh(mesh1, mesh2=mesh2, boxcenter=boxcenter)
@@ -699,9 +704,9 @@ class MeshFFTWindow(MeshFFTPower):
             for iin, xin in enumerate(self.xin[projin]):
                 run_projin(projin, self.deriv[projin][iin])
                 if self.ells:
-                    poles_x.append(PowerSpectrumFFTWindowMatrix.from_power(self.poles, xin, projin))
+                    poles_x.append(PowerSpectrumFFTWindowMatrix.from_power(self.poles, xin, projin, mpicomm=self.mpicomm))
                 if self.los_type == 'global':
-                    wedges_x.append(PowerSpectrumFFTWindowMatrix.from_power(self.wedges, xin, projin))
+                    wedges_x.append(PowerSpectrumFFTWindowMatrix.from_power(self.wedges, xin, projin, mpicomm=self.mpicomm))
             if poles_x:
                 poles.append(PowerSpectrumFFTWindowMatrix.concatenate_x(*poles_x, axis='in'))
             if wedges_x:

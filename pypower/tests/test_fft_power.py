@@ -56,6 +56,8 @@ def test_interp():
 
 def test_power_statistic():
 
+    mpicomm = mpi.COMM_WORLD
+
     for dtype in ['f8', 'c16']:
 
         edges = np.linspace(0., 0.2, 11)
@@ -75,6 +77,9 @@ def test_power_statistic():
         power2.select((0., 0.1))
         assert np.all(power2.modes[0] <= 0.1)
         with tempfile.TemporaryDirectory() as tmp_dir:
+            #tmp_dir = '_tests'
+            #power.mpicomm = mpicomm # to get a Barrier (otherwise the directory on root=0 may be deleted before other ranks access it)
+            #fn = mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             fn = os.path.join(tmp_dir, 'tmp.npy')
             power.save(fn)
             test = PowerSpectrumStatistics.load(fn)
@@ -332,9 +337,8 @@ def test_mesh_power():
                 fn = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
                 fn_txt = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.txt'), root=0)
                 power.save(fn)
-                power = MeshFFTPower.load(fn)
-                power.save(fn)
                 power.poles.save_txt(fn_txt)
+                power = MeshFFTPower.load(fn)
             check_wedges(power.wedges, ref_power.power)
 
             if power.wedges.edges[1][-1] == 1.:
@@ -475,8 +479,8 @@ def test_catalog_power():
             fn = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             fn_txt = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.txt'), root=0)
             power.save(fn)
-            power = CatalogFFTPower.load(fn)
             power.poles.save_txt(fn_txt)
+            power = CatalogFFTPower.load(fn)
 
         check_poles(power.poles, ref_power)
         for ell in ells:

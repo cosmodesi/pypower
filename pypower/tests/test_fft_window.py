@@ -162,6 +162,7 @@ def test_fft_window():
             fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             window.save(fn)
             window = CatalogFFTWindow.load(fn)
+            window.mpicomm = data.mpicomm
             window.save(fn)
 
         mesh1 = CatalogMesh(data_positions=randoms['Position'], data_weights=randoms['Weight'], nmesh=power.attrs['nmesh'], boxsize=power.attrs['boxsize'], boxcenter=power.attrs['boxcenter'],

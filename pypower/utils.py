@@ -133,10 +133,19 @@ class BaseClass(object,metaclass=BaseMetaClass):
         new.__setstate__(state)
         return new
 
+    @property
+    def with_mpi(self):
+        """Whether to use MPI."""
+        return getattr(self, 'mpicomm', None) is not None and self.mpicomm.size > 1
+
     def save(self, filename):
-        self.log_info('Saving {}.'.format(filename))
-        mkdir(os.path.dirname(filename))
-        np.save(filename, self.__getstate__(), allow_pickle=True)
+        """Save to ``filename``."""
+        if not self.with_mpi or self.mpicomm.rank == 0:
+            self.log_info('Saving {}.'.format(filename))
+            mkdir(os.path.dirname(filename))
+            np.save(filename, self.__getstate__(), allow_pickle=True)
+        if self.with_mpi:
+            self.mpicomm.Barrier()
 
     @classmethod
     def load(cls, filename):
