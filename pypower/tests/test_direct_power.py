@@ -279,6 +279,8 @@ def test_direct_power():
                 test.save(fn)
                 test2 = DirectPower.load(fn)
                 assert np.allclose(test.power_nonorm, ref, **tol)
+                fn = os.path.join(tmp_dir, 'tmp.npy')
+                test2.save(fn)
 
             mpiroot = 0
             data1 = [mpi.gather_array(d, root=mpiroot, mpicomm=mpicomm) for d in data1]

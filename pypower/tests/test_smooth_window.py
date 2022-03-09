@@ -111,6 +111,8 @@ def test_window():
         fn = os.path.join(tmp_dir, 'tmp.npy')
         window.save(fn)
         test = PowerSpectrumSmoothWindow.load(fn)
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        test.save(fn)
 
     assert np.allclose(test(projs[0], k), window.power_nonorm[0])
     assert np.allclose(test(projs[0], 10.), 0.)
@@ -148,6 +150,8 @@ def test_window():
         fn = os.path.join(tmp_dir, 'tmp.npy')
         window_real.save(fn)
         test = CorrelationFunctionSmoothWindow.load(fn)
+        test.save(fn)
+
     assert np.allclose(test(projs[0], 1./k[::-1]), window_real.corr[0])
 
 
@@ -184,6 +188,8 @@ def test_fft_window():
             window1.save(fn)
             window1.save_txt(fn_txt, complex=False)
             window = PowerSpectrumSmoothWindow.load(fn)
+            fn = os.path.join(tmp_dir, 'tmp.npy')
+            window.save(fn)
             assert np.allclose(window.power[0], window1.power[0], equal_nan=True)
 
         poles_f4 = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],

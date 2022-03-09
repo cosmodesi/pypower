@@ -1187,13 +1187,10 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
 
         # Assign positions/weights to mesh
         def get_mesh_nbar(mesh, field='data'):
-            if field == 'data':
-                mesh = mesh.clone(data_positions=mesh.data_positions, data_weights=mesh.data_weights,
-                                  nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, resampler=resampler, interlacing=False, position_type='pos').to_mesh()
-            else:
-                mesh = mesh.clone(data_positions=mesh.randoms_positions, data_weights=mesh.sum_data_weights/mesh.sum_randoms_weights*mesh.randoms_weights,
-                                  nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, resampler=resampler, interlacing=False, position_type='pos').to_mesh()
-            return mesh
+            if field == 'randoms':
+                field = 'data-normalized_randoms'
+            return mesh.clone(data_positions=mesh.data_positions, data_weights=mesh.data_weights, randoms_positions=mesh.randoms_positions, randoms_weights=mesh.randoms_weights,
+                              nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, resampler=resampler, interlacing=False, position_type='pos').to_mesh(field=field)
 
         # Sum over meshes
         toret = (get_mesh_nbar(mesh1, field='data') * get_mesh_nbar(mesh2, field='randoms')).csum()

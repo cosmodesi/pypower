@@ -229,6 +229,8 @@ class CatalogMesh(BaseClass):
 
     """Class to paint catalog of positions and weights to mesh."""
 
+    _slab_npoints_max = int(1024 * 1024 * 4)
+
     def __init__(self, data_positions, data_weights=None, randoms_positions=None, randoms_weights=None,
                  shifted_positions=None, shifted_weights=None,
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
@@ -393,8 +395,6 @@ class CatalogMesh(BaseClass):
         # Set data and optionally shifted and randoms weights and their sum, scattering on all ranks if not already
 
         def get_weights(weights):
-            if np.isscalar(weights):
-                return weights
             weights = _format_weights(weights, weight_type='product_individual', dtype=self.rdtype, mpicomm=self.mpicomm, mpiroot=mpiroot)[0]
             if weights:
                 return weights[0]
@@ -410,12 +410,9 @@ class CatalogMesh(BaseClass):
         if not self.with_shifted and self.shifted_weights is not None:
             raise ValueError('shifted_weights are provided, but not shifted_positions')
 
-        for name in ['data_weights', 'randoms_weights', 'shifted_weights']:
-            if getattr(self, name) is None: setattr(self, name, 1.)
-
         def sum_weights(positions, weights):
-            if np.ndim(weights) == 0:
-                return self.mpicomm.allreduce(len(positions))*weights
+            if weights is None:
+                return self.mpicomm.allreduce(len(positions))
             return self.mpicomm.allreduce(sum(weights))
 
         self.sum_data_weights = sum_weights(self.data_positions, self.data_weights)
@@ -456,7 +453,7 @@ class CatalogMesh(BaseClass):
                 - "data-normalized_randoms": randoms positions and weights, renormalized (by alpha)
                    such that their sum is same as data weights
                 - "fkp": FKP field, i.e. data - alpha * (shifted if provided else randoms)
-                - None: defaults to "data" if no shifted/randoms, else "fkp"
+                - ``None``: defaults to "data" if no shifted/randoms, else "fkp"
 
         dtype : string, dtype, default='f8'
             The data type of the mesh when painting, to override current :attr:`dtype`.
@@ -482,29 +479,29 @@ class CatalogMesh(BaseClass):
         positions, weights = [], []
         if field in ['data', 'fkp']:
             positions += [self.data_positions]
-            weights += [self.data_weights]
+            weights += [(self.data_weights, None)]
         if field in ['normalized_data']:
             positions += [self.data_positions]
-            weights += [self.nmesh.prod()/self.sum_data_weights] # mean mesh is 1
+            weights += [(self.data_weights, self.nmesh.prod()/self.sum_data_weights)] # mean mesh is 1
         if field in ['fkp']:
             if self.with_shifted:
                 positions += [self.shifted_positions]
-                weights += [-self.sum_data_weights/self.sum_shifted_weights*self.shifted_weights]
+                weights += [(self.shifted_weights, -self.sum_data_weights/self.sum_shifted_weights)]
             else:
                 positions += [self.randoms_positions]
-                weights += [-self.sum_data_weights/self.sum_randoms_weights*self.randoms_weights]
+                weights += [(self.randoms_weights, -self.sum_data_weights/self.sum_randoms_weights)]
         if field in ['shifted', 'data-normalized_shifted']:
             positions += [self.shifted_positions]
             if field == 'data-normalized_shifted':
-                weights += [self.sum_data_weights/self.sum_shifted_weights*self.shifted_weights]
+                weights += [(self.shifted_weights, self.sum_data_weights/self.sum_shifted_weights)]
             else:
-                weights += [self.shifted_weights]
+                weights += [(self.shifted_weights, None)]
         if field in ['randoms', 'data-normalized_randoms']:
             positions += [self.randoms_positions]
-            if field == 'randoms-normalized_randoms':
-                weights += [self.sum_data_weights/self.sum_randoms_weights*self.randoms_weights]
+            if field == 'data-normalized_randoms':
+                weights += [(self.randoms_weights, self.sum_data_weights/self.sum_randoms_weights)]
             else:
-                weights += [self.randoms_weights]
+                weights += [(self.randoms_weights, None)]
 
         pm = ParticleMesh(BoxSize=self.boxsize, Nmesh=self.nmesh, dtype=dtype, comm=self.mpicomm)
         offset = self.boxcenter - self.boxsize/2.
@@ -514,13 +511,65 @@ class CatalogMesh(BaseClass):
         def paint(positions, weights, out, transform=None):
             positions = positions - offset
             factor = bool(self.interlacing) + 0.5
-            # decompose positions such that they live in the same region as the mesh in the current process
-            layout = pm.decompose(positions, smoothing=factor * self.resampler.support)
-            positions = layout.exchange(positions)
-            if np.ndim(weights) != 0:
-                weights = layout.exchange(weights)
-            # hold = True means no zeroing of out
-            pm.paint(positions, mass=weights, resampler=self.resampler, transform=transform, hold=True, out=out)
+            weights, scaling = weights
+            scalar_weights = weights is None
+            if scaling is not None:
+                if scalar_weights: weights = scaling
+                else: weights = weights * scaling
+
+            # We work by slab to limit memory footprint
+            # Merely copy-pasted from https://github.com/bccp/nbodykit/blob/4aec168f176939be43f5f751c90363b39ec6cf3a/nbodykit/source/mesh/catalog.py#L300
+            def paint_slab(sl):
+                # Decompose positions such that they live in the same region as the mesh in the current process
+                p = positions[sl]
+                layout = pm.decompose(p, smoothing=factor * self.resampler.support)
+                # If we are receiving too many particles, abort and retry with a smaller chunksize
+                recvlengths = pm.comm.allgather(layout.recvlength)
+                if any(recvlength > 2 * self._slab_npoints_max for recvlength in recvlengths):
+                    if pm.comm.rank == 0:
+                        self.log_info('Throttling chunksize as some ranks will receive too many particles. ({:d} > {:d})'.format(max(recvlengths), self._slab_npoints_max * 2))
+                    raise StopIteration
+                p = layout.exchange(p)
+                w = weights
+                if not scalar_weights: w = layout.exchange(weights[sl])
+                # hold = True means no zeroing of out
+                pm.paint(p, mass=w, resampler=self.resampler, transform=transform, hold=True, out=out)
+                return len(p)
+
+            import gc
+            islab = 0
+            slab_npoints = self._slab_npoints_max
+            sizes = pm.comm.allgather(len(positions))
+            csize = sum(sizes)
+            local_size_max = max(sizes)
+            painted_size = 0
+
+            while islab < local_size_max:
+
+                sl = slice(islab, islab + slab_npoints)
+
+                if pm.comm.rank == 0:
+                    self.log_info('Slab {:d} ~ {:d} / {:d}.'.format(islab, islab + slab_npoints, local_size_max))
+
+                try:
+                    painted_size_slab = paint_slab(sl)
+                except StopIteration:
+                    slab_npoints = slab_npoints // 2
+                    if slab_npoints < 1:
+                        raise RuntimeError('Cannot find a slab size that fits into memory.')
+                    continue
+                finally:
+                    # collect unfreed items
+                    gc.collect()
+
+                painted_size += pm.comm.allreduce(painted_size_slab)
+
+                if pm.comm.rank == 0:
+                    self.log_info('Painted {:d} out of {:d} objects to mesh'.format(painted_size, csize))
+
+                islab += slab_npoints
+                slab_npoints = min(self._slab_npoints_max, int(slab_npoints * 1.5))
+
 
         out = pm.create(type='real', value=0.)
         for p, w in zip(positions, weights): paint(p, w, out)
@@ -578,8 +627,8 @@ class CatalogMesh(BaseClass):
         Where the sum runs over data (and optionally) shifted/randoms weights.
         """
         def sum_weights2(positions, weights=None):
-            if np.ndim(weights) == 0:
-                return self.mpicomm.allreduce(len(positions))*weights**2
+            if weights is None:
+                return self.mpicomm.allreduce(len(positions))
             return self.mpicomm.allreduce(sum(weights**2))
 
         shotnoise = sum_weights2(self.data_positions, self.data_weights)

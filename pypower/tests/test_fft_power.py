@@ -84,6 +84,9 @@ def test_power_statistic():
             power.save(fn)
             test = PowerSpectrumStatistics.load(fn)
             assert np.all(test.power == power.power)
+            fn = os.path.join(tmp_dir, 'tmp.npy')
+            test.save(fn)
+
         power2 = power.copy()
         power2.modes[0] = 1
         assert np.all(power.modes[0] == test.modes[0])
@@ -291,8 +294,10 @@ def test_mesh_power():
         mesh = data.to_nbodykit().to_mesh(position='Position', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
         return FFTPower(mesh, mode='2d', poles=ells, Nmu=len(muedges) - 1, los=los_array, dk=dk, kmin=kedges[0], kmax=kedges[-1])
 
-    def get_mesh_power(data, los, edges=(kedges, muedges), dtype=dtype, as_cross=False):
+    def get_mesh_power(data, los, edges=(kedges, muedges), dtype=dtype, as_cross=False, slab_npoints_max=None):
         mesh = CatalogMesh(data_positions=data['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
+        if slab_npoints_max is not None:
+            mesh._slab_npoints_max = slab_npoints_max
         if as_cross:
             mesh2 = CatalogMesh(data_positions=data['Position'].T, boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='xyz')
         else:
@@ -324,6 +329,7 @@ def test_mesh_power():
 
         list_options = []
         list_options.append({'los':los, 'edges':(ref_kedges, muedges)})
+        list_options.append({'los':los, 'edges':(ref_kedges, muedges), 'slab_npoints_max':10000})
         list_options.append({'los':[1. if ax == los else 0. for ax in 'xyz'], 'edges':(ref_kedges, muedges)})
         list_options.append({'los':los, 'edges':({'min':ref_kedges[0], 'max':ref_kedges[-1], 'step':ref_kedges[1] - ref_kedges[0]}, muedges)})
         list_options.append({'los':los, 'edges':(ref_kedges, muedges), 'dtype':'f4'})
@@ -339,6 +345,9 @@ def test_mesh_power():
                 power.save(fn)
                 power.poles.save_txt(fn_txt)
                 power = MeshFFTPower.load(fn)
+                fn = os.path.join(tmp_dir, 'tmp.npy')
+                power.save(fn)
+
             check_wedges(power.wedges, ref_power.power)
 
             if power.wedges.edges[1][-1] == 1.:
@@ -395,6 +404,26 @@ def test_normalization():
     assert np.allclose(new, old, atol=0, rtol=1e-1)
 
 
+def test_catalog_mesh():
+
+    data = Catalog.load_fits(data_fn)
+    randoms = Catalog.load_fits(randoms_fn)
+    boxsize = 600.
+    boxcenter = 0.
+    nmesh = 128
+    resampler = 'tsc'
+    interlacing = 2
+    for catalog in [data, randoms]:
+        catalog['Weight'] = catalog.ones()
+
+    mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
+                       shifted_positions=randoms['Position'], shifted_weights=randoms['Weight'],
+                       boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype='f8')
+    mesh.to_mesh()
+    for field in ['data', 'shifted', 'randoms', 'data-normalized_shifted', 'data-normalized_randoms', 'fkp']:
+        mesh.to_mesh(field=field)
+
+
 def test_catalog_power():
     boxsize = 1000.
     nmesh = 128
@@ -408,9 +437,10 @@ def test_catalog_power():
     dtype = 'f8'
     data = Catalog.load_fits(data_fn)
     randoms = Catalog.load_fits(randoms_fn)
+    weight_value = 2.
     for catalog in [data, randoms]:
         catalog['Position'] += boxcenter
-        catalog['Weight'] = catalog.ones()
+        catalog['Weight'] = weight_value*catalog.ones()
 
     def get_ref_power(data, randoms, dtype='c16'):
         from nbodykit.lab import FKPCatalog, ConvolvedFFTPower
@@ -429,9 +459,13 @@ def test_catalog_power():
         return CatalogFFTPower(data_positions1=data_positions, data_weights1=data['Weight'], randoms_positions1=randoms_positions, randoms_weights1=randoms['Weight'],
                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=edges, position_type=position_type, dtype=dtype, **kwargs)
 
-    def get_catalog_mesh_power(data, randoms, dtype=dtype):
-        mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
+    def get_catalog_mesh_power(data, randoms, dtype=dtype, slab_npoints_max=None, weights=('data', 'randoms')):
+        data_weights = data['Weight'] if 'data' in weights else None
+        randoms_weights = randoms['Weight'] if 'randoms' in weights else None
+        mesh = CatalogMesh(data_positions=data['Position'], data_weights=data_weights, randoms_positions=randoms['Position'], randoms_weights=randoms_weights,
                            boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
+        if slab_npoints_max is not None:
+            mesh._slab_npoints_max = slab_npoints_max
         return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)
 
     def get_mesh_power(data, randoms, dtype=dtype, as_complex=False, as_cross=False):
@@ -481,6 +515,8 @@ def test_catalog_power():
             power.save(fn)
             power.poles.save_txt(fn_txt)
             power = CatalogFFTPower.load(fn)
+            fn = os.path.join(tmp_dir, 'tmp.npy')
+            power.save(fn)
 
         check_poles(power.poles, ref_power)
         for ell in ells:
@@ -489,9 +525,19 @@ def test_catalog_power():
             atol = 2e-1 if ell % 2 else 1e-5
             assert np.allclose(power.poles(ell=ell).real, c_power.poles(ell=ell).real, atol=atol, rtol=1e-3)
 
-    power_mesh = get_catalog_mesh_power(data, randoms)
-    for ell in ells:
-        assert np.allclose(power_mesh.poles(ell=ell), f_power.poles(ell=ell))
+    list_options = []
+    list_options.append({})
+    list_options.append({'weights':tuple()})
+    list_options.append({'weights':('randoms',)})
+    list_options.append({'weights':('data',)})
+    list_options.append({'slab_npoints_max':10000})
+    list_options.append({'slab_npoints_max':10000, 'weights':('randoms',)})
+
+    for options in list_options:
+        power_mesh = get_catalog_mesh_power(data, randoms, **options)
+        remove_shotnoise = options.get('weights', ('data', 'randoms')) == ('data', 'randoms')
+        for ell in ells:
+            assert np.allclose(power_mesh.poles(ell=ell, remove_shotnoise=remove_shotnoise), f_power.poles(ell=ell, remove_shotnoise=remove_shotnoise))
 
     power_mesh = get_mesh_power(data, randoms, as_complex=False)
     for ell in ells:
@@ -544,7 +590,8 @@ def test_catalog_power():
         assert np.allclose(power_shifted.poles(ell=ell) - (ell == 0)*f_power.shotnoise, f_power.poles(ell=ell))
 
     def get_catalog_shifted_no_randoms_power(data, randoms):
-        return CatalogFFTPower(data_positions1=data['Position'], shifted_positions1=randoms['Position'], ells=ells, los=los, edges=kedges, boxsize=boxsize, nmesh=nmesh, wrap=True, resampler=resampler, interlacing=interlacing, position_type='pos')
+        return CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], shifted_positions1=randoms['Position'], shifted_weights1=randoms['Weight'],
+                               ells=ells, los=los, edges=kedges, boxsize=boxsize, nmesh=nmesh, wrap=True, resampler=resampler, interlacing=interlacing, position_type='pos')
 
     power_shifted = get_catalog_shifted_no_randoms_power(data, randoms)
     for ell in ells:
@@ -628,6 +675,7 @@ if __name__ == '__main__':
     test_power_statistic()
     test_find_edges()
     test_ylm()
+    test_catalog_mesh()
     test_field_power()
     test_mesh_power()
     test_catalog_power()
