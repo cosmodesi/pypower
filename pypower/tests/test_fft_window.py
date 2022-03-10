@@ -1,5 +1,4 @@
 import os
-import time
 import tempfile
 
 import numpy as np
@@ -10,52 +9,6 @@ from pypower import CatalogFFTPower, CatalogMesh, MeshFFTWindow, CatalogFFTWindo
 from pypower.fft_window import get_correlation_function_tophat_derivative
 
 from test_fft_power import data_fn, randoms_fn
-
-
-
-class MemoryMonitor(object):
-    """
-    Class that monitors memory usage and clock, useful to check for memory leaks.
-
-    >>> with MemoryMonitor() as mem:
-            '''do something'''
-            mem()
-            '''do something else'''
-    """
-    def __init__(self, pid=None):
-        """
-        Initalize :class:`MemoryMonitor` and register current memory usage.
-
-        Parameters
-        ----------
-        pid : int, default=None
-            Process identifier. If ``None``, use the identifier of the current process.
-        """
-        import psutil
-        self.proc = psutil.Process(os.getpid() if pid is None else pid)
-        self.mem = self.proc.memory_info().rss / 1e6
-        self.time = time.time()
-        msg = 'using {:.3f} [Mb]'.format(self.mem)
-        print(msg, flush=True)
-
-    def __enter__(self):
-        """Enter context."""
-        return self
-
-    def __call__(self, log=None):
-        """Update memory usage."""
-        mem = self.proc.memory_info().rss / 1e6
-        t = time.time()
-        msg = 'using {:.3f} [Mb] (increase of {:.3f} [Mb]) after {:.3f} [s]'.format(mem,mem-self.mem,t-self.time)
-        if log:
-            msg = '[{}] {}'.format(log, msg)
-        print(msg, flush=True)
-        self.mem = mem
-        self.time = t
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        """Exit context."""
-        self()
 
 
 def test_deriv(plot=False):
@@ -76,50 +29,6 @@ def test_deriv(plot=False):
             ax.legend()
             ax.set_xscale('log')
             plt.show()
-
-
-def test_fft():
-    from pmesh.pm import ParticleMesh, RealField
-    boxsize, nmesh = [1000.]*3, [64]*3
-    pm = ParticleMesh(BoxSize=boxsize, Nmesh=nmesh, dtype='c16', comm=mpi.COMM_WORLD)
-    rfield = RealField(pm)
-    shape = rfield.value.shape
-    #rfield[...] = 1.
-    rfield[...] = np.random.uniform(0., 1., size=shape)
-    cfield = rfield.r2c().value
-    #print(cfield[0,0,0])
-    from numpy import fft
-    ref = fft.fftn(rfield.value)/np.prod(shape)
-    assert np.allclose(cfield, ref)
-
-    a = np.arange(10)
-    b = 2 + np.arange(10)[::-1]
-    a = np.concatenate([a, np.zeros_like(a)], axis=0)
-    b = np.concatenate([b, np.zeros_like(b)], axis=0)
-    n = a.size
-    c = np.zeros_like(a)
-    for ii in range(len(c)):
-        for ia, aa in enumerate(a):
-            wii = ii if ii <= n // 2 else ii - n
-            wii += ia
-            if 0 <= wii < n: c[ii] += aa * b[wii]
-
-    test = fft.irfft(fft.rfft(a).conj() * fft.rfft(b))
-    assert np.allclose(test, c)
-
-    c = np.zeros_like(a)
-    for ii in range(len(c)):
-        for ib, bb in enumerate(b):
-            wii = ii if ii <= n // 2 else ii - n
-            wii += ib
-            if 0 <= wii < n: c[ii] += bb * a[wii]
-
-    test = fft.irfft(fft.rfft(a) * fft.rfft(b).conj()).conj()
-    assert np.allclose(test, c)
-
-    with MemoryMonitor() as mem:
-        pm = ParticleMesh(BoxSize=boxsize, Nmesh=nmesh, dtype='c16', comm=mpi.COMM_WORLD)
-        rfield = RealField(pm)
 
 
 def test_fft_window():
@@ -247,5 +156,4 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_deriv()
-    #test_fft()
     test_fft_window()

@@ -508,11 +508,11 @@ class CatalogMesh(BaseClass):
         #offset = self.boxcenter
         #offset = 0.
 
-        def paint(positions, weights, out, transform=None):
+        def paint(positions, weights, scaling, out, transform=None):
             positions = positions - offset
             factor = bool(self.interlacing) + 0.5
-            weights, scaling = weights
             scalar_weights = weights is None
+
             if scaling is not None:
                 if scalar_weights: weights = scaling
                 else: weights = weights * scaling
@@ -531,13 +531,12 @@ class CatalogMesh(BaseClass):
                         self.log_info('Throttling slab size as some ranks will receive too many particles. ({:d} > {:d})'.format(max(recvlengths), self._slab_npoints_max * 2))
                     raise StopIteration
                 p = layout.exchange(p)
-                w = weights
-                if not scalar_weights: w = layout.exchange(weights[sl])
+                #w = layout.exchange(weights[sl])
+                w = weights if scalar_weights else layout.exchange(weights[sl])
                 # hold = True means no zeroing of out
                 pm.paint(p, mass=w, resampler=self.resampler, transform=transform, hold=True, out=out)
                 return size
 
-            import gc
             islab = 0
             slab_npoints = self._slab_npoints_max
             sizes = pm.comm.allgather(len(positions))
@@ -545,13 +544,13 @@ class CatalogMesh(BaseClass):
             local_size_max = max(sizes)
             painted_size = 0
 
+            import gc
             while islab < local_size_max:
 
                 sl = slice(islab, islab + slab_npoints)
 
                 if pm.comm.rank == 0:
                     self.log_info('Slab {:d} ~ {:d} / {:d}.'.format(islab, islab + slab_npoints, local_size_max))
-
                 try:
                     painted_size_slab = paint_slab(sl)
                 except StopIteration:
@@ -566,14 +565,13 @@ class CatalogMesh(BaseClass):
                 painted_size += pm.comm.allreduce(painted_size_slab)
 
                 if pm.comm.rank == 0:
-                    self.log_info('Painted {:d} out of {:d} objects to mesh'.format(painted_size, csize))
+                    self.log_info('Painted {:d} out of {:d} objects to mesh.'.format(painted_size, csize))
 
                 islab += slab_npoints
                 slab_npoints = min(self._slab_npoints_max, int(slab_npoints * 1.2))
 
-
         out = pm.create(type='real', value=0.)
-        for p, w in zip(positions, weights): paint(p, w, out)
+        for p, w in zip(positions, weights): paint(p, *w, out)
 
         if self.interlacing:
             if self.mpicomm.rank == 0:
@@ -587,7 +585,7 @@ class CatalogMesh(BaseClass):
                 transform = pm.affine.shift(shift) # this shifts particle positions by ``shift`` before painting to mesh
                 # paint to two shifted meshes
                 mesh_shifted = pm.create(type='real', value=0.)
-                for p, w in zip(positions, weights): paint(p, w, mesh_shifted, transform=transform)
+                for p, w in zip(positions, weights): paint(p, *w, mesh_shifted, transform=transform)
                 mesh_shifted = mesh_shifted.r2c()
                 for k, s1, s2 in zip(out.slabs.x, out.slabs, mesh_shifted.slabs):
                     kc = sum(k[i] * cellsize[i] for i in range(3))
