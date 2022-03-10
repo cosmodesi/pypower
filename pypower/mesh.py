@@ -522,6 +522,7 @@ class CatalogMesh(BaseClass):
             def paint_slab(sl):
                 # Decompose positions such that they live in the same region as the mesh in the current process
                 p = positions[sl]
+                size = len(p)
                 layout = pm.decompose(p, smoothing=factor * self.resampler.support)
                 # If we are receiving too many particles, abort and retry with a smaller chunksize
                 recvlengths = pm.comm.allgather(layout.recvlength)
@@ -534,7 +535,7 @@ class CatalogMesh(BaseClass):
                 if not scalar_weights: w = layout.exchange(weights[sl])
                 # hold = True means no zeroing of out
                 pm.paint(p, mass=w, resampler=self.resampler, transform=transform, hold=True, out=out)
-                return len(p)
+                return size
 
             import gc
             islab = 0
