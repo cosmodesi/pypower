@@ -792,8 +792,8 @@ class BasePowerSpectrumStatistics(BaseClass):
                 for irow in range(len(columns[0])):
                     file.write(delimiter.join(['{:<{width}}'.format(column[irow], width=width) for column, width in zip(columns, widths)]) + '\n')
 
-        if self.with_mpi:
-            self.mpicomm.Barrier()
+        #if self.with_mpi:
+        #    self.mpicomm.Barrier()
 
 
 def get_power_statistic(statistic='wedge'):

@@ -144,8 +144,8 @@ class BaseClass(object,metaclass=BaseMetaClass):
             self.log_info('Saving {}.'.format(filename))
             mkdir(os.path.dirname(filename))
             np.save(filename, self.__getstate__(), allow_pickle=True)
-        if self.with_mpi:
-            self.mpicomm.Barrier()
+        #if self.with_mpi:
+        #    self.mpicomm.Barrier()
 
     @classmethod
     def load(cls, filename):

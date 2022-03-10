@@ -187,6 +187,7 @@ def test_fft_window():
             fn_txt = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.txt'), root=0)
             window1.save(fn)
             window1.save_txt(fn_txt, complex=False)
+            window1.mpicomm.Barrier()
             window = PowerSpectrumSmoothWindow.load(fn)
             fn = os.path.join(tmp_dir, 'tmp.npy')
             window.save(fn)

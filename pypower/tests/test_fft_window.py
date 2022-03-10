@@ -62,6 +62,7 @@ def test_fft_window():
         with tempfile.TemporaryDirectory() as tmp_dir:
             fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             power.save(fn)
+            power.mpicomm.Barrier()
             power = CatalogFFTPower.load(fn)
 
         edgesin = np.linspace(0.1, 0.11, 3)
@@ -70,6 +71,7 @@ def test_fft_window():
         with tempfile.TemporaryDirectory() as tmp_dir:
             fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             window.save(fn)
+            window.mpicomm.Barrier()
             window = CatalogFFTWindow.load(fn)
             window.mpicomm = data.mpicomm
             window.save(fn)

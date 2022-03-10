@@ -277,6 +277,7 @@ def test_direct_power():
             with tempfile.TemporaryDirectory() as tmp_dir:
                 fn = test.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
                 test.save(fn)
+                test.mpicomm.Barrier()
                 test2 = DirectPower.load(fn)
                 assert np.allclose(test.power_nonorm, ref, **tol)
                 fn = os.path.join(tmp_dir, 'tmp.npy')
