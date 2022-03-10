@@ -527,7 +527,7 @@ class CatalogMesh(BaseClass):
                 recvlengths = pm.comm.allgather(layout.recvlength)
                 if any(recvlength > 2 * self._slab_npoints_max for recvlength in recvlengths):
                     if pm.comm.rank == 0:
-                        self.log_info('Throttling chunksize as some ranks will receive too many particles. ({:d} > {:d})'.format(max(recvlengths), self._slab_npoints_max * 2))
+                        self.log_info('Throttling slab size as some ranks will receive too many particles. ({:d} > {:d})'.format(max(recvlengths), self._slab_npoints_max * 2))
                     raise StopIteration
                 p = layout.exchange(p)
                 w = weights
@@ -568,7 +568,7 @@ class CatalogMesh(BaseClass):
                     self.log_info('Painted {:d} out of {:d} objects to mesh'.format(painted_size, csize))
 
                 islab += slab_npoints
-                slab_npoints = min(self._slab_npoints_max, int(slab_npoints * 1.5))
+                slab_npoints = min(self._slab_npoints_max, int(slab_npoints * 1.2))
 
 
         out = pm.create(type='real', value=0.)
