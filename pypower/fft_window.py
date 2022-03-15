@@ -852,19 +852,20 @@ class CatalogFFTWindow(MeshFFTWindow):
                 - "xyz": Cartesian positions of shape (3, N)
                 - "rdd": RA/Dec in degree, distance of shape (3, N)
 
+            If ``position_type`` is "pos", positions are of (real) type ``dtype``, and ``mpiroot`` is ``None``,
+            no internal copy of positions will be made, hence saving some memory.
+
         weight_type : string, default='auto'
             The type of weighting to apply to provided weights. One of:
 
                 - ``None``: no weights are applied.
                 - "product_individual": each pair is weighted by the product of weights :math:`w_{1} w_{2}`.
-                - "inverse_bitwise": each pair is weighted by :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2}))`.
-                   Multiple bitwise weights can be provided as a list.
-                   Individual weights can additionally be provided as float arrays.
-                   In case of cross-correlations with floating weights, bitwise weights are automatically turned to IIP weights,
-                   i.e. :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1}))`.
                 - "auto": automatically choose weighting based on input ``weights1`` and ``weights2``,
                    i.e. ``None`` when ``weights1`` and ``weights2`` are ``None``,
-                   "inverse_bitwise" if one of input weights is integer, else "product_individual".
+                   else "product_individual".
+
+            If floating weights are of (real) type ``dtype`` and ``mpiroot`` is ``None``,
+            no internal copy of weights will be made, hence saving some memory.
 
         weight_attrs : dict, default=None
             Dictionary of weighting scheme attributes. In case ``weight_type`` is "inverse_bitwise",

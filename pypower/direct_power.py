@@ -75,9 +75,11 @@ def _format_positions(positions, position_type='xyz', dtype=None, copy=True, mpi
     # Format input array of positions
     # position_type in ["xyz", "rdd", "pos"]
 
-    def __format_positions(positions, position_type=position_type, dtype=dtype):
+    def __format_positions(positions):
         if position_type == 'pos': # array of shape (N, 3)
             positions = np.array(positions, dtype=dtype, copy=copy)
+            if not np.issubdtype(positions.dtype, np.floating):
+                return None, 'Input position arrays should be of floating type, not {}'.format(positions.dtype)
             if positions.shape[-1] != 3:
                 return None, 'For position type = {}, please provide a (N, 3) array for positions'.format(position_type)
             return positions, None
@@ -87,13 +89,13 @@ def _format_positions(positions, position_type='xyz', dtype=None, copy=True, mpi
             # Cast to the input dtype if exists (may be set by previous weights)
             positions[ip] = np.asarray(p, dtype=dtype)
         size = len(positions[0])
-        dtype = positions[0].dtype
-        if not np.issubdtype(dtype, np.floating):
-            return None, 'Input position arrays should be of floating type, not {}'.format(dtype)
+        dt = positions[0].dtype
+        if not np.issubdtype(dt, np.floating):
+            return None, 'Input position arrays should be of floating type, not {}'.format(dt)
         for p in positions[1:]:
             if len(p) != size:
                 return None, 'All position arrays should be of the same size'
-            if p.dtype != dtype:
+            if p.dtype != dt:
                 return None, 'All position arrays should be of the same type, you can e.g. provide dtype'
         if len(positions) != 3:
             return None, 'For position type = {}, please provide a list of 3 arrays for positions (found {:d})'.format(position_type, len(positions))
@@ -118,11 +120,11 @@ def _format_positions(positions, position_type='xyz', dtype=None, copy=True, mpi
     return positions
 
 
-def _format_weights(weights, weight_type='auto', size=None, dtype=None, mpicomm=None, mpiroot=None):
+def _format_weights(weights, weight_type='auto', size=None, dtype=None, copy=True, mpicomm=None, mpiroot=None):
     # Format input weights, as a list of n_bitwise_weights uint8 arrays, and optionally a float array for individual weights.
     # Return formated list of weights, and n_bitwise_weights.
 
-    def __format_weights(weights, weight_type=weight_type, dtype=dtype):
+    def __format_weights(weights):
         if weights is None or all(weight is None for weight in weights):
             return [], 0
         if np.ndim(weights[0]) == 0:
@@ -137,11 +139,15 @@ def _format_weights(weights, weight_type='auto', size=None, dtype=None, mpicomm=
             else:
                 individual_weights.append(w)
         # any integer array bit size will be a multiple of 8
-        bitwise_weights = utils.reformat_bitarrays(*bitwise_weights, dtype=np.uint8)
+        bitwise_weights = utils.reformat_bitarrays(*bitwise_weights, dtype=np.uint8, copy=copy)
         n_bitwise_weights = len(bitwise_weights)
         weights = bitwise_weights
         if individual_weights:
-            weights += [np.prod(individual_weights, axis=0, dtype=dtype)]
+            if len(individual_weights) > 1 or copy:
+                weight = np.prod(individual_weights, axis=0, dtype=dtype)
+            else:
+                weight = individual_weights[0].astype(dtype, copy=False)
+            weights += [weight]
         return weights, n_bitwise_weights
 
     weights, n_bitwise_weights = __format_weights(weights)
@@ -260,6 +266,9 @@ class BaseDirectPowerEngine(BaseClass):
                 - "xyz": Cartesian positions of shape (3, N)
                 - "rdd": RA/Dec in degree, distance of shape (3, N)
 
+            If ``position_type`` is "pos", positions are of (real) type ``dtype``, and ``mpiroot`` is ``None``,
+            no internal copy of positions will be made, hence saving some memory.
+
         weight_type : string, default='auto'
             The type of weighting to apply to provided weights. One of:
 
@@ -275,6 +284,8 @@ class BaseDirectPowerEngine(BaseClass):
                    "inverse_bitwise" if one of input weights is integer, else "product_individual".
 
             In addition, angular upweights can be provided with ``twopoint_weights``.
+            If floating weights are of (real) type ``dtype`` and ``mpiroot`` is ``None``,
+            no internal copy of weights will be made, hence saving some memory.
 
         weight_attrs : dict, default=None
             Dictionary of weighting scheme attributes. In case ``weight_type`` is "inverse_bitwise",
@@ -382,8 +393,8 @@ class BaseDirectPowerEngine(BaseClass):
         if position_type is not None: position_type = position_type.lower()
         self.position_type = position_type
 
-        self.positions1 = _format_positions(positions1, position_type=self.position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
-        self.positions2 = _format_positions(positions2, position_type=self.position_type, dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.positions1 = _format_positions(positions1, position_type=self.position_type, dtype=self.dtype, copy=False, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.positions2 = _format_positions(positions2, position_type=self.position_type, dtype=self.dtype, copy=False, mpicomm=self.mpicomm, mpiroot=mpiroot)
         self.autocorr = self.positions2 is None
 
     def _set_weights(self, weights1, weights2=None, weight_type='auto', twopoint_weights=None, weight_attrs=None, mpiroot=None):
@@ -407,7 +418,7 @@ class BaseDirectPowerEngine(BaseClass):
             default_value = weight_attrs.get('default_value', 0.)
             self.weight_attrs.update(noffset=noffset, default_value=default_value)
 
-            self.weights1, n_bitwise_weights1 = _format_weights(weights1, weight_type=weight_type, size=len(self.positions1), dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+            self.weights1, n_bitwise_weights1 = _format_weights(weights1, weight_type=weight_type, size=len(self.positions1), dtype=self.dtype, copy=False, mpicomm=self.mpicomm, mpiroot=mpiroot)
 
             def get_nrealizations(weights):
                 nrealizations = weight_attrs.get('nrealizations', None)
@@ -421,7 +432,7 @@ class BaseDirectPowerEngine(BaseClass):
                 self.n_bitwise_weights = n_bitwise_weights1
 
             else:
-                self.weights2, n_bitwise_weights2 = _format_weights(weights2, weight_type=weight_type, size=len(self.positions2), dtype=self.dtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+                self.weights2, n_bitwise_weights2 = _format_weights(weights2, weight_type=weight_type, size=len(self.positions2), dtype=self.dtype, copy=False, mpicomm=self.mpicomm, mpiroot=mpiroot)
 
                 if n_bitwise_weights2 == n_bitwise_weights1:
 

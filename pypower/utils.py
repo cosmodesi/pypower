@@ -318,7 +318,7 @@ def unpack_bitarrays(*arrays):
     return np.unpackbits(arrayofbytes, axis=0, count=None, bitorder='little')
 
 
-def reformat_bitarrays(*arrays, dtype=np.uint64):
+def reformat_bitarrays(*arrays, dtype=np.uint64, copy=True):
     """
     Reformat input integer arrays into list of arrays of type ``dtype``.
     If, e.g. 6 arrays of type ``np.uint8`` are input, and ``dtype`` is ``np.uint32``,
@@ -331,6 +331,9 @@ def reformat_bitarrays(*arrays, dtype=np.uint64):
 
     dtype : string, dtype
         Type of output integer arrays.
+
+    copy : bool, default=True
+        If ``False``, avoids copy of input arrays if ``dtype`` is uint8.
 
     Returns
     -------
@@ -351,8 +354,11 @@ def reformat_bitarrays(*arrays, dtype=np.uint64):
             newarray = toret[-1]
             nremainingbytes -= 1
             newarray.append(arrayofbyte[...,None])
-    for iarray,array in enumerate(toret):
+    for iarray, array in enumerate(toret):
         npad = dtype.itemsize - len(array)
         if npad: array += [np.zeros_like(array[0])]*npad
-        toret[iarray] = np.squeeze(np.concatenate(array,axis=-1).view(dtype), axis=-1)
+        if len(array) > 1 or copy:
+            toret[iarray] = np.squeeze(np.concatenate(array, axis=-1).view(dtype), axis=-1)
+        else:
+            toret[iarray] = array[0][...,0]
     return toret

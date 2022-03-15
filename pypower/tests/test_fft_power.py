@@ -517,24 +517,40 @@ def test_catalog_mesh():
 
 def test_memory():
 
+    from pypower.direct_power import _format_weights
+
+    with MemoryMonitor() as mem:
+        size = int(1e6)
+        arrays = [np.ones(size, dtype='f8')] + [np.ones(size, dtype='i4') for i in range(10)]
+        mem('init')
+        weights = _format_weights(arrays, weight_type='auto', dtype='f8', copy=True, mpicomm=mpi.COMM_WORLD, mpiroot=None)
+        mem('copy')
+        weights2 = _format_weights(arrays, weight_type='auto', dtype='f8', copy=False, mpicomm=mpi.COMM_WORLD, mpiroot=None)
+        assert len(weights2) == len(weights)
+        mem('no copy')
+
     from pmesh.pm import ParticleMesh
 
-    data = Catalog.load_fits([data_fn])
-    randoms = Catalog.load_fits([randoms_fn]*20)
     boxsize = 600.
     boxcenter = 0.
     nmesh = 300
     resampler = 'tsc'
     interlacing = False
-    for catalog in [data, randoms]:
-        catalog['Weight'] = catalog.ones()
 
     with MemoryMonitor() as mem:
 
+        data = Catalog.load_fits([data_fn])
+        randoms = Catalog.load_fits([randoms_fn]*20)
+        for catalog in [data, randoms]:
+            catalog['Weight'] = catalog.ones()
+            for name in catalog.columns(): catalog[name]
+        mem('load')
         mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
                            shifted_positions=randoms['Position'], shifted_weights=randoms['Weight'],
                            boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype='f8')
-        mesh._slab_npoints_max = 1000000
+        #del data
+        #del randoms
+        mesh._slab_npoints_max = 10000000
         mem('init')
         array = mesh.to_mesh()
         mem('painted')
@@ -792,7 +808,7 @@ if __name__ == '__main__':
     #test_mesh_power()
     #test_interlacing()
     #test_fft()
-    test_memory()
+    #test_memory()
     test_power_statistic()
     test_find_edges()
     test_ylm()

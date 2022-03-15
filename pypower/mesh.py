@@ -234,7 +234,7 @@ class CatalogMesh(BaseClass):
     def __init__(self, data_positions, data_weights=None, randoms_positions=None, randoms_weights=None,
                  shifted_positions=None, shifted_weights=None,
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
-                 resampler='tsc', interlacing=2, position_type='xyz', mpiroot=None, mpicomm=MPI.COMM_WORLD):
+                 resampler='tsc', interlacing=2, position_type='xyz', copy=False, mpiroot=None, mpicomm=MPI.COMM_WORLD):
         """
         Initialize :class:`CatalogMesh`.
 
@@ -306,6 +306,12 @@ class CatalogMesh(BaseClass):
                 - "xyz": Cartesian positions of shape (3, N)
                 - "rdd": RA/Dec in degree, distance of shape (3, N)
 
+        copy : bool, default=False
+            If ``False``, avoids copy of positions and weights if they are of (real) type ``dtype``, ``mpiroot`` is ``None``,
+            and ``position_type`` is "pos" (for positions).
+            Setting to ``True`` is only useful if one wants to modify positions or weights that have been passed as input
+            while keeping those attached to the current mesh instance the same.
+
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scatted across all ranks.
             Else the MPI rank where input positions and weights are gathered.
@@ -316,8 +322,8 @@ class CatalogMesh(BaseClass):
         self.mpicomm = mpicomm
         self.dtype = np.dtype(dtype)
         self.rdtype = _get_real_dtype(self.dtype)
-        self._set_positions(data_positions=data_positions, randoms_positions=randoms_positions, shifted_positions=shifted_positions, position_type=position_type, mpiroot=mpiroot)
-        self._set_weights(data_weights=data_weights, randoms_weights=randoms_weights, shifted_weights=shifted_weights, mpiroot=mpiroot)
+        self._set_positions(data_positions=data_positions, randoms_positions=randoms_positions, shifted_positions=shifted_positions, position_type=position_type, copy=copy, mpiroot=mpiroot)
+        self._set_weights(data_weights=data_weights, randoms_weights=randoms_weights, shifted_weights=shifted_weights, copy=copy, mpiroot=mpiroot)
         self._set_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, boxpad=boxpad, wrap=wrap)
         self._set_resampler(resampler)
         self._set_interlacing(interlacing)
@@ -374,16 +380,16 @@ class CatalogMesh(BaseClass):
             for position in positions:
                 _wrap_in_place(position, self.boxsize, self.boxcenter - self.boxsize/2.)
 
-    def _set_positions(self, data_positions, randoms_positions=None, shifted_positions=None, position_type='xyz', mpiroot=None):
+    def _set_positions(self, data_positions, randoms_positions=None, shifted_positions=None, position_type='xyz', copy=False, mpiroot=None):
         # Set data and optionally shifted and randoms positions, scattering on all ranks if not already
         if position_type is not None: position_type = position_type.lower()
         self.position_type = position_type
 
-        self.data_positions = _format_positions(data_positions, position_type=self.position_type, dtype=self.rdtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.data_positions = _format_positions(data_positions, position_type=self.position_type, dtype=self.rdtype, copy=copy, mpicomm=self.mpicomm, mpiroot=mpiroot)
         if self.data_positions is None:
             raise ValueError('Provide at least an array of data positions')
-        self.randoms_positions = _format_positions(randoms_positions, position_type=self.position_type, dtype=self.rdtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
-        self.shifted_positions = _format_positions(shifted_positions, position_type=self.position_type, dtype=self.rdtype, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.randoms_positions = _format_positions(randoms_positions, position_type=self.position_type, dtype=self.rdtype, copy=copy, mpicomm=self.mpicomm, mpiroot=mpiroot)
+        self.shifted_positions = _format_positions(shifted_positions, position_type=self.position_type, dtype=self.rdtype, copy=copy, mpicomm=self.mpicomm, mpiroot=mpiroot)
         self.data_size = len(self.data_positions)
         self.shifted_size, self.randoms_size = 0, 0
         if self.with_shifted:
@@ -391,11 +397,11 @@ class CatalogMesh(BaseClass):
         if self.with_randoms:
             self.randoms_size = len(self.randoms_positions)
 
-    def _set_weights(self, data_weights, randoms_weights=None, shifted_weights=None, mpiroot=None):
+    def _set_weights(self, data_weights, randoms_weights=None, shifted_weights=None, copy=False, mpiroot=None):
         # Set data and optionally shifted and randoms weights and their sum, scattering on all ranks if not already
 
         def get_weights(weights):
-            weights = _format_weights(weights, weight_type='product_individual', dtype=self.rdtype, mpicomm=self.mpicomm, mpiroot=mpiroot)[0]
+            weights = _format_weights(weights, weight_type='product_individual', dtype=self.rdtype, copy=copy, mpicomm=self.mpicomm, mpiroot=mpiroot)[0]
             if weights:
                 return weights[0]
             return None

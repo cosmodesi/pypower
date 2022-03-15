@@ -1747,7 +1747,7 @@ class CatalogFFTPower(MeshFFTPower):
                 shifted_positions1=None, shifted_positions2=None,
                 data_weights1=None, data_weights2=None, randoms_weights1=None, randoms_weights2=None,
                 shifted_weights1=None, shifted_weights2=None,
-                D1D2_twopoint_weights=None, D1R2_twopoint_weights=None, D2R1_twopoint_weights=None, D1S2_twopoint_weights=None, D2S1_twopoint_weights=None,
+                D1D2_twopoint_weights=None, D1R2_twopoint_weights=None, R1D2_twopoint_weights=None, D1S2_twopoint_weights=None, S1D2_twopoint_weights=None,
                 edges=None, ells=(0, 2, 4), los=None,
                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
                 resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
@@ -1866,6 +1866,9 @@ class CatalogFFTPower(MeshFFTPower):
                 - "xyz": Cartesian positions of shape (3, N)
                 - "rdd": RA/Dec in degree, distance of shape (3, N)
 
+            If ``position_type`` is "pos", positions are of (real) type ``dtype``, and ``mpiroot`` is ``None``,
+            no internal copy of positions will be made, hence saving some memory.
+
         weight_type : string, default='auto'
             The type of weighting to apply to provided weights. One of:
 
@@ -1881,6 +1884,8 @@ class CatalogFFTPower(MeshFFTPower):
                    "inverse_bitwise" if one of input weights is integer, else "product_individual".
 
             In addition, angular upweights can be provided with ``D1D2_twopoint_weights``, ``D1R2_twopoint_weights``, etc.
+            If floating weights are of (real) type ``dtype`` and ``mpiroot`` is ``None``,
+            no internal copy of weights will be made, hence saving some memory.
 
         weight_attrs : dict, default=None
             Dictionary of weighting scheme attributes. In case ``weight_type`` is "inverse_bitwise",
@@ -1903,7 +1908,7 @@ class CatalogFFTPower(MeshFFTPower):
             Weights to be applied to each pair of particles between first data catalog and second randoms catalog.
             See ``D1D2_twopoint_weights``.
 
-        D2R1_twopoint_weights : WeightTwoPointEstimator, default=None
+        R1D2_twopoint_weights : WeightTwoPointEstimator, default=None
             Weights to be applied to each pair of particles between second data catalog and first randoms catalog.
             See ``D1D2_twopoint_weights``.
 
@@ -1911,7 +1916,7 @@ class CatalogFFTPower(MeshFFTPower):
             Weights to be applied to each pair of particles between first data catalog and second shifted catalog.
             See ``D1D2_twopoint_weights``.
 
-        D2S1_twopoint_weights : WeightTwoPointEstimator, default=None
+        S1D2_twopoint_weights : WeightTwoPointEstimator, default=None
             Weights to be applied to each pair of particles between second data catalog and first shifted catalog.
             See ``D1D2_twopoint_weights``.
 
@@ -2011,7 +2016,7 @@ class CatalogFFTPower(MeshFFTPower):
 
         if self.ells:
 
-            twopoint_weights = {'D1D2':D1D2_twopoint_weights, 'D1R2':D1R2_twopoint_weights, 'D2R1':D2R1_twopoint_weights, 'D1S2':D1S2_twopoint_weights, 'D2S1':D2S1_twopoint_weights}
+            twopoint_weights = {'D1D2':D1D2_twopoint_weights, 'D1R2':D1R2_twopoint_weights, 'R1D2':R1D2_twopoint_weights, 'D1S2':D1S2_twopoint_weights, 'S1D2':S1D2_twopoint_weights}
 
             pairs = [(1, 'D1', 'D2')]
             if with_shifted:
@@ -2024,7 +2029,7 @@ class CatalogFFTPower(MeshFFTPower):
                     pairs.append((-2, 'D1', S2))
                 else:
                     pairs.append((-1, 'D1', S2))
-                    pairs.append((-1, 'D2', S1))
+                    pairs.append((-1, S1, 'D2'))
 
             DirectPowerEngine = get_direct_power_engine(direct_engine)
             for coeff, label1, label2 in pairs:
