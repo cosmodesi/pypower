@@ -116,6 +116,10 @@ def test_window():
 
     assert np.allclose(test(projs[0], k), window.power_nonorm[0])
     assert np.allclose(test(projs[0], 10.), 0.)
+    assert test(projs[0], 10.).shape == ()
+    assert test(projs[0], [10.]*3).shape == (3, )
+    assert test(k=[9.]*3).shape == (len(projs), 3)
+    assert np.allclose(test(k=[1., 2.]), test(k=[2., 1.])[..., ::-1], atol=0)
 
     window2 = PowerSpectrumSmoothWindow(edges, k, y, nmodes, projs, power_zero_nonorm=[10.] + [0.]*(len(projs) - 1), attrs={'boxsize':boxsize})
     assert np.allclose(window2(proj=0, k=0., null_zero_mode=False), win[0])
@@ -141,6 +145,10 @@ def test_window():
     with pytest.raises(IndexError):
         window_real((18,2))
     assert np.allclose(window_real((18,2), default_zero=True), 0.)
+    assert window_real(projs[0], 10.).shape == ()
+    assert window_real(projs[0], [10.]*3).shape == (3, )
+    assert window_real(sep=[9.]*3).shape == (len(projs), 3)
+    assert np.allclose(window_real(sep=[1., 2.]), window_real(sep=[2., 1.])[..., ::-1], atol=0)
 
     window.power_zero_nonorm[0] = 10.
     window_real2 = window.to_real()

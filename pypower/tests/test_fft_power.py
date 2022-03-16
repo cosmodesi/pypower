@@ -191,10 +191,14 @@ def test_power_statistic():
             assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
             assert np.isnan(power(k=-1., ell=0, complex=complex))
             assert not np.isnan(power(k=modes, complex=complex)).any()
-            assert power(k=[0.1,0.2]).shape == (len(power.ells), 2)
             assert np.allclose(power(k=[0.1,0.2], ell=power.ells), power(k=[0.1,0.2]))
+            assert power(k=[0.1,0.2], complex=complex).shape == (len(power.ells), 2)
+            assert power(k=[0.1,0.2], ell=0, complex=complex).shape == (2,)
+            assert power(k=0.1, ell=0, complex=complex).shape == ()
+            assert power(k=0.1, ell=(0, 2), complex=complex).shape == (2,)
+            assert np.allclose(power(k=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], complex=complex)[...,::-1], atol=0)
 
-        edges = (edges, np.linspace(0., 1., 21))
+        edges = (np.linspace(0., 0.2, 11), np.linspace(-1., 1., 21))
         modes = np.meshgrid(*((e[:-1] + e[1:])/2 for e in edges), indexing='ij')
         nmodes = np.ones(tuple(len(e)-1 for e in edges), dtype='i8')
         power = np.ones_like(nmodes, dtype='c16')
@@ -207,7 +211,7 @@ def test_power_statistic():
         assert np.isnan(power(-1., 0.))
         power.rebin(factor=(1, 10))
         assert power.power_nonorm.shape == (5, 1)
-        assert np.allclose(power_ref[::2,::2].power_nonorm, power.power_nonorm)
+        assert np.allclose(power_ref[::2,::2].power_nonorm, power.power_nonorm, atol=0)
         assert power_ref[1:7:2].shape[0] == 3
         power2 = power_ref.copy()
         power2.select(None, (0., 0.5))
@@ -218,14 +222,26 @@ def test_power_statistic():
             fn = os.path.join(tmp_dir, 'tmp_wedges.txt')
             power.save_txt(fn, complex=True)
 
-        for complex in [False, True]:
-            assert np.allclose(power(complex=complex, return_k=True, return_mu=True)[2], power.get_power(complex=complex), equal_nan=True)
-            assert np.allclose(power(complex=complex, return_k=True)[1], power.get_power(complex=complex), equal_nan=True)
-            assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
-            assert not np.isnan(power(0., 0., complex=complex))
-            assert np.isnan(power([-1.]*5, 0., complex=complex)).all()
-            assert np.isnan(power(-1., [0.]*5, complex=complex)).all()
-            assert power(k=[0.1,0.2], mu=[0.3]).shape == (2, 1)
+        for muedges in [np.linspace(-1., 1., 21), np.linspace(-1., 1., 2)]:
+            edges = (np.linspace(0., 0.2, 11), muedges)
+            modes = np.meshgrid(*((e[:-1] + e[1:])/2 for e in edges), indexing='ij')
+            nmodes = np.ones(tuple(len(e)-1 for e in edges), dtype='i8')
+            power = np.arange(nmodes.size, dtype='c16').reshape(nmodes.shape)
+            power = PowerSpectrumStatistics(edges, modes, power, nmodes, statistic='wedge')
+            for complex in [False, True]:
+                assert np.allclose(power(complex=complex, return_k=True, return_mu=True)[2], power.get_power(complex=complex), equal_nan=True)
+                assert np.allclose(power(complex=complex, return_k=True)[1], power.get_power(complex=complex), equal_nan=True)
+                assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
+                assert not np.isnan(power(0., 0., complex=complex))
+                assert np.isnan(power([-1.]*5, 0., complex=complex)).all()
+                assert np.isnan(power(-1., [0.]*5, complex=complex)).all()
+                assert power(k=[0.1,0.2], complex=complex).shape == (2, power.shape[1])
+                assert power(k=[0.1,0.2], mu=[0.3], complex=complex).shape == (2, 1)
+                assert power(k=[[0.1,0.2]]*3, mu=[[0.3]]*2, complex=complex).shape == (3, 2, 2, 1)
+                assert power(k=[0.1,0.2], mu=0., complex=complex).shape == (2,)
+                assert power(k=0.1, mu=0., complex=complex).shape == ()
+                assert power(k=0.1, mu=[0., 0.1], complex=complex).shape == (2,)
+                assert np.allclose(power(k=[0.2, 0.1], mu=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], mu=[0.1, 0.2], complex=complex)[::-1,::-1], atol=0)
 
 
 def test_ylm():
@@ -827,6 +843,7 @@ if __name__ == '__main__':
     #test_fft()
     #test_memory()
     test_power_statistic()
+    exit()
     test_find_edges()
     test_ylm()
     test_catalog_mesh()

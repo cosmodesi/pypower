@@ -906,15 +906,15 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
             if return_k:
                 if return_mu:
                     return kavg, muavg, power
+                return kavg, power
             return power
         if k is None: k = kavg
         if mu is None: mu = muavg
         mask_finite_k, mask_finite_mu = ~np.isnan(kavg), ~np.isnan(muavg)
         kavg, muavg, power = kavg[mask_finite_k], muavg[mask_finite_mu], power[np.ix_(mask_finite_k, mask_finite_mu)]
         k, mu = np.asarray(k), np.asarray(mu)
-        is1d = k.ndim == 0 or mu.ndim == 0
-        isscalar = k.ndim == mu.ndim == 0
-        k, mu = np.atleast_1d(k), np.atleast_1d(mu)
+        toret_shape = k.shape + mu.shape
+        k, mu = k.ravel(), mu.ravel()
         toret = np.nan * np.zeros((k.size, mu.size), dtype=power.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
         mask_mu = (mu >= self.edges[1][0]) & (mu <= self.edges[1][-1])
@@ -923,14 +923,13 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
             if muavg.size == 1:
                 interp = lambda array: UnivariateSpline(kavg, array, k=1, s=0, ext='const')(k)[:, None]
             else:
-                interp = lambda array: RectBivariateSpline(kavg, muavg, array, kx=1, ky=1, s=0)(k, mu, grid=True)
+                i_k = np.argsort(k); ii_k = np.argsort(i_k)
+                i_mu = np.argsort(mu); ii_mu = np.argsort(i_mu)
+                interp = lambda array: RectBivariateSpline(kavg, muavg, array, kx=1, ky=1, s=0)(k[i_k], mu[i_mu], grid=True)[np.ix_(ii_k, ii_mu)]
             toret[np.ix_(mask_k, mask_mu)] = interp(power.real)
             if complex and np.iscomplexobj(power):
                 toret[np.ix_(mask_k, mask_mu)] += 1j * interp(power.imag)
-        if is1d:
-            toret = toret.ravel()
-        if isscalar:
-            toret = toret[0]
+        toret.shape = toret_shape
         if return_k:
             if return_mu:
                 return k, mu, toret
