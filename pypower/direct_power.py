@@ -123,12 +123,12 @@ def _format_positions(positions, position_type='xyz', dtype=None, copy=True, mpi
 def _format_weights(weights, weight_type='auto', size=None, dtype=None, copy=True, mpicomm=None, mpiroot=None):
     # Format input weights, as a list of n_bitwise_weights uint8 arrays, and optionally a float array for individual weights.
     # Return formated list of weights, and n_bitwise_weights.
-
     def __format_weights(weights):
-        if weights is None or all(weight is None for weight in weights):
-            return [], 0
-        if np.ndim(weights[0]) == 0:
+        islist = isinstance(weights, (tuple, list)) or getattr(weights, 'ndim', 1) == 2
+        if not islist:
             weights = [weights]
+        if all(weight is None for weight in weights):
+            return [], 0
         individual_weights, bitwise_weights = [], []
         for w in weights:
             if np.issubdtype(w.dtype, np.integer):
@@ -151,7 +151,11 @@ def _format_weights(weights, weight_type='auto', size=None, dtype=None, copy=Tru
         return weights, n_bitwise_weights
 
     weights, n_bitwise_weights = __format_weights(weights)
-    if mpiroot is not None and mpicomm.bcast(weights is not None if mpicomm.rank == mpiroot else None, root=mpiroot):
+    if mpiroot is None:
+        size_weights = mpicomm.allgather(len(weights))
+        if len(set(size_weights)) != 1:
+            raise ValueError('mpiroot = None but weights are None/empty on some ranks')
+    else:
         n = mpicomm.bcast(len(weights) if mpicomm.rank == mpiroot else None, root=mpiroot)
         if mpicomm.rank != mpiroot: weights = [None]*n
         weights = [mpi.scatter_array(weight, mpicomm=mpicomm, root=mpiroot) for weight in weights]

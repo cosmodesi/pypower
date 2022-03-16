@@ -162,7 +162,9 @@ def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=
         if not isinstance(positions, (tuple, list)):
             positions = [positions]
         # Find bounding coordinates
-        pos_min, pos_max = np.min([pos.min(axis=0) for pos in positions],axis=0), np.max([pos.max(axis=0) for pos in positions], axis=0)
+        pos_min, pos_max = _make_array(np.inf, 3, dtype='f8'), _make_array(-np.inf, 3, dtype='f8')
+        for pos in positions:
+            if pos.shape[0] > 0: pos_min, pos_max = np.min([pos_min, pos.min(axis=0)], axis=0), np.max([pos_max, pos.max(axis=0)], axis=0)
         pos_min, pos_max = np.min(mpicomm.allgather(pos_min), axis=0), np.max(mpicomm.allgather(pos_max), axis=0)
         delta = np.abs(pos_max - pos_min)
         if boxcenter is None: boxcenter = 0.5 * (pos_min + pos_max)
@@ -385,48 +387,36 @@ class CatalogMesh(BaseClass):
         if position_type is not None: position_type = position_type.lower()
         self.position_type = position_type
 
-        self.data_positions = _format_positions(data_positions, position_type=self.position_type, dtype=self.rdtype, copy=copy, mpicomm=self.mpicomm, mpiroot=mpiroot)
-        if self.data_positions is None:
-            raise ValueError('Provide at least an array of data positions')
-        self.randoms_positions = _format_positions(randoms_positions, position_type=self.position_type, dtype=self.rdtype, copy=copy, mpicomm=self.mpicomm, mpiroot=mpiroot)
-        self.shifted_positions = _format_positions(shifted_positions, position_type=self.position_type, dtype=self.rdtype, copy=copy, mpicomm=self.mpicomm, mpiroot=mpiroot)
-        self.data_size = len(self.data_positions)
-        self.shifted_size, self.randoms_size = 0, 0
-        if self.with_shifted:
-            self.shifted_size = len(self.shifted_positions)
-        if self.with_randoms:
-            self.randoms_size = len(self.randoms_positions)
+        for name in ['data', 'randoms', 'shifted']:
+            positions_name = '{}_positions'.format(name)
+            positions = locals()[positions_name]
+            positions = _format_positions(positions, position_type=self.position_type, dtype=self.rdtype, copy=copy, mpicomm=self.mpicomm, mpiroot=mpiroot)
+            setattr(self, positions_name, positions)
+            if name == 'data' and positions is None:
+                raise ValueError('Provide at least an array of data positions')
+            size = 0 if positions is None else self.mpicomm.allreduce(len(positions))
+            setattr(self, '{}_size'.format(name), size)
 
     def _set_weights(self, data_weights, randoms_weights=None, shifted_weights=None, copy=False, mpiroot=None):
         # Set data and optionally shifted and randoms weights and their sum, scattering on all ranks if not already
 
-        def get_weights(weights):
-            weights = _format_weights(weights, weight_type='product_individual', dtype=self.rdtype, copy=copy, mpicomm=self.mpicomm, mpiroot=mpiroot)[0]
-            if weights:
-                return weights[0]
-            return None
-
-        self.data_weights = get_weights(data_weights)
-        self.randoms_weights = get_weights(randoms_weights)
-        self.shifted_weights = get_weights(shifted_weights)
-
-        if not self.with_randoms and self.randoms_weights is not None:
-            raise ValueError('randoms_weights are provided, but not randoms_positions')
-
-        if not self.with_shifted and self.shifted_weights is not None:
-            raise ValueError('shifted_weights are provided, but not shifted_positions')
-
-        def sum_weights(positions, weights):
+        for name in ['data', 'randoms', 'shifted']:
+            positions_name = '{}_positions'.format(name)
+            positions = getattr(self, positions_name, None)
+            weights_name = '{}_weights'.format(name)
+            weights = locals()[weights_name]
+            size = len(positions) if positions is not None else None
+            weights = _format_weights(weights, weight_type='product_individual', dtype=self.rdtype, size=size, copy=copy, mpicomm=self.mpicomm, mpiroot=mpiroot)[0]
+            weights = weights[0] if weights else None
+            if size is None and weights is not None:
+                raise ValueError('{} are provided, but not {}'.format(weights_name, positions_name))
+            setattr(self, weights_name, weights)
             if weights is None:
-                return self.mpicomm.allreduce(len(positions))
-            return self.mpicomm.allreduce(sum(weights))
-
-        self.sum_data_weights = sum_weights(self.data_positions, self.data_weights)
-        self.sum_randoms_weights = self.sum_shifted_weights = 0.
-        if self.with_shifted:
-            self.sum_shifted_weights = sum_weights(self.shifted_positions, self.shifted_weights)
-        if self.with_randoms:
-            self.sum_randoms_weights = sum_weights(self.randoms_positions, self.randoms_weights)
+                if size is None: sum_weights = 0.
+                else: sum_weights = self.mpicomm.allreduce(size)
+            else:
+                sum_weights = self.mpicomm.allreduce(sum(weights))
+            setattr(self, 'sum_{}'.format(weights_name), sum_weights)
 
     @property
     def with_randoms(self):
@@ -537,7 +527,6 @@ class CatalogMesh(BaseClass):
                         self.log_info('Throttling slab size as some ranks will receive too many particles. ({:d} > {:d})'.format(max(recvlengths), self._slab_npoints_max * 2))
                     raise StopIteration
                 p = layout.exchange(p)
-                #w = layout.exchange(weights[sl])
                 w = weights if scalar_weights else layout.exchange(weights[sl])
                 # hold = True means no zeroing of out
                 pm.paint(p, mass=w, resampler=self.resampler, transform=transform, hold=True, out=out)

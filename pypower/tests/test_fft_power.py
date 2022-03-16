@@ -747,30 +747,47 @@ def test_mpi():
     dtype = 'f8'
     cdtype = 'c16'
     los = None
-    data = Catalog.load_fits(data_fn, mpicomm=mpi.COMM_WORLD)
-    randoms = Catalog.load_fits(randoms_fn, mpicomm=mpi.COMM_WORLD)
+    mpicomm = mpi.COMM_WORLD
+    data = Catalog.load_fits(data_fn, mpicomm=mpicomm)
+    randoms = Catalog.load_fits(randoms_fn, mpicomm=mpicomm)
     for catalog in [data, randoms]:
         catalog['Position'] += boxcenter
         catalog['Weight'] = catalog.ones()
 
-    def run(mpiroot=None, mpicomm=mpi.COMM_WORLD):
+    def run(mpiroot=None, mpicomm=mpicomm, position_type='pos'):
         return CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
-                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos',
+                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type=position_type,
                                dtype=dtype, mpiroot=mpiroot, mpicomm=mpicomm).poles
 
     ref_power = run(mpiroot=None)
-    for catalog in [data, randoms]:
-        catalog['Position'] = mpi.gather_array(catalog['Position'], root=0, mpicomm=catalog.mpicomm)
-        catalog['Weight'] = mpi.gather_array(catalog['Weight'], root=0, mpicomm=catalog.mpicomm)
 
-    power_root = run(mpiroot=0)
-    for ell in ref_power.ells:
-        assert np.allclose(power_root(ell=ell), ref_power(ell=ell))
+    def test_root(position_type='pos'):
 
-    if data.mpicomm.rank == 0:
-        power_root = run(mpiroot=0, mpicomm=mpi.COMM_SELF)
+        power_root = run(mpiroot=0, position_type=position_type)
         for ell in ref_power.ells:
             assert np.allclose(power_root(ell=ell), ref_power(ell=ell))
+
+        if data.mpicomm.rank == 0:
+            power_root = run(mpiroot=None, mpicomm=mpi.COMM_SELF, position_type=position_type)
+            for ell in ref_power.ells:
+                assert np.allclose(power_root(ell=ell), ref_power(ell=ell))
+
+    for catalog in [data, randoms]:
+        for name in ['Position', 'Weight']:
+            zero = catalog[name][:0]
+            catalog[name] = mpi.gather_array(catalog[name], root=0, mpicomm=mpicomm)
+            if mpicomm.rank > 0: catalog[name] = zero
+    test_root()
+
+    for catalog in [data, randoms]:
+        for name in ['Position']:
+            catalog[name] = list(catalog[name].T)
+    test_root(position_type='xyz')
+
+    for catalog in [data, randoms]:
+        for name in ['Position', 'Weight']:
+            if mpicomm.rank > 0: catalog[name] = None
+    test_root(position_type='xyz')
 
 
 def test_interlacing():
