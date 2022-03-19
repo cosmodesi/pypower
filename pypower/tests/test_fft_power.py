@@ -152,20 +152,24 @@ def test_power_statistic():
 
         edges = np.linspace(0., 0.2, 11)
         modes = (edges[:-1] + edges[1:])/2.
-        nmodes = np.ones_like(modes, dtype='i8')
+        nmodes = np.arange(modes.size)
         ells = (0, 2, 4)
-        power = [np.ones_like(modes, dtype='c16')]*len(ells)
+        power = [ill * np.arange(nmodes.size, dtype='f8') + 0.1j*(np.arange(nmodes.size, dtype='f8') - 5) for ill in ells]
         power = PowerSpectrumStatistics(edges, modes, power, nmodes, ells, statistic='multipole')
         power_ref = power.copy()
         power.rebin(factor=2)
         assert power.power.shape[1] == power_ref.power.shape[1]//2 # poles are first dimension
-        assert np.allclose(power.k, (power_ref.modes[0][::2] + power_ref.modes[0][1::2])/2.)
+        k = (power_ref.modes[0][::2] * power_ref.nmodes[::2] + power_ref.modes[0][1::2] * power_ref.nmodes[1::2])/(power_ref.nmodes[::2] + power_ref.nmodes[1::2])
+        assert np.allclose(power.k, k)
         assert np.allclose(power.kedges, np.linspace(0., 0.2, 6))
         assert power.shape == (modes.size//2,)
         assert np.allclose(power_ref[::2].power_nonorm, power.power_nonorm)
         power2 = power_ref.copy()
         power2.select((0., 0.1))
         assert np.all(power2.modes[0] <= 0.1)
+        def mid(edges): return (edges[:-1] + edges[1:])/2.
+        for axis in range(power.ndim): assert np.allclose(power.modeavg(axis=axis, method='mid'), mid(power.edges[axis]))
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             #tmp_dir = '_tests'
             #power.mpicomm = mpicomm # to get a Barrier (otherwise the directory on root=0 may be deleted before other ranks access it)
@@ -182,9 +186,11 @@ def test_power_statistic():
         assert np.all(power.modes[0] == test.modes[0])
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            #tmp_dir = '_tests'
+            tmp_dir = '_tests'
             fn = os.path.join(tmp_dir, 'tmp_poles.txt')
             power.save_txt(fn, complex=True)
+            test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
+            assert np.allclose(test, [power.nmodes, power.modeavg(method='mid'), power.k] + list(power.power), equal_nan=True)
 
         for complex in [False, True]:
             assert np.allclose(power(complex=complex, return_k=True)[1], power.get_power(complex=complex), equal_nan=True)
@@ -197,11 +203,13 @@ def test_power_statistic():
             assert power(k=0.1, ell=0, complex=complex).shape == ()
             assert power(k=0.1, ell=(0, 2), complex=complex).shape == (2,)
             assert np.allclose(power(k=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], complex=complex)[...,::-1], atol=0)
+            assert np.allclose(power(k=[0.2, 0.1], ell=(0, 2), complex=complex), power(k=[0.1, 0.2], ell=(2, 0), complex=complex)[::-1,::-1], atol=0)
 
         edges = (np.linspace(0., 0.2, 11), np.linspace(-1., 1., 21))
         modes = np.meshgrid(*((e[:-1] + e[1:])/2 for e in edges), indexing='ij')
-        nmodes = np.ones(tuple(len(e)-1 for e in edges), dtype='i8')
-        power = np.ones_like(nmodes, dtype='c16')
+        nmodes = np.arange(modes[0].size, dtype='i8').reshape(modes[0].shape)
+        power = np.arange(nmodes.size, dtype='f8').reshape(nmodes.shape)
+        power = power + 0.1j * (power - 5)
         power = PowerSpectrumStatistics(edges, modes, power, nmodes, statistic='wedge')
         power_ref = power.copy()
         power.rebin(factor=(2, 2))
@@ -211,22 +219,28 @@ def test_power_statistic():
         assert np.isnan(power(-1., 0.))
         power.rebin(factor=(1, 10))
         assert power.power_nonorm.shape == (5, 1)
-        assert np.allclose(power_ref[::2,::2].power_nonorm, power.power_nonorm, atol=0)
+        assert np.allclose(power_ref[::2,::20].power_nonorm, power.power_nonorm, atol=0)
         assert power_ref[1:7:2].shape[0] == 3
         power2 = power_ref.copy()
         power2.select(None, (0., 0.5))
         assert np.all(power2.modes[1] <= 0.5)
+        for axis in range(power.ndim): assert np.allclose(power.modeavg(axis=axis, method='mid'), mid(power.edges[axis]))
+        power = power_ref
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             #tmp_dir = '_tests'
             fn = os.path.join(tmp_dir, 'tmp_wedges.txt')
             power.save_txt(fn, complex=True)
+            test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
+            mids = np.meshgrid(*(power.modeavg(axis=axis, method='mid') for axis in range(power.ndim)), indexing='ij')
+            assert np.allclose([tt.reshape(power.shape) for tt in test], [power.nmodes, mids[0], power.modes[0], mids[1], power.modes[1], power.power], equal_nan=True)
 
         for muedges in [np.linspace(-1., 1., 21), np.linspace(-1., 1., 2)]:
             edges = (np.linspace(0., 0.2, 11), muedges)
             modes = np.meshgrid(*((e[:-1] + e[1:])/2 for e in edges), indexing='ij')
             nmodes = np.ones(tuple(len(e)-1 for e in edges), dtype='i8')
-            power = np.arange(nmodes.size, dtype='c16').reshape(nmodes.shape)
+            power = np.arange(nmodes.size, dtype='f8').reshape(nmodes.shape)
+            power = power + 0.1j * (power - 5)
             power = PowerSpectrumStatistics(edges, modes, power, nmodes, statistic='wedge')
             for complex in [False, True]:
                 assert np.allclose(power(complex=complex, return_k=True, return_mu=True)[2], power.get_power(complex=complex), equal_nan=True)
@@ -836,14 +850,13 @@ def test_interlacing():
 
 if __name__ == '__main__':
 
-    setup_logging()
+    setup_logging('debug')
     #save_lognormal()
     #test_mesh_power()
     #test_interlacing()
     #test_fft()
     #test_memory()
     test_power_statistic()
-    exit()
     test_find_edges()
     test_ylm()
     test_catalog_mesh()

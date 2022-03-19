@@ -2,6 +2,7 @@
 Implementation of window function estimation, following https://github.com/cosmodesi/GC_derivations,
 and https://fr.overleaf.com/read/hpgbwqzmtcxn.
 """
+import time
 
 import numpy as np
 from scipy import special
@@ -338,6 +339,7 @@ class MeshFFTWindow(MeshFFTPower):
             Arguments for :class:`ParticleMesh` in case ``mesh1`` is not provided (as may be the case if ``periodic`` is ``True``),
             typically ``boxsize``, ``nmesh``, ``mpicomm``.
         """
+        t0 = time.time()
         if power_ref is not None:
 
             if edges is None: edges = _get_attr_in_inst(power_ref, 'edges', insts=(None, 'wedges', 'poles'))
@@ -386,9 +388,15 @@ class MeshFFTWindow(MeshFFTPower):
             if self.autocorr and isinstance(mesh1, CatalogMesh):
                 self.shotnoise = mesh1.unnormalized_shotnoise()/self.wnorm
         self.attrs.update(self._get_attrs())
+        t1 = time.time()
         if self.mpicomm.rank == 0:
-            self.log_info('Running window function estimation.')
+            self.log_info('Meshes prepared in elapsed time {:.2f} s.'.format(t1 - t0))
+            self.log_info('Running mesh calculation.')
         self.run()
+        t2 = time.time()
+        if self.mpicomm.rank == 0:
+            self.log_info('Mesh calculations performed in elapsed time {:.2f} s.'.format(t2 - t1))
+            self.log_info('Window function computed in elapsed time {:.2f} s.'.format(t2 - t0))
 
     def _set_periodic(self, periodic=False):
         self.periodic = periodic

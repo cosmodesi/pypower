@@ -569,13 +569,38 @@ class BasePowerSpectrumStatistics(BaseClass):
         """Return binning dimensionality."""
         return len(self.edges)
 
-    def modeavg(self, axis=0):
-        """Return average of modes for input axis; this is an 1D array of size :attr:`shape[axis]`."""
+    def modeavg(self, axis=0, method=None):
+        r"""
+        Return average of modes for input axis.
+
+        Parameters
+        ----------
+        axis : int, default=0
+            Axis.
+
+        method : str, default=None
+            If ``None``, return average separation from :attr:`modes`.
+            If 'mid', return bin mid-points.
+
+        Returns
+        -------
+        modeavg : array
+            1D array of size :attr:`shape[axis]`.
+        """
         axis = axis % self.ndim
-        axes_to_sum_over = tuple(ii for ii in range(self.ndim) if ii != axis)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            toret = np.sum(_nan_to_zero(self.modes[axis])*self.nmodes, axis=axes_to_sum_over)/np.sum(self.nmodes, axis=axes_to_sum_over)
+        if method is None:
+            axes_to_sum_over = tuple(ii for ii in range(self.ndim) if ii != axis)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                toret = np.sum(_nan_to_zero(self.modes[axis])*self.nmodes, axis=axes_to_sum_over)/np.sum(self.nmodes, axis=axes_to_sum_over)
+        elif isinstance(method, str):
+            allowed_methods = ['mid']
+            method = method.lower()
+            if method not in allowed_methods:
+                raise ValueError('method should be one of {}'.format(allowed_methods))
+            elif method == 'mid':
+                toret = (self.edges[axis][:-1] + self.edges[axis][1:])/2.
         return toret
+
 
     def __call__(self):
         """Method that interpolates power spectrum measurement at any point."""
@@ -750,7 +775,14 @@ class BasePowerSpectrumStatistics(BaseClass):
         if not self.with_mpi or self.mpicomm.rank == 0:
             self.log_info('Saving {}.'.format(filename))
             utils.mkdir(os.path.dirname(filename))
-            formatter = {'int_kind': lambda x: '%d' % x, 'float_kind': lambda x: fmt % x, 'complex_kind': lambda x: '{}+{}j'.format(fmt % x.real, fmt % x.imag)}
+            formatter = {'int_kind': lambda x: '%d' % x, 'float_kind': lambda x: fmt % x}
+
+            def complex_kind(x):
+                imag = fmt % x.imag
+                if imag[0].isdigit(): imag = '+' + imag
+                return '{}{}j'.format(fmt % x.real, imag)
+
+            formatter['complex_kind'] = complex_kind
             if header is None: header = []
             elif isinstance(header, str): header = [header]
             else: header = list(header)
@@ -776,7 +808,7 @@ class BasePowerSpectrumStatistics(BaseClass):
             labels += self._power_names
             power = self.get_power(**kwargs)
             columns = [self.nmodes.flat]
-            mids = np.meshgrid(*[(edges[:-1] + edges[1:])/2. for edges in self.edges], indexing='ij')
+            mids = np.meshgrid(*(self.modeavg(idim, method='mid') for idim in range(self.ndim)), indexing='ij')
             for idim in range(self.ndim):
                 columns += [mids[idim].flat, self.modes[idim].flat]
             for column in power.reshape((-1,)*(power.ndim == self.ndim) + power.shape):
@@ -1300,6 +1332,7 @@ class MeshFFTPower(BaseClass):
             and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise`
             of ``mesh1`` by power spectrum normalization.
         """
+        t0 = time.time()
         self._set_compensations(compensations)
         self._set_los(los)
         self._set_ells(ells)
@@ -1315,9 +1348,15 @@ class MeshFFTPower(BaseClass):
             if self.autocorr and isinstance(mesh1, CatalogMesh):
                 self.shotnoise = mesh1.unnormalized_shotnoise()/self.wnorm
         self.attrs.update(self._get_attrs())
+        t1 = time.time()
         if self.mpicomm.rank == 0:
-            self.log_info('Running power spectrum estimation.')
+            self.log_info('Meshes prepared in elapsed time {:.2f} s.'.format(t1 - t0))
+            self.log_info('Running mesh calculation.')
         self.run()
+        t2 = time.time()
+        if self.mpicomm.rank == 0:
+            self.log_info('Mesh calculations performed in elapsed time {:.2f} s.'.format(t2 - t1))
+            self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(t2 - t0))
 
     def _set_compensations(self, compensations):
         # Set :attr:`compensations`
@@ -1548,7 +1587,6 @@ class MeshFFTPower(BaseClass):
     def _run_global_los(self):
 
         rank = self.mpicomm.rank
-        start = time.time()
         # Calculate the 3d power spectrum, slab-by-slab to save memory
         # FFT 1st density field and apply the resampler transfer kernel
         cfield2 = cfield1 = self._to_complex(self.mesh1, copy=True) # copy because will be modified in-place
@@ -1571,10 +1609,6 @@ class MeshFFTPower(BaseClass):
         #from nbodykit.algorithms.fftpower import project_to_basis
         #result, result_poles = project_to_basis(cfield1, self.edges, poles=self.ells or [], los=self.los)
         result, result_poles = project_to_basis(cfield1, self.edges, ells=self.ells, los=self.los, exclude_zero=False)
-
-        stop = time.time()
-        if rank == 0:
-            self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
 
         kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs, 'mpicomm':self.mpicomm}
         k, mu, power, nmodes, power_zero = result
@@ -1616,7 +1650,6 @@ class MeshFFTPower(BaseClass):
 
         result = []
         # Loop over the higher order multipoles (ell > 0)
-        start = time.time()
 
         if self.autocorr:
             if nonzeroells:
@@ -1689,7 +1722,7 @@ class MeshFFTPower(BaseClass):
 
             Aell[:] = 0.
             # Iterate from m=-ell to m=ell and apply Ylm
-            substart = time.time()
+            t0 = time.time()
             for Ylm in Ylms[ill]:
                 # Reset the real-space mesh to the original density #1
                 rfield[:] = rfield1[:]
@@ -1709,9 +1742,9 @@ class MeshFFTPower(BaseClass):
                 Aell[:] += cfield[:]
 
                 # And this contribution to the total sum
-                substop = time.time()
+                t1 = time.time()
                 if rank == 0:
-                    self.log_debug('Done term for Y(l={:d}, m={:d}) in {:.2f} s.'.format(Ylm.l, Ylm.m, substop - substart))
+                    self.log_debug('Done term for Y(l={:d}, m={:d}) in {:.2f} s.'.format(Ylm.l, Ylm.m, t1 - t0))
 
             if rank == 0:
                 self.log_info('ell = {:d} done; {:d} r2c completed'.format(ell, len(Ylms[ill])))
@@ -1726,9 +1759,6 @@ class MeshFFTPower(BaseClass):
             result.append(tuple(4 * np.pi * np.squeeze(proj_result[ii]) for ii in [2, -1]))
             k, nmodes = proj_result[0], proj_result[3]
 
-        stop = time.time()
-        if rank == 0:
-            self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(stop - start))
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
         power, power_zero = (self.nmesh.prod()**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
         if swap: power, power_zero = (tmp.conj() for tmp in (power, power_zero))
