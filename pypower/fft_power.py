@@ -779,7 +779,7 @@ class BasePowerSpectrumStatistics(BaseClass):
 
             def complex_kind(x):
                 imag = fmt % x.imag
-                if imag[0].isdigit(): imag = '+' + imag
+                if imag[0] not in ['+', '-']: imag = '+' + imag
                 return '{}{}j'.format(fmt % x.real, imag)
 
             formatter['complex_kind'] = complex_kind

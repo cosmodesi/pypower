@@ -188,6 +188,9 @@ def test_power_statistic():
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_dir = '_tests'
             fn = os.path.join(tmp_dir, 'tmp_poles.txt')
+            power.save_txt(fn, complex=False)
+            test = np.loadtxt(fn, unpack=True)
+            assert np.allclose(test, [power.nmodes, power.modeavg(method='mid'), power.k] + list(power.power.real), equal_nan=True)
             power.save_txt(fn, complex=True)
             test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
             assert np.allclose(test, [power.nmodes, power.modeavg(method='mid'), power.k] + list(power.power), equal_nan=True)
@@ -230,9 +233,12 @@ def test_power_statistic():
         with tempfile.TemporaryDirectory() as tmp_dir:
             #tmp_dir = '_tests'
             fn = os.path.join(tmp_dir, 'tmp_wedges.txt')
+            power.save_txt(fn, complex=False)
+            test = np.loadtxt(fn, unpack=True)
+            mids = np.meshgrid(*(power.modeavg(axis=axis, method='mid') for axis in range(power.ndim)), indexing='ij')
+            assert np.allclose([tt.reshape(power.shape) for tt in test], [power.nmodes, mids[0], power.modes[0], mids[1], power.modes[1], power.power.real], equal_nan=True)
             power.save_txt(fn, complex=True)
             test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
-            mids = np.meshgrid(*(power.modeavg(axis=axis, method='mid') for axis in range(power.ndim)), indexing='ij')
             assert np.allclose([tt.reshape(power.shape) for tt in test], [power.nmodes, mids[0], power.modes[0], mids[1], power.modes[1], power.power], equal_nan=True)
 
         for muedges in [np.linspace(-1., 1., 21), np.linspace(-1., 1., 2)]:
