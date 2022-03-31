@@ -19,6 +19,10 @@ def _make_array(value, shape, dtype='f8'):
     return toret
 
 
+def _normalize(array):
+    return array/utils.distance(array.T)[:,None]
+
+
 def get_default_nrealizations(weights):
     """Return default number of realizations given input bitwise weights = the number of bits in input weights plus one."""
     return 1 + 8 * sum(weight.dtype.itemsize for weight in weights)
@@ -167,7 +171,7 @@ def _format_weights(weights, weight_type='auto', size=None, dtype=None, copy=Tru
     return weights, n_bitwise_weights
 
 
-def get_direct_power_engine(engine='kdtree'):
+def get_direct_power_engine(engine='corrfunc'):
     """
     Return :class:`BaseDirectPowerEngine`-subclass corresponding
     to input engine name.
@@ -184,19 +188,31 @@ def get_direct_power_engine(engine='kdtree'):
     """
     if isinstance(engine, str):
 
-        if engine.lower() == 'kdtree':
-            return KDTreeDirectPowerEngine
-
-        raise ValuerError('Unknown engine {}.'.format(engine))
+        try:
+            engine = BaseDirectPowerEngine._registry[engine.lower()]
+        except KeyError:
+            raise ValueError('Unknown engine {}'.format(engine))
 
     return engine
+
+
+class RegisteredDirectPowerEngine(type(BaseClass)):
+
+    """Metaclass registering :class:`BaseDirectPowerEngine`-derived classes."""
+
+    _registry = {}
+
+    def __new__(meta, name, bases, class_dict):
+        cls = super().__new__(meta, name, bases, class_dict)
+        meta._registry[cls.name] = cls
+        return cls
 
 
 class MetaDirectPower(type(BaseClass)):
 
     """Metaclass to return correct direct power engine."""
 
-    def __call__(cls, *args, engine='kdtree', **kwargs):
+    def __call__(cls, *args, engine='corrfunc', **kwargs):
         return get_direct_power_engine(engine)(*args, **kwargs)
 
 
@@ -226,12 +242,14 @@ class DirectPower(metaclass=MetaDirectPower):
         return get_direct_power_engine(state.pop('name')).from_state(state)
 
 
-class BaseDirectPowerEngine(BaseClass):
+class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
 
     """Direct power spectrum measurement, summing over particle pairs."""
 
+    name = 'base'
+
     def __init__(self, modes, positions1, positions2=None, weights1=None, weights2=None, ells=(0, 2, 4), limits=(0., 2./60.), limit_type='degree',
-                 position_type='xyz', weight_type='auto', weight_attrs=None, twopoint_weights=None, los='endpoint', boxsize=None,
+                 position_type='xyz', weight_type='auto', weight_attrs=None, twopoint_weights=None, los='firstpoint', boxsize=None,
                  dtype='f8', mpiroot=None, mpicomm=mpi.COMM_WORLD, **kwargs):
         r"""
         Initialize :class:`BaseDirectPowerEngine`.
@@ -313,9 +331,6 @@ class BaseDirectPowerEngine(BaseClass):
             Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
             Else, a 3-vector.
 
-        boxsize : array, float, default=None
-            For periodic wrapping, the side-length(s) of the periodic cube.
-
         dtype : string, dtype, default='f8'
             The data type to use for input positions and weights.
 
@@ -329,45 +344,53 @@ class BaseDirectPowerEngine(BaseClass):
         self.mpicomm = mpicomm
         self.dtype = np.dtype(dtype)
         self._set_modes(modes)
-        self._set_ells(ells)
         self._set_los(los)
+        self._set_ells(ells)
         self._set_limits(limits, limit_type=limit_type)
-        self._set_boxsize(boxsize=boxsize)
         self._set_positions(positions1, positions2=positions2, position_type=position_type, mpiroot=mpiroot)
         self._set_weights(weights1, weights2=weights2, weight_type=weight_type, twopoint_weights=twopoint_weights, weight_attrs=weight_attrs, mpiroot=mpiroot)
+        self.is_reversible = self.autocorr or (self.los_type not in ['firstpoint', 'endpoint'])
         self.attrs = kwargs
+        t0 = time.time()
         self.run()
-
-    def _set_modes(self, modes):
-        self.modes = np.asarray(modes)
+        t1 = time.time()
+        if self.mpicomm.rank == 0:
+            self.log_info('Direct power computed in elapsed time {:.2f} s.'.format(t1 - t0))
+        del self.positions1, self.positions2, self.weights1, self.weights2
 
     def _set_ells(self, ells):
-        self.ells = tuple(ells)
+        # Set :attr:`ells`
+        if ells is None:
+            if self.los_type != 'global':
+                raise ValueError('Specify non-empty list of ells')
+            self.ells = None
+        else:
+            if np.ndim(ells) == 0:
+                ells = (ells,)
+            self.ells = tuple(ells)
+            if self.los is None and not self.ells:
+                raise ValueError('Specify non-empty list of ells')
+            if any(ell < 0 for ell in self.ells):
+                raise ValueError('Multipole numbers must be non-negative integers')
 
     def _set_los(self, los):
         # Set :attr:`los`
-        self.los_type = 'global'
+        self.los_type = 'midpoint'
         if los is None:
-            self.los_type = 'endpoint'
+            self.los_type = 'firstpoint'
             self.los = None
         elif isinstance(los, str):
             los = los.lower()
-            allowed_los = ['midpoint', 'firstpoint', 'endpoint', 'x', 'y', 'z']
+            allowed_los = ['firstpoint', 'endpoint', 'midpoint']
             if los not in allowed_los:
                 raise ValueError('los should be one of {}'.format(allowed_los))
-            if los in ['midpoint', 'firstpoint', 'endpoint']:
-                self.los_type = los
-                self.los = None
-            else:
-                self.los_type = 'global'
-                los = 'xyz'.index(los)
-        if self.los_type == 'global':
-            if np.ndim(los) == 0:
-                ilos = los
-                los = np.zeros(3, dtype='f8')
-                los[ilos] = 1.
-            los = np.array(los, dtype='f8')
-            self.los = los/utils.distance(los)
+            self.los_type = los
+            self.los = None
+        else:
+            raise ValueError('Wrong input los')
+
+    def _set_modes(self, modes):
+        self.modes = np.asarray(modes)
 
     def _set_limits(self, limits, limit_type='degree'):
         limit_type = limit_type.lower()
@@ -383,16 +406,6 @@ class BaseDirectPowerEngine(BaseClass):
             limits = 2 * np.sin(0.5 * np.deg2rad(limits))
         self.limits = tuple(limits)
 
-    @property
-    def periodic(self):
-        """Whether periodic wrapping is used (i.e. :attr:`boxsize` is not ``None``)."""
-        return self.boxsize is not None
-
-    def _set_boxsize(self, boxsize):
-        self.boxsize = boxsize
-        if self.periodic:
-            self.boxsize = _make_array(boxsize, 3, dtype='f8')
-
     def _set_positions(self, positions1, positions2=None, position_type='xyz', mpiroot=None):
         if position_type is not None: position_type = position_type.lower()
         self.position_type = position_type
@@ -400,6 +413,9 @@ class BaseDirectPowerEngine(BaseClass):
         self.positions1 = _format_positions(positions1, position_type=self.position_type, dtype=self.dtype, copy=False, mpicomm=self.mpicomm, mpiroot=mpiroot)
         self.positions2 = _format_positions(positions2, position_type=self.position_type, dtype=self.dtype, copy=False, mpicomm=self.mpicomm, mpiroot=mpiroot)
         self.autocorr = self.positions2 is None
+        self.size1 = self.size2 = self.mpicomm.allreduce(len(self.positions1))
+        if not self.autocorr:
+            self.size2 = self.mpicomm.allreduce(len(self.positions2))
 
     def _set_weights(self, weights1, weights2=None, weight_type='auto', twopoint_weights=None, weight_attrs=None, mpiroot=None):
 
@@ -464,9 +480,10 @@ class BaseDirectPowerEngine(BaseClass):
         elif len(self.weights1) == len(self.weights2) - 1:
             self.weights1.append(np.ones(len(self.positions2), dtype=self.dtype))
         elif len(self.weights1) != len(self.weights2):
-            raise ValueError('Something fishy happened with weights; number of weights1/weights2 is {:d}/{:d}'.format(len(self.weights1),len(self.weights2)))
+            raise ValueError('Something fishy happened with weights; number of weights1/weights2 is {:d}/{:d}'.format(len(self.weights1), len(self.weights2)))
 
         self.twopoint_weights = twopoint_weights
+        self.cos_twopoint_weights = None
         if twopoint_weights is not None:
             from collections import namedtuple
             TwoPointWeight = namedtuple('TwoPointWeight', ['sep', 'weight'])
@@ -480,8 +497,9 @@ class BaseDirectPowerEngine(BaseClass):
                 except IndexError:
                     sep, weight = twopoint_weights
             # just to make sure we use the correct dtype
-            self.twopoint_weights = TwoPointWeight(sep=np.cos(np.radians(sep[::-1]), dtype=self.dtype),
-                                                   weight=np.array(weight[::-1], dtype=self.dtype))
+            sep = np.cos(np.radians(np.array(sep, dtype=self.dtype)))
+            argsort = np.argsort(sep)
+            self.cos_twopoint_weights = TwoPointWeight(sep=np.array(sep[argsort], dtype=self.dtype), weight=np.array(weight[argsort], dtype=self.dtype))
 
     def _get_inverse_probability_weight(self, *weights):
         return get_inverse_probability_weight(*weights, noffset=self.weight_attrs['noffset'], nrealizations=self.weight_attrs['nrealizations'],
@@ -498,28 +516,73 @@ class BaseDirectPowerEngine(BaseClass):
                 weights2 = [self.positions2] + weights2
         if self.with_mpi:
             (positions1, weights1), (positions2, weights2) = mpi.domain_decompose(self.mpicomm, self.limits[1], positions1, weights1=weights1,
-                                                                                  positions2=positions2, weights2=weights2, boxsize=self.boxsize)
-        elif self.autocorr:
-            positions2, weights2 = positions1, weights1
+                                                                                  positions2=positions2, weights2=weights2)
+        limit_positions1, positions1, weights1 = positions1, positions1, weights1
+        limit_positions2, positions2, weights2 = positions2, positions2, weights2
         if self.limit_type == 'theta': # we remove original positions from the list of weights
-            (limit_positions1, positions1, weights1) = (positions1, weights1[0], weights1[1:])
-            (limit_positions2, positions2, weights2) = (positions2, weights2[0], weights2[1:])
-        else:
-            (limit_positions1, positions1, weights1) = (positions1, positions1, weights1)
-            (limit_positions2, positions2, weights2) = (positions2, positions2, weights2)
+            limit_positions1, positions1, weights1 = positions1, weights1[0], weights1[1:]
+            if positions2 is not None:
+                limit_positions2, positions2, weights2 = positions2, weights2[0], weights2[1:]
         return (limit_positions1, positions1, weights1), (limit_positions2, positions2, weights2)
+
+    def _twopoint_weights(self, weights1, weights2=None, positions1=None, positions2=None):
+        weights = np.array(1., dtype=self.dtype)
+        if self.twopoint_weights is not None:
+            if positions1 is not None and positions2 is not None:
+                costheta = np.sum(_normalize(positions1) * _normalize(positions2), axis=-1)
+            else:
+                costheta = 1.
+            weights = weights * np.interp(costheta, self.cos_twopoint_weights.sep, self.cos_twopoint_weights.weight, left=1., right=1.)
+        if self.n_bitwise_weights:
+            weights = weights * self._get_inverse_probability_weight(weights1[:self.n_bitwise_weights], weights2[:self.n_bitwise_weights])
+        if self.weight_type == 'inverse_bitwise_minus_individual':
+            if self.n_bitwise_weights:
+                weights = weights - self._get_inverse_probability_weight(weights1[:self.n_bitwise_weights]) * self._get_inverse_probability_weight(weights2[:self.n_bitwise_weights])
+            else:
+                if self.twopoint_weights is None:
+                    raise ValueError('{} without bitwise weights and twopoint_weights will yield zero total weights!'.format(self.weight_type))
+                weights = weights - 1. # twopoint_weights are provided, so we compute twopoint_weights - 1
+        if len(weights1) > self.n_bitwise_weights:
+            weights = weights * weights1[-1] * weights2[-1] # single individual weight, at the end
+        return weights
+
+    def _sum_auto_weights(self):
+        """Return auto-counts, that are pairs of same objects."""
+        if not self.autocorr:
+            return 0.
+        weights = self._twopoint_weights(self.weights1, self.weights1)
+        if weights.ndim == 0:
+            return self.size1*weights
+        weights = np.sum(weights)
+        if self.with_mpi:
+            weights = self.mpicomm.allreduce(weights)
+        return weights
 
     def run(self):
         """Method that computes the power spectrum and set :attr:`power_nonorm`, to be implemented in your new engine."""
         raise NotImplementedError('Implement method "run" in your {}'.format(self.__class__.__name__))
 
+    def deepcopy(self):
+        import copy
+        return copy.deepcopy(self)
+
     def __getstate__(self):
         state = {}
-        for name in ['name', 'autocorr', 'modes', 'power_nonorm', 'limits', 'limit_type',
-                     'boxsize', 'los', 'weight_attrs', 'attrs']:
+        for name in ['name', 'autocorr', 'is_reversible', 'modes', 'ells', 'power_nonorm', 'size1', 'size2', 'limits', 'limit_type',
+                     'los', 'los_type', 'weight_attrs', 'attrs']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
+
+    def reversed(self):
+        if not self.is_reversible:
+            raise ValueError('This measurement is not reversible')
+        new = self.deepcopy()
+        new.size1, new.size2 = new.size2, new.size1
+        for ill, ell in enumerate(self.ells):
+            new.power_nonorm[ill] *= (-1)**(ell % 2)
+        return new
+
 
 class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
 
@@ -529,45 +592,38 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
     _slab_npairs_max = 1000 * 1000
 
     def run(self):
-        # FIXME: We may run out-of-memory when too many pairs...
         from scipy import spatial
         rank = self.mpicomm.rank
-        start = time.time()
         ells = sorted(set(self.ells))
 
         kwargs = {'leafsize': 16, 'compact_nodes': True, 'copy_data': False, 'balanced_tree': True}
         for name in kwargs:
             if name in self.attrs: kwargs[name] = self.attrs[name]
 
-        result = [np.zeros_like(self.modes) for ell in ells]
+        result = np.zeros((len(ells), len(self.modes)), dtype='f8')
         legendre = [special.legendre(ell) for ell in ells]
 
-        def normalize(los):
-            return los/utils.distance(los.T)[:,None]
-
-        def power_slab(distance, mu, weight):
-            for ill, ell in enumerate(ells):
-                tmp = weight * special.spherical_jn(ell, self.modes[:,None]*distance, derivative=False) * legendre[ill](mu)
-                result[ill] += np.sum(tmp, axis=-1)
-
         # We proceed by slab to avoid blowing up the memory
-        def tree_slab(d1, d2):
+        def tree_slab(d1, d2, **kwargs):
+            if d2[0] is None: d2 = d1
             swap = len(d2[0]) < len(d1[0])
             if swap:
                 d1, d2 = d2, d1
             # First estimate number of pairs from a subsample
             size1, size2 = len(d1[0]), len(d2[0])
-            size_max, seed = 1000, 42
-            size1_downsample, size2_downsample = min(size1, size_max), min(size2, size_max)
-            rng = np.random.RandomState(seed=seed)
-            dpositions = np.concatenate([d[0][rng.choice(size, size_downsample, replace=False)] for d, size, size_downsample\
-                                        in zip([d1, d2], [size1, size2], [size1_downsample, size2_downsample])])
-            tree = spatial.cKDTree(dpositions, **kwargs, boxsize=None)
-            npairs_downsample = len(tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray'))
-            npairs_downsample *= 1 + 3 / npairs_downsample**0.5 # 3 sigma margin
-            npairs_downsample *= size1 / size1_downsample # scale to size of d1
-            npairs_max = self._slab_npairs_max
-            nslabs = int(size2 / size2_downsample * npairs_downsample / npairs_max + 1.)
+            min_npairs, seed = 100, 42
+            npairs, size_max = 0, -1
+            while (npairs < min_npairs) and ((size_max < size1) or (size_max < size2)):
+                size_max += 10000
+                size1_downsample, size2_downsample = min(size1, size_max), min(size2, size_max)
+                rng = np.random.RandomState(seed=seed)
+                dpositions = np.concatenate([d[0][rng.choice(size, size_downsample, replace=False)] for d, size, size_downsample\
+                                            in zip([d1, d2], [size1, size2], [size1_downsample, size2_downsample])])
+                tree = spatial.cKDTree(dpositions, **kwargs, boxsize=None)
+                npairs = len(tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray'))
+            npairs_downsample = 1 + 3 / max(npairs, 1)**0.5 # 3 sigma margin
+            npairs_downsample *= size1 / max(size1_downsample, 1) * size2 / max(size2_downsample, 1) # scale to size of d1 & d2
+            nslabs = int(npairs_downsample / self._slab_npairs_max + 1.)
             if nslabs == 1: # do not touch autocorrelation
                 yield (d2, d1) if swap else (d1, d2)
             else:
@@ -576,17 +632,21 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                     tmp2 = tuple(d[sl] for d in d2[:-1]) + ([d[sl] for d in d2[-1]],)
                     yield (tmp2, d1) if swap else (d1, tmp2)
 
+        def power_slab(result, distance, mu, weight, ells):
+            for ill, ell in enumerate(ells):
+                tmp = weight * special.spherical_jn(ell, self.modes[:, None]*distance, derivative=False) * legendre[ill](mu)
+                result[ill] += np.sum(tmp, axis=-1)
+
         delta_tree, delta_sum = 0., 0.
 
-        for (dlimit_positions1, dpositions1, dweights1), (dlimit_positions2, dpositions2, dweights2) in tree_slab(*self._mpi_decompose()):
+        for (dlimit_positions1, dpositions1, dweights1), (dlimit_positions2, dpositions2, dweights2) in tree_slab(*self._mpi_decompose(), **kwargs):
 
             autocorr = dpositions2 is dpositions1
-            dlimit_positions = dlimit_positions1
+            #dlimit_positions = dlimit_positions1
             # Very unfortunately, cKDTree.query_pairs does not handle cross-correlations...
             # But I feel this could be changed super easily here:
             # https://github.com/scipy/scipy/blob/47bb6febaa10658c72962b9615d5d5aa2513fa3a/scipy/spatial/ckdtree/src/query_pairs.cxx#L210
-            if not autocorr:
-                dlimit_positions = np.concatenate([dlimit_positions1, dlimit_positions2], axis=0)
+            dlimit_positions = np.concatenate([dlimit_positions1, dlimit_positions2], axis=0)
 
             start_i = time.time()
             tree = spatial.cKDTree(dlimit_positions, **kwargs, boxsize=None)
@@ -594,11 +654,11 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             delta_tree += time.time() - start_i
             start_i = time.time()
             distance = utils.distance((dlimit_positions[pairs[:,0]] - dlimit_positions[pairs[:,1]]).T)
-            pairs = pairs[(distance > 0.) & (distance >= self.limits[0]) & (distance < self.limits[1])]
+            pairs = pairs[(distance >= self.limits[0]) & (distance < self.limits[1])]
 
-            if not autocorr: # Let us remove restrict to the pairs 1 <-> 2 (removing 1 <-> 1 and 2 <-> 2)
-                pairs = pairs[(pairs[:,0] < dlimit_positions1.shape[0]) & (pairs[:,1] >= dlimit_positions1.shape[0])]
-                pairs[:,1] -= dlimit_positions1.shape[0]
+            #if not autocorr: # Let us remove restrict to the pairs 1 <-> 2 (removing 1 <-> 1 and 2 <-> 2)
+            pairs = pairs[(pairs[:,0] < dlimit_positions1.shape[0]) & (pairs[:,1] >= dlimit_positions1.shape[0])]
+            pairs[:,1] -= dlimit_positions1.shape[0]
             del tree
             del dlimit_positions
 
@@ -607,55 +667,43 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             del pairs
             del distance
 
-            weight = 1.
-            if self.twopoint_weights is not None:
-                costheta = np.sum(normalize(dpositions1) * normalize(dpositions2), axis=-1)
-                weight *= np.interp(costheta, self.twopoint_weights.sep, self.twopoint_weights.weight, left=1., right=1.)
-            if self.n_bitwise_weights:
-                weight *= self._get_inverse_probability_weight(dweights1[:self.n_bitwise_weights], dweights2[:self.n_bitwise_weights])
-            if self.weight_type == 'inverse_bitwise_minus_individual':
-                if self.n_bitwise_weights:
-                    weight -= self._get_inverse_probability_weight(dweights1[:self.n_bitwise_weights]) * self._get_inverse_probability_weight(dweights2[:self.n_bitwise_weights])
-                else:
-                    if self.twopoint_weights is None:
-                        raise ValueError('{} without bitwise weights and twopoint_weights will yield zero total weights!'.format(self.weight_type))
-                    weight -= 1. # twopoint_weights are provided, so we compute twopoint_weights - 1
-
-            if len(dweights1) > self.n_bitwise_weights:
-                weight *= dweights1[-1] * dweights2[-1] # single individual weight, at the end
+            weights = self._twopoint_weights(weights1=dweights1, weights2=dweights2, positions1=dpositions1, positions2=dpositions2)
 
             diff = dpositions2 - dpositions1
-            distance = utils.distance(diff.T)
+            distances = utils.distance(diff.T)
+            mask_zero = distances == 0
+            distances[mask_zero] = 1.
             if self.los_type == 'global':
                 los = self.los
-                mu = np.sum(diff * los, axis=-1)/distance
+                mu = np.sum(diff * los, axis=-1)/distances
             else:
                 if self.los_type == 'firstpoint':
-                    mu1 = np.sum(diff * normalize(dpositions1), axis=-1)/distance
-                    if autocorr:
-                        mu2 = - np.sum(diff * normalize(dpositions2), axis=-1)/distance # i>j and i<j
+                    mu = np.sum(diff * _normalize(dpositions1), axis=-1)/distances
+                    #if autocorr:
+                    #    mu2 = - np.sum(diff * _normalize(dpositions2), axis=-1)/distances # i>j and i<j
                 elif self.los_type == 'endpoint':
-                    mu1 = np.sum(diff * normalize(dpositions2), axis=-1)/distance
-                    if autocorr:
-                        mu2 = - np.sum(diff * normalize(dpositions1), axis=-1)/distance # i>j and i<j
+                    mu = np.sum(diff * _normalize(dpositions2), axis=-1)/distances
+                    #if autocorr:
+                    #    mu2 = - np.sum(diff * _normalize(dpositions1), axis=-1)/distances # i>j and i<j
                 elif self.los_type == 'midpoint':
-                    mu = np.sum(diff * normalize(dpositions1 + dpositions2), axis=-1)/distance
+                    mu = np.sum(diff * _normalize(dpositions1 + dpositions2), axis=-1)/distances
             del diff
+            distances[mask_zero] = 0.
 
             # To avoid memory issues when performing distance*modes product, work by slabs
             nslabs_pairs = len(ells) * len(self.modes)
-            npairs = distance.size
+            npairs = distances.size
 
             for islab in range(nslabs_pairs):
                 sl = slice(islab*npairs//nslabs_pairs, (islab+1)*npairs//nslabs_pairs, 1)
-                d = distance[sl]
-                w = 1. if np.ndim(weight) == 0 else weight[sl]
+                d = distances[sl]
+                w = 1. if weights.ndim == 0 else weights[sl]
                 if self.los_type in ['global', 'midpoint']:
-                    power_slab(d, mu[sl], (1. + autocorr)*w) # 2 factor as i < j
+                    power_slab(result, d, mu[sl], w, ells)
                 else: # firstpoint, endpoint
-                    power_slab(d, mu1[sl], w)
-                    if autocorr:
-                        power_slab(d, mu2[sl], w)
+                    power_slab(result, d, mu[sl], w, ells)
+                    #if autocorr:
+                    #    power_slab(result, d, mu2[sl], w, ells)
 
             delta_sum += time.time() - start_i
 
@@ -663,12 +711,127 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             self.log_info('Building tree took {:.2f} s.'.format(delta_tree))
             self.log_info('Sum over pairs took {:.2f} s.'.format(delta_sum))
 
+        self.power_nonorm = self.mpicomm.allreduce(result)
+        if self.autocorr and self.limits[0] <= 0.: # remove auto-pairs
+            power_slab(self.power_nonorm, 0., 0., -self._sum_auto_weights(), ells)
+
+        self.power_nonorm = self.power_nonorm.astype('c16')
         for ill, ell in enumerate(ells):
             # Note: in arXiv:1912.08803, eq. 26, should rather be sij = rj - ri
-            result[ill] = (-1j)**ell * (2 * ell + 1) * result[ill]
+            self.power_nonorm[ill] = (-1j)**ell * (2 * ell + 1) * self.power_nonorm[ill]
 
-        self.power_nonorm = self.mpicomm.allreduce(np.asarray([result[ells.index(ell)] for ell in self.ells]))
+        self.power_nonorm = self.power_nonorm[[ells.index(ell) for ell in self.ells]]
 
-        stop = time.time()
-        if rank == 0:
-            self.log_info('Direct power computed in elapsed time {:.2f} s.'.format(stop - start))
+
+class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
+
+    """Direct power spectrum measurement, using Corrfunc."""
+
+    name = 'corrfunc'
+
+    @property
+    def nthreads(self):
+        return self.attrs.get('nthreads', 1)
+
+    def run(self):
+        from Corrfunc import mocks
+        ells = sorted(set(self.ells))
+
+        autocorr = self.autocorr and not self.with_mpi
+        (dlimit_positions1, dpositions1, dweights1), (dlimit_positions2, dpositions2, dweights2) = self._mpi_decompose()
+
+        if self.los_type not in ['firstpoint', 'endpoint', 'midpoint']:
+            raise TwoPointCounterError('Corrfunc only supports midpoint / firstpoint / endpoint line-of-sight')
+        los_type = self.los_type
+        if self.los_type == 'endpoint':
+            los_type = 'firstpoint'
+            if not self.autocorr:
+                dlimit_positions1, dlimit_positions2 = dlimit_positions2, dlimit_positions1
+                dpositions1, dpositions2 = dpositions2, dpositions1
+                dweights1, dweights2 = dweights2, dweights1
+
+        weight_type = None
+        weight_attrs = None
+
+        weights1, weights2 = dweights1.copy(), dweights2.copy() # copy lists
+        if self.n_bitwise_weights:
+            weight_type = 'inverse_bitwise'
+            dtype = {4:np.int32, 8:np.int64}[self.dtype.itemsize]
+
+            def reformat_bitweights(weights):
+                return utils.reformat_bitarrays(*weights[:self.n_bitwise_weights], dtype=dtype) + weights[self.n_bitwise_weights:]
+
+            weights1 = reformat_bitweights(dweights1)
+            if not autocorr:
+                weights2 = reformat_bitweights(dweights2)
+            weight_attrs = (self.weight_attrs['noffset'], self.weight_attrs['default_value']/self.weight_attrs['nrealizations'])
+
+        elif dweights1:
+            weight_type = 'pair_product'
+
+        pair_weights, sep_pair_weights = None, None
+        if self.cos_twopoint_weights is not None:
+            weight_type = 'inverse_bitwise'
+            pair_weights = self.cos_twopoint_weights.weight
+            sep_pair_weights = self.cos_twopoint_weights.sep
+
+        prefactor = self.weight_attrs['nrealizations'] if self.n_bitwise_weights else 1
+
+        if self.weight_type == 'inverse_bitwise_minus_individual': # let's add weight to be subtracted
+            weight_type = 'inverse_bitwise'
+            if not dweights1[self.n_bitwise_weights:]:
+                weights1.append(np.ones(len(dlimit_positions1), dtype=self.dtype))
+                if not autocorr:
+                    weights2.append(np.ones(len(dlimit_positions2), dtype=self.dtype))
+            if self.n_bitwise_weights:
+                weights1.append(1./prefactor**0.5 * self._get_inverse_probability_weight(dweights1[:self.n_bitwise_weights]) * np.prod(dweights1[self.n_bitwise_weights:], axis=0))
+                if not autocorr:
+                    weights2.append(1./prefactor**0.5 * self._get_inverse_probability_weight(dweights2[:self.n_bitwise_weights]) * np.prod(dweights2[self.n_bitwise_weights:], axis=0))
+            else:
+                if self.twopoint_weights is None:
+                    raise ValueError('{} without bitwise weights and twopoint_weights will yield zero total weights!'.format(self.weight_type))
+                weights1.append(np.ones(len(dlimit_positions1), dtype=self.dtype) * np.prod(dweights1, axis=0))
+                if not autocorr:
+                    weights2.append(np.ones(len(dlimit_positions2), dtype=self.dtype) * np.prod(dweights2, axis=0))
+
+        weights1, weights2 = weights1 if weights1 else None, weights2 if weights2 else None
+
+        kwargs = {'weights1': weights1, 'weights2': weights2,
+                  'weight_type': weight_type,
+                  'pair_weights': pair_weights, 'sep_pair_weights': sep_pair_weights,
+                  'attrs_pair_weights': weight_attrs, 'verbose': False,
+                  'isa': self.attrs.get('isa', 'fastest')}
+
+        limit_positions1, positions1 = dlimit_positions1.T, dpositions1.T
+        if autocorr:
+            limit_positions2, positions2 = [None]*3, [None]*3
+        else:
+            limit_positions2, positions2 = dlimit_positions2.T, dpositions2.T
+
+        def call_corrfunc(method, *args, **kwargs):
+            try:
+                return method(*args, **kwargs)
+            except TypeError as exc:
+                raise ValueError('Please reinstall relevant Corrfunc branch (including PIP weights):\n\
+                                  > pip uninstall Corrfunc\n\
+                                  > pip install git+https://github.com/adematti/Corrfunc@desi\n') from exc
+
+        result = call_corrfunc(mocks.DDbessel_mocks, autocorr, nthreads=self.nthreads,
+                               X1=limit_positions1[0], Y1=limit_positions1[1], Z1=limit_positions1[2], XP1=positions1[0], YP1=positions1[1], ZP1=positions1[2],
+                               X2=limit_positions2[0], Y2=limit_positions2[1], Z2=limit_positions2[2], XP2=positions2[0], YP2=positions2[1], ZP2=positions2[2],
+                               binfile=self.modes, ells=ells, rmin=self.limits[0], rmax=self.limits[1], mumax=1., los_type=los_type, **kwargs)
+
+        self.power_nonorm = self.mpicomm.allreduce(result['poles']) * prefactor
+        self.power_nonorm.shape = (len(self.modes), len(ells))
+
+        self.power_nonorm = self.power_nonorm.T.astype('c16')
+        if self.autocorr and self.limits[0] <= 0.: # remove auto-pairs
+            weights = self._sum_auto_weights()
+            for ill, ell in enumerate(ells):
+                self.power_nonorm[ill] -=  weights * (2 * ell + 1) * special.legendre(ell)(0.) * special.spherical_jn(ell, 0., derivative=False)
+
+        for ill, ell in enumerate(ells):
+            # Note: in arXiv:1912.08803, eq. 26, should rather be sij = rj - ri
+            self.power_nonorm[ill] = (-1j)**ell * (-1) ** (self.los_type == 'endpoint' and ell % 2) * self.power_nonorm[ill]
+
+        self.power_nonorm = self.power_nonorm[[ells.index(ell) for ell in self.ells]]

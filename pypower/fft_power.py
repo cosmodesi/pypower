@@ -1780,7 +1780,7 @@ class CatalogFFTPower(MeshFFTPower):
                 edges=None, ells=(0, 2, 4), los=None,
                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
                 resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
-                direct_engine='kdtree', direct_limits=(0., 2./60.), direct_limit_type='degree', periodic=False,
+                direct_engine='corrfunc', direct_limits=(0., 2./60.), direct_limit_type='degree',
                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTPower`, i.e. estimate power spectrum.
@@ -1949,17 +1949,14 @@ class CatalogFFTPower(MeshFFTPower):
             Weights to be applied to each pair of particles between second data catalog and first shifted catalog.
             See ``D1D2_twopoint_weights``.
 
-        direct_engine : string, default='kdtree'
-            Engine for direct power spectrum computation (if input weights are bitwise weights), one of ["kdtree"].
+        direct_engine : string, default='corrfunc'
+            Engine for direct power spectrum computation (if input weights are bitwise weights), one of ["kdtree", "corrfunc"].
 
         direct_limits : tuple, default=(0., 2./60.)
             Limits of particle pair separations used in the direct power spectrum computation.
 
         direct_limit_type : string, default='degree'
             Type of ``direct_limits``; i.e. are those angular limits ("degree", "radian"), or 3D limits ("s")?
-
-        periodic : bool, default=False
-            Whether to assume periodic boundary conditions in direct power spectrum computation.
 
         wnorm : float, default=None
             Power spectrum normalization, to use instead of internal estimate obtained with :func:`normalization`.
@@ -2048,29 +2045,39 @@ class CatalogFFTPower(MeshFFTPower):
             twopoint_weights = {'D1D2':D1D2_twopoint_weights, 'D1R2':D1R2_twopoint_weights, 'R1D2':R1D2_twopoint_weights, 'D1S2':D1S2_twopoint_weights, 'S1D2':S1D2_twopoint_weights}
 
             pairs = [(1, 'D1', 'D2')]
-            if with_shifted:
-                S1, S2 = 'S1', 'S2'
-            else:
-                S1, S2 = 'R1', 'R2'
+            key = 'S' if with_shifted else 'R'
             if with_shifted or with_randoms:
                 #pairs.append((1, S1, S2))
-                if autocorr:
-                    pairs.append((-2, 'D1', S2))
-                else:
-                    pairs.append((-1, 'D1', S2))
-                    pairs.append((-1, S1, 'D2'))
+                pairs.append((-1, 'D1', '{}2'.format(key)))
+                pairs.append((-1, '{}1'.format(key), 'D2'))
 
+            powers = {}
             DirectPowerEngine = get_direct_power_engine(direct_engine)
             for coeff, label1, label2 in pairs:
-                label12 = label1+label2
-                if autocorr:
-                    if label12 == 'D1D2': n_bitwise_weights[label2] = n_bitwise_weights[label1]
-                    if label12 == 'D1R2': label2 = 'R1'
-                    if label12 == 'D1S2': label2 = 'S1'
-                if (n_bitwise_weights[label1] and n_bitwise_weights[label2]) or twopoint_weights[label12]:
+                label12 = label1 + label2
+                label21 = label2.replace('2', '1') + label1.replace('1', '2')
+                if autocorr and label21 in powers and powers[label21][1].is_reversible:
+                    powers[label12] = (powers[label21][0], powers[label21][1].reversed())
+                    continue
+                with_bitwise = n_bitwise_weights[label1] and (n_bitwise_weights[label2] or (autocorr and label2[:-1] == label1[:-1]))
+                if label2[:-1] != label1[:-1]:
+                    if autocorr:
+                        label2 = label2.replace('2', '1')
+                    for label in [label1, label2]:
+                        if positions[label] is None:
+                            raise ValueError('{} must be provided'.format(label))
+                with_bitwise = n_bitwise_weights[label1] and (n_bitwise_weights[label2] or (autocorr and label2[:-1] == label1[:-1]))
+                twopoint_weights_12 = twopoint_weights[label12]
+                # in case of autocorrelation, los = firstpoint or endpoint, R1D2 = R1D1 should get the same angular weight as D1R2 = D2R1
+                if autocorr and label2[:-1] != label1[:-1] and twopoint_weights_12 is None:
+                    twopoint_weights_12 = twopoint_weights[label21]
+                if with_bitwise or twopoint_weights_12:
                     if self.los_type == 'global':
                         raise NotImplementedError('mu-wedge direct computation not handled yet')
-                    power = DirectPowerEngine(self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions[label2], weights2=bweights[label2], ells=ells,
-                                              limits=direct_limits, limit_type=direct_limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights[label12],
-                                              weight_attrs=weight_attrs, los=los, boxsize=self.boxsize if periodic else None, position_type='pos', mpicomm=self.mpicomm).power_nonorm
-                    self.poles.power_direct_nonorm += coeff * power
+                    if self.mpicomm.rank == 0:
+                        self.log_info('Computing direct estimation {}.'.format(label12))
+                    powers[label12] = (coeff, DirectPowerEngine(self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions[label2], weights2=bweights[label2], ells=ells,
+                                                                limits=direct_limits, limit_type=direct_limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights_12,
+                                                                weight_attrs=weight_attrs, los=self.los_type, position_type='pos', mpicomm=self.mpicomm))
+            for coeff, power in powers.values():
+                self.poles.power_direct_nonorm += coeff * power.power_nonorm
