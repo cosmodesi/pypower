@@ -465,13 +465,13 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
                         self.weight_attrs['nrealizations'] = get_nrealizations(self.weights1[:n_bitwise_weights1])
                         self.weights1 = [self._get_inverse_probability_weight(self.weights1[:n_bitwise_weights1])*indweights]
                         self.n_bitwise_weights = 0
-                        self.log_info('Setting IIP weights for first catalog.')
+                        if self.mpicomm.rank == 0: self.log_info('Setting IIP weights for first catalog.')
                     elif n_bitwise_weights1 == 0:
                         indweights = self.weights2[n_bitwise_weights2] if len(self.weights2) > n_bitwise_weights2 else 1.
                         self.weight_attrs['nrealizations'] = get_nrealizations(self.weights2[:n_bitwise_weights2])
                         self.weights2 = [self._get_inverse_probability_weight(self.weights2[:n_bitwise_weights2])*indweights]
                         self.n_bitwise_weights = 0
-                        self.log_info('Setting IIP weights for second catalog.')
+                        if self.mpicomm.rank == 0: self.log_info('Setting IIP weights for second catalog.')
                     else:
                         raise ValueError('Incompatible length of bitwise weights: {:d} and {:d} bytes'.format(n_bitwise_weights1, n_bitwise_weights2))
 

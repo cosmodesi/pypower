@@ -347,7 +347,7 @@ def test_direct_power():
                 if label in weights_one:
                     catalog.append(np.ones_like(catalog[0]))
 
-            def run(**kwargs):
+            def run(pass_none=False, pass_zero=False, **kwargs):
                 positions1 = data1[:3]
                 positions2 = data2[:3]
                 weights1 = data1[3:]
@@ -355,12 +355,26 @@ def test_direct_power():
                 if position_type == 'pos':
                     positions1 = np.array(positions1).T
                     positions2 = np.array(positions2).T
-                return DirectPower(modes, positions1=positions1, positions2=None if autocorr else positions2,
-                                   weights1=weights1, weights2=None if autocorr else weights2, position_type=position_type,
+
+                def get_zero(arrays):
+                    if isinstance(arrays, list):
+                        return [array[:0] for array in arrays]
+                    return arrays[:0]
+
+                if pass_zero:
+                    positions1 = get_zero(positions1)
+                    positions2 = get_zero(positions2)
+                    weights1 = get_zero(weights1)
+                    weights2 = get_zero(weights2)
+
+                return DirectPower(modes, positions1=None if pass_none else positions1, positions2=None if pass_none or autocorr else positions2,
+                                   weights1=None if pass_none else weights1, weights2=None if pass_none or autocorr else weights2, position_type=position_type,
                                    limits=limits, limit_type=limit_type, engine=engine, **kwargs, **options)
 
             test = run(mpiroot=None)
             assert np.allclose(test.power_nonorm, ref, **tol)
+            test_zero = run(mpiroot=None, pass_none=False, pass_zero=True)
+            assert np.allclose(test_zero.power_nonorm, 0.)
 
             with tempfile.TemporaryDirectory() as tmp_dir:
                 fn = test.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
@@ -375,6 +389,10 @@ def test_direct_power():
             data1 = [mpi.gather_array(d, root=mpiroot, mpicomm=mpicomm) for d in data1]
             data2 = [mpi.gather_array(d, root=mpiroot, mpicomm=mpicomm) for d in data2]
             test_mpi = run(mpiroot=mpiroot)
+            assert np.allclose(test_mpi.power_nonorm, test.power_nonorm, **tol)
+            test_mpi = run(mpiroot=mpiroot, pass_none=mpicomm.rank > 0)
+            assert np.allclose(test_mpi.power_nonorm, test.power_nonorm, **tol)
+            test_mpi = run(mpiroot=mpiroot, pass_zero=mpicomm.rank > 0)
             assert np.allclose(test_mpi.power_nonorm, test.power_nonorm, **tol)
 
             if test.mpicomm.rank == 0:
@@ -417,6 +435,7 @@ def test_catalog_power():
     power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
                             direct_limits=limits, direct_limit_type=limit_type, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
+
     direct_D1D2 = DirectPower(power.poles.k, positions1=data1[:3], weights1=data1[3:], position_type='xyz',
                               ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
     direct_D1R2 = DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms1[:3], weights1=data1[3:], weights2=randoms1[3:], position_type='xyz',
