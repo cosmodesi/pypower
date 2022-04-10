@@ -3,6 +3,7 @@ Implementation of direct estimation of power spectrum multipoles, i.e. summing o
 This should be mostly used to sum over pairs at small separations, otherwise the calculation will be prohibitive.
 """
 
+import os
 import time
 
 import numpy as np
@@ -628,7 +629,7 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                 yield (d2, d1) if swap else (d1, d2)
             else:
                 for islab in range(nslabs):
-                    sl = slice(islab*size2//nslabs,(islab+1)*size2//nslabs)
+                    sl = slice(islab*size2//nslabs, (islab+1)*size2//nslabs)
                     tmp2 = tuple(d[sl] for d in d2[:-1]) + ([d[sl] for d in d2[-1]],)
                     yield (tmp2, d1) if swap else (d1, tmp2)
 
@@ -731,7 +732,10 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
 
     @property
     def nthreads(self):
-        return self.attrs.get('nthreads', 1)
+        nthreads = self.attrs.get('nthreads', None)
+        if nthreads is None:
+            nthreads = int(os.getenv('OMP_NUM_THREADS', '1'))
+        return nthreads
 
     def run(self):
         from Corrfunc import mocks

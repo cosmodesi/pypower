@@ -211,7 +211,7 @@ def test_bitwise_weight():
 
 def test_direct_power():
     ref_funcs = {'theta':ref_theta, 's':ref_s}
-    list_engine = ['kdtree', 'corrfunc']
+    list_engine = ['kdtree', 'corrfunc'][1:]
     modes = np.linspace(0.01, 0.1, 11)
     size = 100
     boxsize = (100,)*3
@@ -226,7 +226,7 @@ def test_direct_power():
         # position type
         for position_type in ['rdd', 'pos', 'xyz']:
             list_options.append({'autocorr':autocorr, 'position_type':position_type})
-        list_options.append({'autocorr':autocorr, 'n_individual_weights':1})
+        list_options.append({'autocorr':autocorr, 'n_individual_weights':1, 'nthreads':2})
         # pip
         list_options.append({'autocorr':autocorr, 'n_individual_weights':1, 'n_bitwise_weights':1, 'weight_type':'inverse_bitwise_minus_individual', 'slab_npairs_max':10})
         list_options.append({'autocorr':autocorr, 'n_individual_weights':1, 'n_bitwise_weights':1, 'dtype':'f4'})
@@ -253,9 +253,10 @@ def test_direct_power():
     for engine in list_engine:
         for options in list_options:
             options = options.copy()
+            nthreads = options.pop('nthreads', None)
             weights_one = options.pop('weights_one', [])
-            n_individual_weights = options.pop('n_individual_weights',0)
-            n_bitwise_weights = options.pop('n_bitwise_weights',0)
+            n_individual_weights = options.pop('n_individual_weights', 0)
+            n_bitwise_weights = options.pop('n_bitwise_weights', 0)
             data1, data2 = generate_catalogs(size, boxsize=boxsize, n_individual_weights=n_individual_weights, n_bitwise_weights=n_bitwise_weights, seed=42)
             data1 = [np.concatenate([d, d]) for d in data1] # that will get us some pairs at sep = 0
             limit_type = options.pop('limit_type', 'theta')
@@ -266,7 +267,6 @@ def test_direct_power():
             autocorr = options.pop('autocorr', False)
             options.setdefault('boxsize', None)
             options.setdefault('los', 'x' if options['boxsize'] is not None else 'firstpoint')
-            bin_type = options.pop('bin_type', 'auto')
             mpicomm = options.pop('mpicomm', None)
             bitwise_type = options.pop('bitwise_type', None)
             iip = options.pop('iip', False)
@@ -369,7 +369,7 @@ def test_direct_power():
 
                 return DirectPower(modes, positions1=None if pass_none else positions1, positions2=None if pass_none or autocorr else positions2,
                                    weights1=None if pass_none else weights1, weights2=None if pass_none or autocorr else weights2, position_type=position_type,
-                                   limits=limits, limit_type=limit_type, engine=engine, **kwargs, **options)
+                                   limits=limits, limit_type=limit_type, engine=engine, nthreads=nthreads, **kwargs, **options)
 
             test = run(mpiroot=None)
             assert np.allclose(test.power_nonorm, ref, **tol)
@@ -406,10 +406,9 @@ def test_catalog_power():
     ells = (0, 2)
     resampler = 'tsc'
     interlacing = 2
-    boxcenter = np.array([3000.,0.,0.])[None,:]
-    dtype = 'f8'
-    data1, data2 = generate_catalogs(size=10000, boxsize=(1000.,)*3, n_individual_weights=1, n_bitwise_weights=2, seed=42)
-    randoms1, randoms2 = generate_catalogs(size=10000, boxsize=(1000.,)*3, n_individual_weights=1, n_bitwise_weights=0, seed=84)
+    boxcenter = np.array([3000., 0., 0.])[None, :]
+    data1, data2 = generate_catalogs(size=10000, boxsize=(1000.,) * 3, n_individual_weights=1, n_bitwise_weights=2, seed=42)
+    randoms1, randoms2 = generate_catalogs(size=10000, boxsize=(1000.,) * 3, n_individual_weights=1, n_bitwise_weights=0, seed=84)
     limits = (0., 1.)
     limit_type = 'theta'
 
