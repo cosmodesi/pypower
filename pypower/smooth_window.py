@@ -777,8 +777,9 @@ class CatalogSmoothWindow(MeshFFTPower):
                     mesh2_wa = mesh2
             # Now, run power spectrum estimation
             super(CatalogSmoothWindow, self).__init__(mesh1=mesh1_wa, mesh2=mesh2_wa, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
-            if autocorr and shotnoise is None and wa_order != 0: # when providing 2 meshes, shot noise estimate is 0; correct this here
-                self.poles.shotnoise_nonorm = mesh1_wa.mpicomm.allreduce(sum(mesh1_wa.data_weights*mesh2_wa.data_weights))
+            if autocorr and shotnoise is None and wa_order != 0:  # when providing 2 meshes, shot noise estimate is 0; correct this here
+                weights2 = mesh1_wa.data_weights * mesh2_wa.data_weights if mesh2_wa.data_weights is not None else mesh1_wa.data_weights
+                self.poles.shotnoise_nonorm = mesh1_wa.mpicomm.allreduce(sum(weights2))
             poles.append(PowerSpectrumSmoothWindow.from_power(self.poles, wa_order=wa_order, mpicomm=self.mpicomm))
 
         self.poles = PowerSpectrumSmoothWindow.concatenate_proj(*poles)
