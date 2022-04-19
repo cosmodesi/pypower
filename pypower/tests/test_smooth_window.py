@@ -8,10 +8,10 @@ from matplotlib import pyplot as plt
 from cosmoprimo import Cosmology
 from mockfactory import Catalog
 
-from pypower import CorrelationFunctionSmoothWindow, PowerSpectrumSmoothWindow, Projection,\
-                    BaseMatrix, CorrelationFunctionSmoothWindowMatrix, PowerSpectrumSmoothWindowMatrix,\
-                    CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix, CatalogFFTPower, CatalogSmoothWindow,\
-                    mpi, setup_logging
+from pypower import (CorrelationFunctionSmoothWindow, PowerSpectrumSmoothWindow, Projection,
+                     BaseMatrix, CorrelationFunctionSmoothWindowMatrix, PowerSpectrumSmoothWindowMatrix,
+                     CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix, CatalogFFTPower, CatalogSmoothWindow,
+                     mpi, setup_logging)
 from pypower.smooth_window import wigner3j_square
 
 from test_fft_power import data_fn, randoms_fn
@@ -31,16 +31,16 @@ def test_power_spectrum_window_matrix():
     kout = np.linspace(0.1, 0.4, 2)
 
     swin = np.linspace(1e-4, 1e3, 1000)
-    win = np.exp(-(swin/10.)**2)
+    win = np.exp(-(swin / 10.)**2)
     dwindow = {}
     for n in range(3):
         dwindow[n] = {}
         for ell in range(5):
             dwindow[n][ell] = win.copy()
             if ell > 0: dwindow[n][ell] *= np.random.uniform()
-            #if (ell % 2 == 1) and (n == 0): dwindow[n][ell][...] = 0.
-            #if (ell % 2 == 0) and (n == 1): dwindow[n][ell][...] = 0.
-            #if (ell % 2 == 1): dwindow[n][ell][...] = 0.
+            # if (ell % 2 == 1) and (n == 0): dwindow[n][ell][...] = 0.
+            # if (ell % 2 == 0) and (n == 1): dwindow[n][ell][...] = 0.
+            # if (ell % 2 == 1): dwindow[n][ell][...] = 0.
             if n > 1: dwindow[n][ell][...] = 0.
 
     from scipy.interpolate import interp1d
@@ -48,11 +48,11 @@ def test_power_spectrum_window_matrix():
     def window(proj, sep, **kwargs):
         dwin = dwindow[proj.wa_order]
         if proj.ell <= 4: dwin = dwin[proj.ell]
-        else: dwin = 0.*swin
+        else: dwin = 0. * swin
         return interp1d(swin, dwin, kind='linear', fill_value=((1. if ell == 0 else 0.), 0.), bounds_error=False)(sep)
 
-    sep = np.geomspace(swin[0], swin[-1], 1024*16*2)
-    kin = 1./sep[::-1]/(sep[1]/sep[0])
+    sep = np.geomspace(swin[0], swin[-1], 1024 * 16 * 2)
+    kin = 1. / sep[::-1] / (sep[1] / sep[0])
 
     wm = PowerSpectrumSmoothWindowMatrix(kout, projsin, projsout=projsout, window=window, k=kin, kin_rebin=2, kin_lim=None, sep=sep, sum_wa=False)
     kin = wm.xin[0]
@@ -66,24 +66,24 @@ def test_power_spectrum_window_matrix():
     from pypower.smooth_window import weights_trapz
 
     for wa_order in wa_orders:
-        fig,lax = plt.subplots(len(ellsout), len(ellsin), figsize=(12, 10))
-        for illout,ellout in enumerate(ellsout):
-            for illin,ellin in enumerate(ellsin):
+        fig, lax = plt.subplots(len(ellsout), len(ellsin), figsize=(12, 10))
+        for illout, ellout in enumerate(ellsout):
+            for illin, ellin in enumerate(ellsin):
                 iprojout = projsout.index(Projection(ell=ellout, wa_order=wa_order))
                 iprojin = projsout.index(Projection(ell=ellin, wa_order=wa_order))
-                testi = test[iprojout*len(kout), iprojin*len(kin):(iprojin+1)*len(kin)] / (weights_trapz(kin**3) / 3.)
+                testi = test[iprojout * len(kout), iprojin * len(kin):(iprojin + 1) * len(kin)] / (weights_trapz(kin**3) / 3.)
 
                 if wa_order % 2 == 0 and ellin % 2 == 1:
-                    testi = 0.*testi # convention of create_Wll (no theory odd multipoles at 0th order)
+                    testi = 0. * testi  # convention of create_Wll (no theory odd multipoles at 0th order)
                 if wa_order % 2 == 1 and ellin % 2 == 0:
-                    testi = 0.*testi # convention of create_Wll (no theory even multipoles at 1th order)
+                    testi = 0. * testi  # convention of create_Wll (no theory even multipoles at 1th order)
 
-                refi = ref[(wa_order,ellout,ellin)][0]
+                refi = ref[(wa_order, ellout, ellin)][0]
                 lax[illout][illin].plot(kin[mask], testi[mask], label='test ({:d},{:d})'.format(ellout, ellin))
                 lax[illout][illin].plot(kin[mask], refi[mask], label='ref')
                 lax[illout][illin].legend()
-            #print(np.max(test_-ref_))
-            #assert np.allclose(test_,ref_,rtol=1e-1,atol=1e-3)
+            # print(np.max(test_-ref_))
+            # assert np.allclose(test_,ref_,rtol=1e-1,atol=1e-3)
 
     plt.show()
 
@@ -91,21 +91,21 @@ def test_power_spectrum_window_matrix():
 def test_window():
 
     edges = np.linspace(0., 10, 1001)
-    k = (edges[:-1] + edges[1:])/2.
-    win = np.exp(-(k*10)**2)
+    k = (edges[:-1] + edges[1:]) / 2.
+    win = np.exp(-(k * 10)**2)
     y, projs = [], []
     for wa_order in range(2):
         for ell in range(9):
             y_ = win.copy()
-            if ell > 0: y_ *= np.random.uniform()/10.
+            if ell > 0: y_ *= np.random.uniform() / 10.
             y.append(y_)
             projs.append(Projection(ell=ell, wa_order=wa_order))
     nmodes = np.ones_like(k, dtype='i4')
-    boxsize = np.array([1000.]*3, dtype='f8')
-    window = PowerSpectrumSmoothWindow(edges, k, y, nmodes, projs, attrs={'boxsize':boxsize})
-    window2 = PowerSpectrumSmoothWindow(edges, k, [yy/2. for yy in y], 2.*nmodes, projs, attrs={'boxsize':boxsize})
+    boxsize = np.array([1000.] * 3, dtype='f8')
+    window = PowerSpectrumSmoothWindow(edges, k, y, nmodes, projs, attrs={'boxsize': boxsize})
+    window2 = PowerSpectrumSmoothWindow(edges, k, [yy / 2. for yy in y], 2. * nmodes, projs, attrs={'boxsize': boxsize})
     window = PowerSpectrumSmoothWindow.concatenate_x(window, window2)
-    assert np.allclose(window.power_nonorm[0], y[0]/2.)
+    assert np.allclose(window.power_nonorm[0], y[0] / 2.)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         fn = os.path.join(tmp_dir, 'tmp.npy')
@@ -117,37 +117,37 @@ def test_window():
     assert np.allclose(test(projs[0], k), window.power_nonorm[0])
     assert np.allclose(test(projs[0], 10.), 0.)
     assert test(projs[0], 10.).shape == ()
-    assert test(projs[0], [10.]*3).shape == (3, )
-    assert test(k=[9.]*3).shape == (len(projs), 3)
+    assert test(projs[0], [10.] * 3).shape == (3, )
+    assert test(k=[9.] * 3).shape == (len(projs), 3)
     assert np.allclose(test(k=[1., 2.]), test(k=[2., 1.])[..., ::-1], atol=0)
 
-    window2 = PowerSpectrumSmoothWindow(edges, k, y, nmodes, projs, power_zero_nonorm=[10.] + [0.]*(len(projs) - 1), attrs={'boxsize':boxsize})
+    window2 = PowerSpectrumSmoothWindow(edges, k, y, nmodes, projs, power_zero_nonorm=[10.] + [0.] * (len(projs) - 1), attrs={'boxsize': boxsize})
     assert np.allclose(window2(proj=0, k=0., null_zero_mode=False), win[0])
     assert np.allclose(window2(proj=0, k=0., null_zero_mode=True), win[0] - 10.)
 
     y = np.array(y)
     y2 = y.copy()
-    y2[:,1::2] = np.nan
-    window2 = PowerSpectrumSmoothWindow(edges, k[::2], y[:,::2], nmodes[::2], projs, attrs={'boxsize':boxsize})
-    window2_nan = PowerSpectrumSmoothWindow(edges, k, y2, nmodes, projs, attrs={'boxsize':boxsize})
+    y2[:, 1::2] = np.nan
+    window2 = PowerSpectrumSmoothWindow(edges, k[::2], y[:, ::2], nmodes[::2], projs, attrs={'boxsize': boxsize})
+    window2_nan = PowerSpectrumSmoothWindow(edges, k, y2, nmodes, projs, attrs={'boxsize': boxsize})
     assert np.allclose(window2_nan(projs[0], k), window2(projs[0], k))
 
     with pytest.raises(IndexError):
-        window((18,2))
-    assert np.allclose(window((18,2), default_zero=True), 0.)
+        window((18, 2))
+    assert np.allclose(window((18, 2), default_zero=True), 0.)
 
     window_real = window.to_real()
-    assert np.allclose(window.to_real(sep=1./window.k[window.k>0][::-1]).corr, window_real.corr)
+    assert np.allclose(window.to_real(sep=1. / window.k[window.k > 0][::-1]).corr, window_real.corr)
     assert np.allclose(window.to_real(k=window.k, smooth=0.).corr, window.to_real(k=window.k).corr)
     assert np.allclose(window.to_real(smooth=0.5).corr, window.to_real(smooth=np.exp(-(0.5 * window.k)**2)).corr)
     assert not np.isnan(window2_nan.to_real().corr).any()
 
     with pytest.raises(IndexError):
-        window_real((18,2))
-    assert np.allclose(window_real((18,2), default_zero=True), 0.)
+        window_real((18, 2))
+    assert np.allclose(window_real((18, 2), default_zero=True), 0.)
     assert window_real(projs[0], 10.).shape == ()
-    assert window_real(projs[0], [10.]*3).shape == (3, )
-    assert window_real(sep=[9.]*3).shape == (len(projs), 3)
+    assert window_real(projs[0], [10.] * 3).shape == (3, )
+    assert window_real(sep=[9.] * 3).shape == (len(projs), 3)
     assert np.allclose(window_real(sep=[1., 2.]), window_real(sep=[2., 1.])[..., ::-1], atol=0)
 
     window.power_zero_nonorm[0] = 10.
@@ -160,7 +160,7 @@ def test_window():
         test = CorrelationFunctionSmoothWindow.load(fn)
         test.save(fn)
 
-    assert np.allclose(test(projs[0], 1./k[::-1]), window_real.corr[0])
+    assert np.allclose(test(projs[0], 1. / k[::-1]), window_real.corr[0])
 
 
 def test_fft_window():
@@ -173,12 +173,12 @@ def test_fft_window():
     interlacing = 2
     dtype = 'f8'
     cdtype = 'c16'
-    boxcenter = np.array([3000.,0.,0.])[None,:]
+    boxcenter = np.array([3000., 0., 0.])[None, :]
 
     for los in ['x', 'firstpoint', 'endpoint']:
 
-        data = Catalog.load_fits(data_fn)
-        randoms = Catalog.load_fits(randoms_fn)
+        data = Catalog.read(data_fn)
+        randoms = Catalog.read(randoms_fn)
 
         for catalog in [data, randoms]:
             catalog['Position'] += boxcenter
@@ -188,9 +188,9 @@ def test_fft_window():
                                 boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype=dtype).poles
 
         edges = {'step': 0.01}
-        window1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], power_ref=poles, edges=edges, position_type='pos').poles
+        window1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos').poles
         with tempfile.TemporaryDirectory() as tmp_dir:
-            #tmp_dir = '_tests'
+            # tmp_dir = '_tests'
             fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             fn_txt = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.txt'), root=0)
             window1.save(fn)
@@ -202,7 +202,7 @@ def test_fft_window():
             assert np.allclose(window.power[0], window1.power[0], equal_nan=True)
 
         poles_f4 = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
-                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype='f4').poles
+                                   boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype='f4').poles
         window_f4 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles_f4, edges=edges, position_type='pos')
         assert window_f4.dtype.itemsize == 4
 
@@ -225,63 +225,65 @@ def test_fft_window():
         windowc = PowerSpectrumSmoothWindow.concatenate_x(window1, window2)
         assert windowc.k[-1] > window1.k[-1]
         for name in ['power', 'k', 'nmodes']:
-            assert np.allclose(getattr(windowc, name)[...,:len(window1.k)], getattr(window1, name), equal_nan=True)
-            assert np.allclose(getattr(windowc, name)[...,len(window1.k):], getattr(window2, name)[...,len(windowc.k)-len(window1.k):], equal_nan=True)
+            assert np.allclose(getattr(windowc, name)[..., :len(window1.k)], getattr(window1, name), equal_nan=True)
+            assert np.allclose(getattr(windowc, name)[..., len(window1.k):], getattr(window2, name)[..., len(windowc.k) - len(window1.k):], equal_nan=True)
         windowc2 = PowerSpectrumSmoothWindow.concatenate_x(window2, window1)
         mask = np.flatnonzero(window2.nmodes[:len(window1.nmodes)] != window1.nmodes)
-        assert np.allclose(windowc2.power[:,mask], windowc.power[:,mask], equal_nan=True)
+        assert np.allclose(windowc2.power[:, mask], windowc.power[:, mask], equal_nan=True)
         assert np.allclose(windowc2.modes[0], windowc.modes[0], equal_nan=True)
 
         frac_nyq = 0.8
         windowc = PowerSpectrumSmoothWindow.concatenate_x(window1, window2, frac_nyq=frac_nyq)
         assert windowc.k[-1] > window1.k[-1]
-        knyq1 = np.pi*np.min(window1.attrs['nmesh']/window1.attrs['boxsize'])
-        knyq2 = np.pi*np.min(window2.attrs['nmesh']/window2.attrs['boxsize'])
+        knyq1 = np.pi * np.min(window1.attrs['nmesh'] / window1.attrs['boxsize'])
+        knyq2 = np.pi * np.min(window2.attrs['nmesh'] / window2.attrs['boxsize'])
         for name in ['power', 'k', 'nmodes']:
-            assert np.allclose(getattr(windowc, name)[...,windowc.kedges[1:]<=frac_nyq*knyq1], getattr(window1, name)[...,window1.kedges[1:]<=frac_nyq*knyq1], equal_nan=True)
-            assert np.allclose(getattr(windowc, name)[...,windowc.kedges[1:]>frac_nyq*knyq1], getattr(window2, name)[...,(window2.kedges[1:]>frac_nyq*knyq1) & (window2.kedges[1:]<=frac_nyq*knyq2)], equal_nan=True)
+            assert np.allclose(getattr(windowc, name)[..., windowc.kedges[1:] <= frac_nyq * knyq1], getattr(window1, name)[..., window1.kedges[1:] <= frac_nyq * knyq1], equal_nan=True)
+            assert np.allclose(getattr(windowc, name)[..., windowc.kedges[1:] > frac_nyq * knyq1], getattr(window2, name)[..., (window2.kedges[1:] > frac_nyq * knyq1) & (window2.kedges[1:] <= frac_nyq * knyq2)], equal_nan=True)
 
         assert windowc[1:5:2].shape[0] == 2
 
         windowc = PowerSpectrumSmoothWindow.concatenate_x(window1, window2, frac_nyq=(frac_nyq, ))
         assert windowc.k[-1] > window1.k[-1]
-        knyq1 = np.pi*np.min(window1.attrs['nmesh']/window1.attrs['boxsize'])
+        knyq1 = np.pi * np.min(window1.attrs['nmesh'] / window1.attrs['boxsize'])
         for name in ['power', 'k', 'nmodes']:
-            assert np.allclose(getattr(windowc, name)[...,windowc.kedges[1:]<=frac_nyq*knyq1], getattr(window1, name)[...,window1.kedges[1:]<=frac_nyq*knyq1], equal_nan=True)
-            assert np.allclose(getattr(windowc, name)[...,windowc.kedges[1:]>frac_nyq*knyq1], getattr(window2, name)[...,(window2.kedges[1:]>frac_nyq*knyq1)], equal_nan=True)
+            assert np.allclose(getattr(windowc, name)[..., windowc.kedges[1:] <= frac_nyq * knyq1], getattr(window1, name)[..., window1.kedges[1:] <= frac_nyq * knyq1], equal_nan=True)
+            assert np.allclose(getattr(windowc, name)[..., windowc.kedges[1:] > frac_nyq * knyq1], getattr(window2, name)[..., (window2.kedges[1:] > frac_nyq * knyq1)], equal_nan=True)
 
         randoms['Position'][0] -= boxsize
-        projsin = [(ell, 0) for ell in range(0, 2*max(ells)+1, 2)]
+        projsin = [(ell, 0) for ell in range(0, 2 * max(ells) + 1, 2)]
         if los in ['firstpoint', 'endpoint']:
-            projsin += [(ell, 1) for ell in range(1, 2*max(ells)+2, 2)]
-        alpha = data.csum('Weight')/randoms.csum('Weight')
+            projsin += [(ell, 1) for ell in range(1, 2 * max(ells) + 2, 2)]
+        alpha = data['Weight'].csum() / randoms['Weight'].csum()
         window_noref = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edges=edges, projs=projsin, los=los,
-                                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=poles.wnorm/alpha**2, dtype=dtype).poles
+                                           boxsize=boxsize, boxcenter=poles.attrs['boxcenter'], nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos',
+                                           wnorm=poles.wnorm / alpha**2, dtype=dtype).poles
+
         assert np.allclose(window_noref.power, window.power)
 
-        randoms['Position'] = mpi.gather_array(randoms['Position'], root=0, mpicomm=catalog.mpicomm)
-        randoms['Weight'] = mpi.gather_array(randoms['Weight'], root=0, mpicomm=catalog.mpicomm)
-        window_root = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', mpiroot=0).poles
+        positions = mpi.gather_array(randoms['Position'], root=0, mpicomm=catalog.mpicomm)
+        weights = mpi.gather_array(randoms['Weight'], root=0, mpicomm=catalog.mpicomm)
+        window_root = CatalogSmoothWindow(randoms_positions1=positions, randoms_weights1=weights, power_ref=poles, edges=edges, position_type='pos', mpiroot=0).poles
         assert np.allclose(window_root.power, window.power)
 
         if randoms.mpicomm.rank == 0:
-            window_root = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', mpicomm=mpi.COMM_SELF).poles
+            window_root = CatalogSmoothWindow(randoms_positions1=positions, randoms_weights1=weights, power_ref=poles, edges=edges, position_type='pos', mpicomm=mpi.COMM_SELF).poles
             assert np.allclose(window_root.power, window.power)
 
         nk = len(windowc.k)
         windowc.rebin(2)
-        assert len(windowc.k) == nk//2
+        assert len(windowc.k) == nk // 2
 
 
 def get_correlation_function_window():
     sep = np.linspace(1e-4, 1e3, 1000)
-    win = np.exp(-(sep/100.)**2)
+    win = np.exp(-(sep / 100.)**2)
 
     y, projs = [], []
     for wa_order in range(2):
         for ell in range(10):
             y_ = win.copy()
-            if ell > 0: y_ *= np.random.uniform()/10.
+            if ell > 0: y_ *= np.random.uniform() / 10.
             y.append(y_)
             projs.append(Projection(ell=ell, wa_order=wa_order))
     return CorrelationFunctionSmoothWindow(sep, y, projs)
@@ -293,7 +295,7 @@ def test_correlation_function_window_matrix():
     ells = [0, 2, 4]
     projsin = ells + PowerSpectrumOddWideAngleMatrix.propose_out(ells, wa_orders=1)
     wm = CorrelationFunctionSmoothWindowMatrix(np.linspace(0., 1., 10), projsin, projsout=ells, window=window)
-    kwargs = {'wa_orders':1, 'los':'firstpoint'}
+    kwargs = {'wa_orders': 1, 'los': 'firstpoint'}
     wa = CorrelationFunctionOddWideAngleMatrix(wm.xin[0], ells, projsout=wm.projsin, **kwargs)
     matrix = BaseMatrix.join(wa, wm)
     wm.resum_input_odd_wide_angle(**kwargs)
@@ -310,7 +312,7 @@ def test_window_convolution():
     kout = np.linspace(0., 0.3, 60)
     projsin = ells + PowerSpectrumOddWideAngleMatrix.propose_out(ells, wa_orders=1)
     wm = PowerSpectrumSmoothWindowMatrix(kout, projsin, projsout=ells, window=window, sep=sep, kin_lim=kin_lim)
-    kwargs = {'d':1000., 'wa_orders':1, 'los':'firstpoint'}
+    kwargs = {'d': 1000., 'wa_orders': 1, 'los': 'firstpoint'}
     wa = PowerSpectrumOddWideAngleMatrix(wm.xin[0], ells, projsout=wm.projsin, **kwargs)
     matrix = BaseMatrix.join(wa, wm)
     wm.resum_input_odd_wide_angle(**kwargs)
@@ -325,19 +327,19 @@ def test_window_convolution():
     pklin = Cosmology().get_fourier('eisenstein_hu').pk_interpolator().to_1d()(kin)
 
     def kaiser(f=0.8, bias=1.4):
-        beta = f/bias
+        beta = f / bias
         toret = []
-        toret.append((1. + 2./3.*beta + 1./5.*beta**2)*pklin)
-        toret.append((4./3.*beta + 4./7.*beta**2)*pklin)
-        toret.append(8./35*beta**2*pklin)
+        toret.append((1. + 2. / 3. * beta + 1. / 5. * beta**2) * pklin)
+        toret.append((4. / 3. * beta + 4. / 7. * beta**2) * pklin)
+        toret.append(8. / 35 * beta**2 * pklin)
         return toret
 
     pk = kaiser()
     pkconv = matrix.dot(pk, unpack=True)
     ax = plt.gca()
     for ill in range(len(ells)):
-        ax.plot(kin, kin*pk[ill], color='C{:d}'.format(ill), linestyle='--')
-        ax.plot(kout, kout*pkconv[ill], color='C{:d}'.format(ill), linestyle='-')
+        ax.plot(kin, kin * pk[ill], color='C{:d}'.format(ill), linestyle='--')
+        ax.plot(kout, kout * pkconv[ill], color='C{:d}'.format(ill), linestyle='-')
     ax.set_xlim(0., 0.3)
     plt.show()
 

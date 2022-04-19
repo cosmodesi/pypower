@@ -16,10 +16,10 @@ from scipy.interpolate import UnivariateSpline, RectBivariateSpline
 from scipy import special
 from pmesh.pm import RealField, ComplexField
 
-from .utils import BaseClass
+from .utils import BaseClass, _make_array
 from . import mpi, utils
-from .mesh import CatalogMesh, _get_real_dtype, _get_compensation_window, _get_box, _wrap_in_place
-from .direct_power import _make_array, _format_positions, _format_weights, get_default_nrealizations, get_inverse_probability_weight, get_direct_power_engine
+from .mesh import CatalogMesh, _get_real_dtype, _get_compensation_window, _get_mesh_attrs, _wrap_positions
+from .direct_power import _format_positions, _format_weights, get_default_nrealizations, get_inverse_probability_weight, get_direct_power_engine
 
 
 def _nan_to_zero(array):
@@ -69,10 +69,10 @@ def get_real_Ylm(ell, m, modules=None):
     m = int(m)
 
     # Normalization of Ylms
-    amp = np.sqrt((2*ell + 1) / (4*np.pi))
+    amp = np.sqrt((2 * ell + 1) / (4 * np.pi))
     if m != 0:
         fac = 1
-        for n in range(ell - abs(m) + 1, ell + abs(m) + 1): fac *= n # (ell + |m|)!/(ell - |m|)!
+        for n in range(ell - abs(m) + 1, ell + abs(m) + 1): fac *= n  # (ell + |m|)!/(ell - |m|)!
         amp *= np.sqrt(2. / fac)
 
     sp = None
@@ -96,9 +96,9 @@ def get_real_Ylm(ell, m, modules=None):
             # The phi dependence
             phi = np.arctan2(yhat, xhat)
             if m < 0:
-                toret *= np.sin(abs(m)*phi)
+                toret *= np.sin(abs(m) * phi)
             else:
-                toret *= np.cos(abs(m)*phi)
+                toret *= np.cos(abs(m) * phi)
             return toret
 
         # Attach some meta-data
@@ -111,22 +111,22 @@ def get_real_Ylm(ell, m, modules=None):
     x, y, z, r = sp.symbols('x y z r', real=True, positive=True)
     xhat, yhat, zhat = sp.symbols('xhat yhat zhat', real=True, positive=True)
     phi, theta = sp.symbols('phi theta')
-    defs = [(sp.sin(phi), y/sp.sqrt(x**2 + y**2)),
-            (sp.cos(phi), x/sp.sqrt(x**2 + y**2)),
-            (sp.cos(theta), z/sp.sqrt(x**2 + y**2 + z**2))]
+    defs = [(sp.sin(phi), y / sp.sqrt(x**2 + y**2)),
+            (sp.cos(phi), x / sp.sqrt(x**2 + y**2)),
+            (sp.cos(theta), z / sp.sqrt(x**2 + y**2 + z**2))]
 
     # The cos(theta) dependence encoded by the associated Legendre polynomial
     expr = (-1)**m * sp.assoc_legendre(ell, abs(m), sp.cos(theta))
 
     # The phi dependence
     if m < 0:
-        expr *= sp.expand_trig(sp.sin(abs(m)*phi))
+        expr *= sp.expand_trig(sp.sin(abs(m) * phi))
     elif m > 0:
-        expr *= sp.expand_trig(sp.cos(m*phi))
+        expr *= sp.expand_trig(sp.cos(m * phi))
 
     # Simplify
     expr = sp.together(expr.subs(defs)).subs(x**2 + y**2 + z**2, r**2)
-    expr = amp * expr.expand().subs([(x/r, xhat), (y/r, yhat), (z/r, zhat)])
+    expr = amp * expr.expand().subs([(x / r, xhat), (y / r, yhat), (z / r, zhat)])
 
     try: import numexpr
     except ImportError: numexpr = None
@@ -240,20 +240,20 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
         raise ValueError('Multipole numbers must be non-negative integers')
 
     # Initialize the binning arrays
-    musum = np.zeros((nx+3, nmu+3))
-    xsum = np.zeros((nx+3, nmu+3))
-    ysum = np.zeros((nell, nx+3, nmu+3), dtype=y3d.dtype) # extra dimension for multipoles
-    nsum = np.zeros((nx+3, nmu+3), dtype='i8')
+    musum = np.zeros((nx + 3, nmu + 3))
+    xsum = np.zeros((nx + 3, nmu + 3))
+    ysum = np.zeros((nell, nx + 3, nmu + 3), dtype=y3d.dtype)  # extra dimension for multipoles
+    nsum = np.zeros((nx + 3, nmu + 3), dtype='i8')
     # If input array is Hermitian symmetric, only half of the last  axis is stored in `y3d`
 
-    cellsize = y3d.BoxSize/y3d.Nmesh if isinstance(y3d, RealField) else 2.*np.pi/y3d.BoxSize
+    cellsize = y3d.BoxSize / y3d.Nmesh if isinstance(y3d, RealField) else 2. * np.pi / y3d.BoxSize
     mincell = np.min(cellsize)
 
     # Iterate over y-z planes of the coordinate mesh
     for islab in range(x3d[0].shape[0]):
         # The square of coordinate mesh norm
         # (either Fourier space k or configuraton space x)
-        xvec = (x3d[0][islab].real.astype(xdtype),) + tuple(x3d[i].real.astype(xdtype) for i in range(1,3))
+        xvec = (x3d[0][islab].real.astype(xdtype),) + tuple(x3d[i].real.astype(xdtype) for i in range(1, 3))
         xnorm = sum(xx**2 for xx in xvec)**0.5
 
         # If empty, do nothing
@@ -261,12 +261,12 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
 
         # Get the bin indices for x on the slab
         dig_x = np.digitize(xnorm.flat, xedges, right=False)
-        mask_zero = xnorm < mincell/2.
-        #y3d[islab, mask_zero[0]] = 0.
-        dig_x[mask_zero.flat] = nx+2
+        mask_zero = xnorm < mincell / 2.
+        # y3d[islab, mask_zero[0]] = 0.
+        dig_x[mask_zero.flat] = nx + 2
 
         # Get the bin indices for mu on the slab
-        mu = sum(xx*ll for xx, ll in zip(xvec, los))
+        mu = sum(xx * ll for xx, ll in zip(xvec, los))
         mu[~mask_zero] /= xnorm[~mask_zero]
 
         if hermitian_symmetric == 0:
@@ -280,15 +280,15 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
         # Accounting for negative frequencies
         for imu, mu in enumerate(mus):
             # Make the multi-index
-            dig_mu = np.digitize(mu.flat, muedges, right=False) # this is bins[i-1] <= x < bins[i]
-            dig_mu[mu.real.flat == muedges[-1]] = nmu # last mu inclusive
+            dig_mu = np.digitize(mu.flat, muedges, right=False)  # this is bins[i-1] <= x < bins[i]
+            dig_mu[mu.real.flat == muedges[-1]] = nmu  # last mu inclusive
             dig_mu[mask_zero.flat] = nmu + 2
 
-            multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx+3, nmu+3))
+            multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx + 3, nmu + 3))
 
             if hermitian_symmetric and imu:
                 multi_index = multi_index[nonsingular.flat]
-                xnorm = xnorm[nonsingular] # it will be recomputed
+                xnorm = xnorm[nonsingular]  # it will be recomputed
                 mu = mu[nonsingular]
 
             # Count number of modes in each bin
@@ -301,18 +301,18 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
             # Compute multipoles by weighting by Legendre(ell, mu)
             for ill, ell in enumerate(unique_ells):
 
-                weightedy3d = (2.*ell + 1.) * legpoly[ill](mu)
+                weightedy3d = (2. * ell + 1.) * legpoly[ill](mu)
 
                 if hermitian_symmetric and imu:
                     # Weight the input 3D array by the appropriate Legendre polynomial
-                    weightedy3d = hermitian_symmetric * weightedy3d * y3d[islab][nonsingular[0]].conj() # hermitian_symmetric is 1 or -1
+                    weightedy3d = hermitian_symmetric * weightedy3d * y3d[islab][nonsingular[0]].conj()  # hermitian_symmetric is 1 or -1
                 else:
                     weightedy3d = weightedy3d * y3d[islab, ...]
 
                 # Sum up the weighted y in each bin
-                ysum[ill,...].real.flat += np.bincount(multi_index, weights=weightedy3d.real.flat, minlength=nsum.size)
+                ysum[ill, ...].real.flat += np.bincount(multi_index, weights=weightedy3d.real.flat, minlength=nsum.size)
                 if np.iscomplexobj(ysum):
-                    ysum[ill,...].imag.flat += np.bincount(multi_index, weights=weightedy3d.imag.flat, minlength=nsum.size)
+                    ysum[ill, ...].imag.flat += np.bincount(multi_index, weights=weightedy3d.imag.flat, minlength=nsum.size)
 
     # Sum binning arrays across all ranks
     xsum = comm.allreduce(xsum)
@@ -325,7 +325,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
     # Our treatment of hermitian symmetric field would sum this frequency twice (mu and -mu)
     # But this would appear only once in uncompressed field
     # As a default, set frequencies beyond to NaN
-    xmax = y3d.Nmesh//2 * cellsize
+    xmax = y3d.Nmesh // 2 * cellsize
     mask_beyond_nyq = np.flatnonzero(xedges >= np.min(xmax))
     xsum[mask_beyond_nyq] = np.nan
     musum[mask_beyond_nyq] = np.nan
@@ -336,27 +336,27 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
     sl = slice(1, -2)
     if not exclude_zero:
         dig_zero = tuple(np.digitize(0., edges, right=False) for edges in [xedges, muedges])
-        xsum[dig_zero] += xsum[nx+2, nmu+2]
-        musum[dig_zero] += musum[nx+2, nmu+2]
-        ysum[(Ellipsis,) + dig_zero] += ysum[:, nx+2, nmu+2]
-        nsum[dig_zero] += nsum[nx+2, nmu+2]
+        xsum[dig_zero] += xsum[nx + 2, nmu + 2]
+        musum[dig_zero] += musum[nx + 2, nmu + 2]
+        ysum[(Ellipsis,) + dig_zero] += ysum[:, nx + 2, nmu + 2]
+        nsum[dig_zero] += nsum[nx + 2, nmu + 2]
 
     with np.errstate(invalid='ignore', divide='ignore'):
 
         # 2D binned results
-        y2d = (ysum[0, ...] / nsum)[sl, sl] # ell=0 is first index
-        xmean2d  = (xsum / nsum)[sl, sl]
+        y2d = (ysum[0, ...] / nsum)[sl, sl]  # ell=0 is first index
+        xmean2d = (xsum / nsum)[sl, sl]
         mumean2d = (musum / nsum)[sl, sl]
         n2d = nsum[sl, sl]
-        zero2d = ysum[0, nx+2, nmu+2]
+        zero2d = ysum[0, nx + 2, nmu + 2]
 
         # 1D multipole results (summing over mu (last) axis)
         if return_poles:
             n1d = nsum[sl, sl].sum(axis=-1)
             xmean1d = xsum[sl, sl].sum(axis=-1) / n1d
             poles = ysum[:, sl, sl].sum(axis=-1) / n1d
-            poles_zero = ysum[:, nx+2, nmu+2]
-            poles, poles_zero = (tmp[[unique_ells.index(ell) for ell in ells],...] for tmp in (poles, poles_zero))
+            poles_zero = ysum[:, nx + 2, nmu + 2]
+            poles, poles_zero = (tmp[[unique_ells.index(ell) for ell in ells], ...] for tmp in (poles, poles_zero))
 
     # Return y(x,mu) + (possibly empty) multipoles
     toret = [(xmean2d, mumean2d, y2d, n2d, zero2d)]
@@ -408,7 +408,7 @@ def find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD):
 
     # now make edges around unique coordinates
     width = np.diff(fx)
-    edges = np.concatenate([[xmin], fx[1:] - width/2., [min(fx[-1] + width[-1] / 2., xmax)]], axis=0)
+    edges = np.concatenate([[xmin], fx[1:] - width / 2., [min(fx[-1] + width[-1] / 2., xmax)]], axis=0)
     return edges
 
 
@@ -532,7 +532,7 @@ class BasePowerSpectrumStatistics(BaseClass):
             dig_zero = tuple(np.digitize(0., edges, right=False) - 1 for edges in self.edges)
             if all(0 <= dig_zero[ii] < self.shape[ii] for ii in range(self.ndim)):
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    toret[(Ellipsis,)*(toret.ndim - self.ndim) + dig_zero] -= self.power_zero_nonorm/self.nmodes[dig_zero]
+                    toret[(Ellipsis,) * (toret.ndim - self.ndim) + dig_zero] -= self.power_zero_nonorm / self.nmodes[dig_zero]
         if divide_wnorm:
             toret /= self.wnorm
         if not complex and np.iscomplexobj(toret):
@@ -591,16 +591,15 @@ class BasePowerSpectrumStatistics(BaseClass):
         if method is None:
             axes_to_sum_over = tuple(ii for ii in range(self.ndim) if ii != axis)
             with np.errstate(divide='ignore', invalid='ignore'):
-                toret = np.sum(_nan_to_zero(self.modes[axis])*self.nmodes, axis=axes_to_sum_over)/np.sum(self.nmodes, axis=axes_to_sum_over)
+                toret = np.sum(_nan_to_zero(self.modes[axis]) * self.nmodes, axis=axes_to_sum_over) / np.sum(self.nmodes, axis=axes_to_sum_over)
         elif isinstance(method, str):
             allowed_methods = ['mid']
             method = method.lower()
             if method not in allowed_methods:
                 raise ValueError('method should be one of {}'.format(allowed_methods))
             elif method == 'mid':
-                toret = (self.edges[axis][:-1] + self.edges[axis][1:])/2.
+                toret = (self.edges[axis][:-1] + self.edges[axis][1:]) / 2.
         return toret
-
 
     def __call__(self):
         """Method that interpolates power spectrum measurement at any point."""
@@ -637,7 +636,7 @@ class BasePowerSpectrumStatistics(BaseClass):
                 x = self.modeavg(axis=iaxis)
                 indices = np.flatnonzero((x >= xlim[0]) & (x <= xlim[1]))
                 if indices.size:
-                    slices.append(slice(indices[0], indices[-1]+1, 1))
+                    slices.append(slice(indices[0], indices[-1] + 1, 1))
                 else:
                     slices.append(slice(0))
         self.slice(*slices)
@@ -653,7 +652,7 @@ class BasePowerSpectrumStatistics(BaseClass):
             statistic[:10:2,:6:3] # same as above, but return new instance.
 
         """
-        inslices = list(slices) + [slice(None)]*(self.ndim - len(slices))
+        inslices = list(slices) + [slice(None)] * (self.ndim - len(slices))
         if len(inslices) > self.ndim:
             raise IndexError('Too many indices: statistics is {:d}-dimensional, but {:d} were indexed'.format(self.ndim, len(slices)))
         slices, eslices, factor = [], [], []
@@ -663,20 +662,20 @@ class BasePowerSpectrumStatistics(BaseClass):
             if step is None: step = 1
             indices = np.arange(self.nmodes.shape[iaxis])[slice(start, stop, 1)]
             if indices.size:
-                stop = indices[-1] + 1 # somewhat hacky, but correct!
+                stop = indices[-1] + 1  # somewhat hacky, but correct!
             else:
                 stop = 0
             slices.append(slice(start, stop, 1))
-            eslices.append(slice(start, stop+1, 1))
+            eslices.append(slice(start, stop + 1, 1))
             factor.append(step)
         slices = tuple(slices)
         for name in self._tosum + self._toaverage:
             array = getattr(self, name, None)
             if array is None: continue
             if isinstance(array, list):
-                setattr(self, name, [arr[(Ellipsis,)*(arr.ndim - self.ndim) + slices] for arr in array])
+                setattr(self, name, [arr[(Ellipsis,) * (arr.ndim - self.ndim) + slices] for arr in array])
             else:
-                setattr(self, name, array[(Ellipsis,)*(array.ndim - self.ndim) + slices])
+                setattr(self, name, array[(Ellipsis,) * (array.ndim - self.ndim) + slices])
         self.edges = [edges[eslice] for edges, eslice in zip(self.edges, eslices)]
         if not all(f == 1 for f in factor):
             self.rebin(factor=factor)
@@ -691,9 +690,9 @@ class BasePowerSpectrumStatistics(BaseClass):
             factor = (factor,)
         if len(factor) != self.ndim:
             raise ValueError('Provide a rebinning factor for each dimension')
-        if any(s % f for s,f in zip(self.shape, factor)):
+        if any(s % f for s, f in zip(self.shape, factor)):
             raise ValueError('Rebinning factor must divide shape')
-        new_shape = tuple(s//f for s,f in zip(self.shape, factor))
+        new_shape = tuple(s // f for s, f in zip(self.shape, factor))
         nmodes = self.nmodes
         for name in self._tosum:
             array = getattr(self, name, None)
@@ -708,12 +707,12 @@ class BasePowerSpectrumStatistics(BaseClass):
             if array is None: continue
             if isinstance(array, list):
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    array = [utils.rebin(_nan_to_zero(arr)*nmodes, new_shape, statistic=np.sum)/self.nmodes for arr in array]
+                    array = [utils.rebin(_nan_to_zero(arr) * nmodes, new_shape, statistic=np.sum) / self.nmodes for arr in array]
             else:
                 extradim = array.ndim > self.ndim
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    array = np.asarray([utils.rebin(_nan_to_zero(arr)*nmodes, new_shape, statistic=np.sum)/self.nmodes for arr in array.reshape((-1,) + self.shape)])
-                    array.shape = (-1,)*extradim + new_shape
+                    array = np.asarray([utils.rebin(_nan_to_zero(arr) * nmodes, new_shape, statistic=np.sum) / self.nmodes for arr in array.reshape((-1,) + self.shape)])
+                    array.shape = (-1,) * extradim + new_shape
             setattr(self, name, array)
         self.edges = [edges[::f] for edges, f in zip(self.edges, factor)]
 
@@ -727,7 +726,7 @@ class BasePowerSpectrumStatistics(BaseClass):
 
     def __setstate__(self, state):
         super(BasePowerSpectrumStatistics, self).__setstate__(state)
-        if not hasattr(self, 'power_zero_nonorm'): # for backward-compatibility; to be removed soon!
+        if not hasattr(self, 'power_zero_nonorm'):  # for backward-compatibility; to be removed soon!
             self.power_zero_nonorm = np.zeros(self.power_nonorm.shape[:self.power_nonorm.ndim - self.ndim], dtype=self.power_nonorm.dtype)
 
     def __copy__(self):
@@ -787,7 +786,7 @@ class BasePowerSpectrumStatistics(BaseClass):
             elif isinstance(header, str): header = [header]
             else: header = list(header)
             for name in ['autocorr', 'data_size1', 'data_size2', 'sum_data_weights1', 'sum_data_weights2',
-                         'randoms_size1','randoms_size2', 'sum_randoms_weights1', 'sum_randoms_weights2',
+                         'randoms_size1', 'randoms_size2', 'sum_randoms_weights1', 'sum_randoms_weights2',
                          'los_type', 'los', 'nmesh', 'boxsize', 'boxcenter', 'resampler1', 'resampler2',
                          'interlacing1', 'interlacing2', 'shotnoise', 'wnorm']:
                 value = self.attrs.get(name, getattr(self, name, None))
@@ -798,9 +797,9 @@ class BasePowerSpectrumStatistics(BaseClass):
                 else:
                     value = np.array2string(np.array(value), separator=delimiter, formatter=formatter).replace('\n', '')
                 header.append('{} = {}'.format(name, value))
-                #value = value.split('\n')
-                #header.append('{} = {}'.format(name, value[0]))
-                #for arr in value[1:]: header.append(' '*(len(name) + 3) + arr)
+                # value = value.split('\n')
+                # header.append('{} = {}'.format(name, value[0]))
+                # for arr in value[1:]: header.append(' '*(len(name) + 3) + arr)
             labels = ['nmodes']
             assert len(self._coords_names) == self.ndim
             for name in self._coords_names:
@@ -811,12 +810,12 @@ class BasePowerSpectrumStatistics(BaseClass):
             mids = np.meshgrid(*(self.modeavg(idim, method='mid') for idim in range(self.ndim)), indexing='ij')
             for idim in range(self.ndim):
                 columns += [mids[idim].flat, self.modes[idim].flat]
-            for column in power.reshape((-1,)*(power.ndim == self.ndim) + power.shape):
+            for column in power.reshape((-1,) * (power.ndim == self.ndim) + power.shape):
                 columns += [column.flat]
             columns = [[np.array2string(value, formatter=formatter) for value in column] for column in columns]
             widths = [max(max(map(len, column)) - len(comments) * (icol == 0), len(label)) for icol, (column, label) in enumerate(zip(columns, labels))]
-            widths[-1] = 0 # no need to leave a space
-            header.append((' '*len(delimiter)).join(['{:<{width}}'.format(label, width=width) for label, width in zip(labels, widths)]))
+            widths[-1] = 0  # no need to leave a space
+            header.append((' ' * len(delimiter)).join(['{:<{width}}'.format(label, width=width) for label, width in zip(labels, widths)]))
             widths[0] += len(comments)
             with open(filename, 'w') as file:
                 for line in header:
@@ -824,8 +823,8 @@ class BasePowerSpectrumStatistics(BaseClass):
                 for irow in range(len(columns[0])):
                     file.write(delimiter.join(['{:<{width}}'.format(column[irow], width=width) for column, width in zip(columns, widths)]) + '\n')
 
-        #if self.with_mpi:
-        #    self.mpicomm.Barrier()
+        # if self.with_mpi:
+        #     self.mpicomm.Barrier()
 
 
 def get_power_statistic(statistic='wedge'):
@@ -953,14 +952,21 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
         k, mu = k[mask_k], mu[mask_mu]
         if mask_k.any() and mask_mu.any():
             if muavg.size == 1:
-                interp = lambda array: UnivariateSpline(kavg, array, k=1, s=0, ext='const')(k)[:, None]
+
+                def interp(array):
+                    return UnivariateSpline(kavg, array, k=1, s=0, ext='const')(k)[:, None]
+
             else:
                 i_k = np.argsort(k); ii_k = np.argsort(i_k)
                 i_mu = np.argsort(mu); ii_mu = np.argsort(i_mu)
-                interp = lambda array: RectBivariateSpline(kavg, muavg, array, kx=1, ky=1, s=0)(k[i_k], mu[i_mu], grid=True)[np.ix_(ii_k, ii_mu)]
+
+                def interp(array):
+                    return RectBivariateSpline(kavg, muavg, array, kx=1, ky=1, s=0)(k[i_k], mu[i_mu], grid=True)[np.ix_(ii_k, ii_mu)]
+
             toret[np.ix_(mask_k, mask_mu)] = interp(power.real)
             if complex and np.iscomplexobj(power):
                 toret[np.ix_(mask_k, mask_mu)] += 1j * interp(power.imag)
+
         toret.shape = toret_shape
         if return_k:
             if return_mu:
@@ -1047,7 +1053,7 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
             toret = np.array([toret[ill].real if ell % 2 == 0 else toret[ill].imag for ill, ell in enumerate(self.ells)], dtype=toret.real.dtype)
         return toret
 
-    def __call__(self, ell=None,  k=None, return_k=False, complex=True, **kwargs):
+    def __call__(self, ell=None, k=None, return_k=False, complex=True, **kwargs):
         r"""
         Return power spectrum, optionally performing linear interpolation over :math:`k`.
 
@@ -1107,9 +1113,13 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
         k = k[mask_k]
         if mask_k.any():
-            interp = lambda array: np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
+
+            def interp(array):
+                return np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
+
             toret[..., mask_k] = interp(power.real)
-            if complex and np.iscomplexobj(power): toret[...,mask_k] = toret[..., mask_k] + 1j * interp(power.imag)
+            if complex and np.iscomplexobj(power):
+                toret[..., mask_k] = toret[..., mask_k] + 1j * interp(power.imag)
         if isscalar:
             toret = toret[0]
         if return_k:
@@ -1148,7 +1158,7 @@ def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.C
     if data_weights is not None:
         sum_data_weights = mpicomm.allreduce(np.sum(data_weights))
         sum_weights = mpicomm.allreduce(np.sum(weights))
-        alpha = sum_data_weights/sum_weights
+        alpha = sum_data_weights / sum_weights
     else:
         alpha = 1.
     toret = mpicomm.allreduce(alpha * np.sum(nbar * weights))
@@ -1211,10 +1221,10 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
         positions = get_positions(mesh1)
         if not autocorr: positions += get_positions(mesh2)
         # Determine bounding box
-        nmesh, boxsize, boxcenter = _get_box(cellsize=cellsize, positions=positions, boxpad=1.1, mpicomm=mesh1.mpicomm)
+        nmesh, boxsize, boxcenter = _get_mesh_attrs(cellsize=cellsize, positions=positions, boxpad=1.1, mpicomm=mesh1.mpicomm)
         nmesh += 1
-        boxsize = nmesh*cellsize # enforce exact cellsize
-        cellsize = boxsize/nmesh # just to get correct shape
+        boxsize = nmesh * cellsize  # enforce exact cellsize
+        cellsize = boxsize / nmesh  # just to get correct shape
 
         # Assign positions/weights to mesh
         def get_mesh_nbar(mesh, field='data'):
@@ -1226,7 +1236,7 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
         # Sum over meshes
         toret = (get_mesh_nbar(mesh1, field='data') * get_mesh_nbar(mesh2, field='randoms')).csum()
         if not autocorr:
-            toret = (toret + (get_mesh_nbar(mesh2, field='data') * get_mesh_nbar(mesh1, field='randoms')).csum())/2.
+            toret = (toret + (get_mesh_nbar(mesh2, field='data') * get_mesh_nbar(mesh1, field='randoms')).csum()) / 2.
         # Meshes are in "weights units" (1/dV missing in each mesh), so multiply by dV * (1/dV)^2
         toret /= np.prod(cellsize)
         return toret
@@ -1252,7 +1262,6 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
             s2 = mesh2.csum()
 
     return (s1 * s2) / np.prod(boxsize)
-
 
 
 class MeshFFTPower(BaseClass):
@@ -1346,7 +1355,7 @@ class MeshFFTPower(BaseClass):
             self.shotnoise = 0.
             # Shot noise is non zero only if we can estimate it
             if self.autocorr and isinstance(mesh1, CatalogMesh):
-                self.shotnoise = mesh1.unnormalized_shotnoise()/self.wnorm
+                self.shotnoise = mesh1.unnormalized_shotnoise() / self.wnorm
         self.attrs.update(self._get_attrs())
         t1 = time.time()
         if self.mpicomm.rank == 0:
@@ -1360,11 +1369,11 @@ class MeshFFTPower(BaseClass):
 
     def _set_compensations(self, compensations):
         # Set :attr:`compensations`
-        if compensations is None: compensations = [None]*2
+        if compensations is None: compensations = [None] * 2
         if not isinstance(compensations, (tuple, list)):
-            compensations = [compensations]*2
+            compensations = [compensations] * 2
         compensations = compensations.copy()
-        compensations += [None]*(2 - len(compensations))
+        compensations += [None] * (2 - len(compensations))
 
         def _format_compensation(compensation):
             if compensation is None: return None
@@ -1377,7 +1386,7 @@ class MeshFFTPower(BaseClass):
             if resampler is None:
                 raise ValueError('Specify resampler in compensation')
             shotnoise = 'shotnoise' in compensation or 'sn' in compensation
-            return {'resampler':resampler, 'shotnoise':shotnoise}
+            return {'resampler': resampler, 'shotnoise': shotnoise}
 
         self.compensations = [_format_compensation(compensation) for compensation in compensations]
 
@@ -1386,14 +1395,14 @@ class MeshFFTPower(BaseClass):
         self.attrs = {}
 
         for i in range(1 if self.autocorr else 2):
-            name = 'mesh{:d}'.format(i+1)
+            name = 'mesh{:d}'.format(i + 1)
             mesh = locals()[name]
             if isinstance(mesh, CatalogMesh):
                 if mesh.mpicomm.rank == 0:
-                    self.log_info('Painting catalog {:d} to mesh {}.'.format(i+1, str(mesh)))
+                    self.log_info('Painting catalog {:d} to mesh {}.'.format(i + 1, str(mesh)))
                 setattr(self, name, mesh.to_mesh())
                 if mesh.mpicomm.rank == 0:
-                    self.log_info('Done painting catalog {:d} to mesh.'.format(i+1))
+                    self.log_info('Done painting catalog {:d} to mesh.'.format(i + 1))
                 if boxcenter is not None:
                     if not np.allclose(boxcenter, mesh.boxcenter):
                         self.log_warning('Provided boxcenter {} is not the same as that of provided {} instance ({})'.format(boxcenter, mesh.__class__.__name__, mesh.boxcenter))
@@ -1405,25 +1414,25 @@ class MeshFFTPower(BaseClass):
                         self.log_warning('Provided compensation {} is not the same as that of provided {} instance ({})'.format(self.compensations[i], mesh.__class__.__name__, compensation))
                 else:
                     self.compensations[i] = compensation
-                self.attrs['data_size{:d}'.format(i+1)] = mesh.data_size
-                self.attrs['randoms_size{:d}'.format(i+1)] = mesh.randoms_size
-                self.attrs['sum_data_weights{:d}'.format(i+1)] = mesh.sum_data_weights
-                self.attrs['sum_randoms_weights{:d}'.format(i+1)] = mesh.sum_randoms_weights
-                self.attrs['resampler{:d}'.format(i+1)] = mesh.compensation['resampler']
-                self.attrs['interlacing{:d}'.format(i+1)] = mesh.interlacing
+                self.attrs['data_size{:d}'.format(i + 1)] = mesh.data_size
+                self.attrs['randoms_size{:d}'.format(i + 1)] = mesh.randoms_size
+                self.attrs['sum_data_weights{:d}'.format(i + 1)] = mesh.sum_data_weights
+                self.attrs['sum_randoms_weights{:d}'.format(i + 1)] = mesh.sum_randoms_weights
+                self.attrs['resampler{:d}'.format(i + 1)] = mesh.compensation['resampler']
+                self.attrs['interlacing{:d}'.format(i + 1)] = mesh.interlacing
             else:
                 setattr(self, name, mesh)
                 data_size = mesh.pm.Nmesh.prod()
-                self.attrs['data_size{:d}'.format(i+1)] = data_size
-                self.attrs['randoms_size{:d}'.format(i+1)] = 0
+                self.attrs['data_size{:d}'.format(i + 1)] = data_size
+                self.attrs['randoms_size{:d}'.format(i + 1)] = 0
                 if isinstance(mesh, ComplexField):
                     sum_data = data_size
                 else:
                     sum_data = mesh.csum().real
-                self.attrs['sum_data_weights{:d}'.format(i+1)] = sum_data
-                self.attrs['sum_randoms_weights{:d}'.format(i+1)] = 0.
-                self.attrs['resampler{:d}'.format(i+1)] = not self.compensations[i]['resampler'] if self.compensations[i] is not None else None
-                self.attrs['interlacing{:d}'.format(i+1)] = not self.compensations[i]['shotnoise'] if self.compensations[i] is not None else False
+                self.attrs['sum_data_weights{:d}'.format(i + 1)] = sum_data
+                self.attrs['sum_randoms_weights{:d}'.format(i + 1)] = 0.
+                self.attrs['resampler{:d}'.format(i + 1)] = not self.compensations[i]['resampler'] if self.compensations[i] is not None else None
+                self.attrs['interlacing{:d}'.format(i + 1)] = not self.compensations[i]['shotnoise'] if self.compensations[i] is not None else False
 
         if self.autocorr:
             for name in ['data_size', 'randoms_size', 'sum_data_weights', 'sum_randoms_weights', 'resampler', 'interlacing']:
@@ -1472,19 +1481,19 @@ class MeshFFTPower(BaseClass):
             kedges = {}
         if isinstance(kedges, dict):
             kmin = kedges.get('min', 0.)
-            kmax = kedges.get('max', np.pi/(self.boxsize/self.nmesh).max())
+            kmax = kedges.get('max', np.pi / (self.boxsize / self.nmesh).max())
             dk = kedges.get('step', None)
             if dk is None:
                 # find unique edges
                 k = [k.real for k in self.pm.create_coords('complex')]
                 dk = 2 * np.pi / self.boxsize
-                kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax+1e-5*dk, mpicomm=self.mpicomm) # margin required for float32
+                kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax + 1e-5 * dk, mpicomm=self.mpicomm)  # margin required for float32
             else:
-                kedges = np.arange(kmin, kmax+1e-5*dk, dk)
+                kedges = np.arange(kmin, kmax + 1e-5 * dk, dk)
         if self.mpicomm.rank == 0:
             self.log_info('Using {:d} k-bins between {:.3f} and {:.3f}.'.format(len(kedges) - 1, kedges[0], kedges[-1]))
         if muedges is None:
-            muedges = np.linspace(-1, 1, 2, endpoint=True) # single :math:`\mu`-wedge
+            muedges = np.linspace(-1, 1, 2, endpoint=True)  # single :math:`\mu`-wedge
         self.edges = (np.asarray(kedges, dtype='f8'), np.asarray(muedges, dtype='f8'))
 
     def _set_ells(self, ells):
@@ -1525,7 +1534,7 @@ class MeshFFTPower(BaseClass):
                 los = np.zeros(3, dtype='f8')
                 los[ilos] = 1.
             los = np.array(los, dtype='f8')
-            self.los = los/utils.distance(los)
+            self.los = los / utils.distance(los)
 
     @property
     def boxsize(self):
@@ -1548,18 +1557,18 @@ class MeshFFTPower(BaseClass):
         # Apply compensation window for particle-assignment scheme
         windows = [_get_compensation_window(**compensation) for compensation in compensations if compensation is not None]
         if not windows: return
-        #from nbodykit.source.mesh.catalog import CompensateCIC
-        #cfield.apply(func=CompensateCIC, kind='circular', out=Ellipsis)
-        cellsize = self.boxsize/self.nmesh
+        # from nbodykit.source.mesh.catalog import CompensateCIC
+        # cfield.apply(func=CompensateCIC, kind='circular', out=Ellipsis)
+        cellsize = self.boxsize / self.nmesh
         for k, slab in zip(cfield.slabs.x, cfield.slabs):
             kc = tuple(ki * ci for ki, ci in zip(k, cellsize))
             for window in windows:
                 slab[...] /= window(*kc)
 
     def run(self):
-        if self.los_type == 'global': # global (fixed) line-of-sight
+        if self.los_type == 'global':  # global (fixed) line-of-sight
             self._run_global_los()
-        else: # local (varying) line-of-sight
+        else:  # local (varying) line-of-sight
             self._run_local_los()
 
     def _get_attrs(self):
@@ -1586,10 +1595,9 @@ class MeshFFTPower(BaseClass):
 
     def _run_global_los(self):
 
-        rank = self.mpicomm.rank
         # Calculate the 3d power spectrum, slab-by-slab to save memory
         # FFT 1st density field and apply the resampler transfer kernel
-        cfield2 = cfield1 = self._to_complex(self.mesh1, copy=True) # copy because will be modified in-place
+        cfield2 = cfield1 = self._to_complex(self.mesh1, copy=True)  # copy because will be modified in-place
         del self.mesh1
         # We will apply all compensation transfer functions to cfield1
         compensations = [self.compensations[0]] if self.autocorr else self.compensations
@@ -1602,15 +1610,15 @@ class MeshFFTPower(BaseClass):
         # cfield1.conj() * cfield2
         for i, c1, c2 in zip(cfield1.slabs.i, cfield1.slabs, cfield2.slabs):
             c1[...] = c1.conj() * c2
-            #mask_zero = True
-            #for ii in i: mask_zero = mask_zero & (ii == 0)
-            #c1[mask_zero] = 0.
+            # mask_zero = True
+            # for ii in i: mask_zero = mask_zero & (ii == 0)
+            # c1[mask_zero] = 0.
 
-        #from nbodykit.algorithms.fftpower import project_to_basis
-        #result, result_poles = project_to_basis(cfield1, self.edges, poles=self.ells or [], los=self.los)
+        # from nbodykit.algorithms.fftpower import project_to_basis
+        # result, result_poles = project_to_basis(cfield1, self.edges, poles=self.ells or [], los=self.los)
         result, result_poles = project_to_basis(cfield1, self.edges, ells=self.ells, los=self.los, exclude_zero=False)
 
-        kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs, 'mpicomm':self.mpicomm}
+        kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': self.shotnoise * self.wnorm, 'attrs': self.attrs, 'mpicomm': self.mpicomm}
         k, mu, power, nmodes, power_zero = result
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
         power, power_zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, power_zero))
@@ -1627,7 +1635,7 @@ class MeshFFTPower(BaseClass):
     def _run_local_los(self):
 
         swap = self.los_type == 'endpoint'
-        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1 # swap meshes + complex conjugaison at the end of run()
+        if swap: self.mesh1, self.mesh2 = self.mesh2, self.mesh1  # swap meshes + complex conjugaison at the end of run()
 
         rank = self.mpicomm.rank
 
@@ -1638,12 +1646,12 @@ class MeshFFTPower(BaseClass):
             rfield1 = self._to_real(self.mesh1)
 
         # FFT 1st density field and apply the resampler transfer kernel
-        A0 = self._to_complex(self.mesh2, copy=True) # pmesh r2c convention is 1/N^3 e^{-ikr}
+        A0 = self._to_complex(self.mesh2, copy=True)  # pmesh r2c convention is 1/N^3 e^{-ikr}
         # Set mean value or real field to 0
-        #for i, c in zip(A0.slabs.i, A0.slabs):
-        #    mask_zero = True
-        #    for ii in i: mask_zero = mask_zero & (ii == 0)
-        #    c[mask_zero] = 0.
+        # for i, c in zip(A0.slabs.i, A0.slabs):
+        #     mask_zero = True
+        #     for ii in i: mask_zero = mask_zero & (ii == 0)
+        #     c[mask_zero] = 0.
 
         # We will apply all compensation transfer functions to A0_1 (faster than applying to each Aell)
         compensations = [self.compensations[0]] * 2 if self.autocorr else self.compensations
@@ -1664,7 +1672,7 @@ class MeshFFTPower(BaseClass):
                 self._compensate(A0, compensations[0])
         else:
             # Cross-correlation, all windows on A0
-            if 0 in self.ells: Aell = self._to_complex(self.mesh1, copy=True) # mesh1 != mesh2!
+            if 0 in self.ells: Aell = self._to_complex(self.mesh1, copy=True)  # mesh1 != mesh2!
             self._compensate(A0, *compensations)
 
         del self.mesh2, self.mesh1
@@ -1672,10 +1680,10 @@ class MeshFFTPower(BaseClass):
         if 0 in self.ells:
 
             for islab in range(A0.shape[0]):
-                Aell[islab,...] = Aell[islab] * A0[islab].conj()
+                Aell[islab, ...] = Aell[islab] * A0[islab].conj()
 
             # the 1D monopole
-            #from nbodykit.algorithms.fftpower import project_to_basis
+            # from nbodykit.algorithms.fftpower import project_to_basis
             proj_result = project_to_basis(Aell, self.edges, exclude_zero=False)[0]
             result.append(tuple(np.squeeze(proj_result[ii]) for ii in [2, -1]))
             k, nmodes = proj_result[0], proj_result[3]
@@ -1692,22 +1700,22 @@ class MeshFFTPower(BaseClass):
             Aell = ComplexField(self.pm)
 
             # Spherical harmonic kernels (for ell > 0)
-            Ylms = [[get_real_Ylm(ell, m) for m in range(-ell, ell+1)] for ell in nonzeroells]
+            Ylms = [[get_real_Ylm(ell, m) for m in range(-ell, ell + 1)] for ell in nonzeroells]
 
-            offset = self.boxcenter - self.boxsize/2.
+            offset = self.boxcenter - self.boxsize / 2.
             # NOTE: we do not apply half cell shift as in nbodykit below
-            #offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize / self.nmesh # in nbodykit
-            #offset = self.boxcenter + 0.5*self.boxsize / self.nmesh # in nbodykit
+            # offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize / self.nmesh # in nbodykit
+            # offset = self.boxcenter + 0.5*self.boxsize / self.nmesh # in nbodykit
 
             def _safe_divide(num, denom):
                 with np.errstate(divide='ignore', invalid='ignore'):
-                    toret = num/denom
+                    toret = num / denom
                 toret[denom == 0.] = 0.
                 return toret
 
             # The real-space grid
             xhat = [xx.real.astype('f8') + offset[ii] for ii, xx in enumerate(_transform_rslab(rfield1.slabs.optx, self.boxsize))]
-            #xhat = [xx.astype('f8') + offset[ii] for ii, xx in enumerate(self.mesh1.slabs.optx)]
+            # xhat = [xx.astype('f8') + offset[ii] for ii, xx in enumerate(self.mesh1.slabs.optx)]
             xnorm = np.sqrt(sum(xx**2 for xx in xhat))
             xhat = [_safe_divide(xx, xnorm) for xx in xhat]
             del xnorm
@@ -1752,7 +1760,7 @@ class MeshFFTPower(BaseClass):
             # Calculate the power spectrum multipoles, slab-by-slab to save memory
             # This computes (Aell of field #1) * (A0 of field #2).conj()
             for islab in range(A0.shape[0]):
-                Aell[islab,...] = Aell[islab].conj() * A0[islab]
+                Aell[islab, ...] = Aell[islab].conj() * A0[islab]
 
             # Project on to 1d k-basis (averaging over mu=[-1,1])
             proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
@@ -1764,7 +1772,7 @@ class MeshFFTPower(BaseClass):
         if swap: power, power_zero = (tmp.conj() for tmp in (power, power_zero))
         # Format the power results into :class:`PowerSpectrumMultipoles` instance
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
-        kwargs = {'wnorm':self.wnorm, 'shotnoise_nonorm':self.shotnoise*self.wnorm, 'attrs':self.attrs, 'mpicomm':self.mpicomm}
+        kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': self.shotnoise * self.wnorm, 'attrs': self.attrs, 'mpicomm': self.mpicomm}
         self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
 
@@ -1773,15 +1781,15 @@ class CatalogFFTPower(MeshFFTPower):
     """Wrapper on :class:`MeshFFTPower` to estimate power spectrum directly from positions and weights."""
 
     def __init__(self, data_positions1, data_positions2=None, randoms_positions1=None, randoms_positions2=None,
-                shifted_positions1=None, shifted_positions2=None,
-                data_weights1=None, data_weights2=None, randoms_weights1=None, randoms_weights2=None,
-                shifted_weights1=None, shifted_weights2=None,
-                D1D2_twopoint_weights=None, D1R2_twopoint_weights=None, R1D2_twopoint_weights=None, D1S2_twopoint_weights=None, S1D2_twopoint_weights=None,
-                edges=None, ells=(0, 2, 4), los=None,
-                nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
-                resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
-                direct_engine='corrfunc', direct_limits=(0., 2./60.), direct_limit_type='degree',
-                wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                 shifted_positions1=None, shifted_positions2=None,
+                 data_weights1=None, data_weights2=None, randoms_weights1=None, randoms_weights2=None,
+                 shifted_weights1=None, shifted_weights2=None,
+                 D1D2_twopoint_weights=None, D1R2_twopoint_weights=None, R1D2_twopoint_weights=None, D1S2_twopoint_weights=None, S1D2_twopoint_weights=None,
+                 edges=None, ells=(0, 2, 4), los=None,
+                 nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
+                 resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
+                 direct_engine='corrfunc', direct_limits=(0., 2. / 60.), direct_limit_type='degree',
+                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTPower`, i.e. estimate power spectrum.
 
@@ -1874,7 +1882,7 @@ class CatalogFFTPower(MeshFFTPower):
             When ``boxsize`` is determined from input positions, take ``boxpad`` times the smallest box enclosing positions as ``boxsize``.
 
         wrap : bool, default=False
-            Whether to wrap input positions?
+            Whether to wrap input positions in [0, boxsize]?
             If ``False`` and input positions do not fit in the the box size, raise a :class:`ValueError`.
 
         dtype : string, dtype, default='f8'
@@ -1978,7 +1986,7 @@ class CatalogFFTPower(MeshFFTPower):
             tmp = _format_positions(locals()[name], position_type=position_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
             if tmp is not None:
                 bpositions.append(tmp)
-            label = name.replace('data_positions','D').replace('randoms_positions','R').replace('shifted_positions','S')
+            label = name.replace('data_positions', 'D').replace('randoms_positions', 'R').replace('shifted_positions', 'S')
             positions[label] = tmp
 
         weight_attrs = (weight_attrs or {}).copy()
@@ -1993,16 +2001,16 @@ class CatalogFFTPower(MeshFFTPower):
 
         bweights, n_bitwise_weights, weights = {}, {}, {}
         for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']:
-            label = name.replace('data_weights','D').replace('randoms_weights','R').replace('shifted_weights','S')
+            label = name.replace('data_weights', 'D').replace('randoms_weights', 'R').replace('shifted_weights', 'S')
             bweights[label], n_bitwise_weights[label] = _format_weights(locals()[name], weight_type=weight_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
             if n_bitwise_weights[label]:
                 bitwise_weight = bweights[label][:n_bitwise_weights[label]]
                 nrealizations = get_nrealizations(bitwise_weight)
                 weights[label] = get_inverse_probability_weight(bitwise_weight, noffset=noffset, nrealizations=nrealizations, default_value=default_value)
                 if len(bweights[label]) > n_bitwise_weights[label]:
-                    weights[label] *= bweights[label][n_bitwise_weights[label]] # individual weights
+                    weights[label] *= bweights[label][n_bitwise_weights[label]]  # individual weights
             elif len(bweights[label]):
-                weights[label] = bweights[label][0] # individual weights
+                weights[label] = bweights[label][0]  # individual weights
             else:
                 weights[label] = None
 
@@ -2013,16 +2021,16 @@ class CatalogFFTPower(MeshFFTPower):
             raise ValueError('randoms_positions2 or shifted_positions2 are provided, but not data_positions2')
 
         # Get box encompassing all catalogs
-        nmesh, boxsize, boxcenter = _get_box(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
+        nmesh, boxsize, boxcenter = _get_mesh_attrs(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
         if not isinstance(resampler, tuple):
-            resampler = (resampler,)*2
+            resampler = (resampler,) * 2
         if not isinstance(interlacing, tuple):
-            interlacing = (interlacing,)*2
+            interlacing = (interlacing,) * 2
 
         if wrap:
-            for position in positions.values():
+            for name, position in positions.items():
                 if position is not None:
-                    _wrap_in_place(position, boxsize, boxcenter - boxsize/2.)
+                    positions[name] = _wrap_positions(position, boxsize, boxcenter - boxsize / 2.)
 
         # Get catalog meshes
         def get_mesh(data_positions, data_weights=None, randoms_positions=None, randoms_weights=None, shifted_positions=None, shifted_weights=None, **kwargs):
@@ -2039,15 +2047,14 @@ class CatalogFFTPower(MeshFFTPower):
         # Now, run power spectrum estimation
         super(CatalogFFTPower, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
 
-
         if self.ells:
 
-            twopoint_weights = {'D1D2':D1D2_twopoint_weights, 'D1R2':D1R2_twopoint_weights, 'R1D2':R1D2_twopoint_weights, 'D1S2':D1S2_twopoint_weights, 'S1D2':S1D2_twopoint_weights}
+            twopoint_weights = {'D1D2': D1D2_twopoint_weights, 'D1R2': D1R2_twopoint_weights, 'R1D2': R1D2_twopoint_weights, 'D1S2': D1S2_twopoint_weights, 'S1D2': S1D2_twopoint_weights}
 
             pairs = [(1, 'D1', 'D2')]
             key = 'S' if with_shifted else 'R'
             if with_shifted or with_randoms:
-                #pairs.append((1, S1, S2))
+                # pairs.append((1, S1, S2))
                 pairs.append((-1, 'D1', '{}2'.format(key)))
                 pairs.append((-1, '{}1'.format(key), 'D2'))
 

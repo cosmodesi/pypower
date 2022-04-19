@@ -5,7 +5,6 @@ Implementation of odd wide-angle matrices:
 following https://arxiv.org/abs/2106.06324.
 """
 
-import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -208,7 +207,7 @@ class BaseMatrix(BaseClass):
             toret = []
             nout = 0
             for xout in self.xout:
-                sl = slice(nout, nout+len(xout))
+                sl = slice(nout, nout + len(xout))
                 toret.append(array[sl])
                 nout = sl.stop
             return toret
@@ -248,7 +247,7 @@ class BaseMatrix(BaseClass):
             line = []
             nout = 0
             for xout in self.xout:
-                slout = slice(nout, nout+len(xout))
+                slout = slice(nout, nout + len(xout))
                 line.append(self.value[slin, slout])
                 nout = slout.stop
             nin = slin.stop
@@ -356,7 +355,7 @@ class BaseMatrix(BaseClass):
             List of output projections to apply slicing to.
             Defaults to :attr:`projsout`.
         """
-        self.value = self.unpacked() # unpack first, as based on :attr:`xin`, :attr:`xout`
+        self.value = self.unpacked()  # unpack first, as based on :attr:`xin`, :attr:`xout`
 
         inprojs, masks, factors = {}, {}, {}
         for axis in ['in', 'out']:
@@ -383,7 +382,7 @@ class BaseMatrix(BaseClass):
                 selfii = selfprojs.index(proj)
                 indices = np.arange(len(x[selfii]))[slice(start, stop, 1)]
                 if indices.size:
-                    stopii = indices[-1] + 1 # somewhat hacky, but correct!
+                    stopii = indices[-1] + 1  # somewhat hacky, but correct!
                 else:
                     stopii = 0
                 masks[axis].append(np.arange(start, stopii, 1))
@@ -428,7 +427,7 @@ class BaseMatrix(BaseClass):
             Defaults to :attr:`projsout`.
         """
         # One could also set the slices, and call slice_x, but this is inefficient in case x is different for each projection
-        self.value = self.unpacked() # unpack first, as based on :attr:`xin`, :attr:`xout`
+        self.value = self.unpacked()  # unpack first, as based on :attr:`xin`, :attr:`xout`
 
         inprojs, masks = {}, {}
         for axis in ['in', 'out']:
@@ -496,7 +495,7 @@ class BaseMatrix(BaseClass):
             self.rebin_x(factorin=factorin, factorout=1, projsin=projsin, projsout=projsout, statistic=np.sum)
             return
 
-        self.value = self.unpacked() # unpack first, as based on :attr:`xin`, :attr:`xout`
+        self.value = self.unpacked()  # unpack first, as based on :attr:`xin`, :attr:`xout`
 
         inprojs, old_weights, new_weights = {}, {}, {}
         for axis in ['in', 'out']:
@@ -519,28 +518,28 @@ class BaseMatrix(BaseClass):
                     old_weights[axis].append(arrays[selfii])
                     if len(arrays[selfii]) % factor:
                         raise ValueError('Rebinning factor {} must divide size along axis {}'.format(factorname, axis))
-                    arrays[selfii] = utils.rebin(arrays[selfii], len(arrays[selfii])//factor, statistic=np.sum)
+                    arrays[selfii] = utils.rebin(arrays[selfii], len(arrays[selfii]) // factor, statistic=np.sum)
                     new_weights[axis].append(arrays[selfii])
             arrays = getattr(self, 'x{}'.format(axis))
             for ii, proj in enumerate(projs):
                 selfii = selfprojs.index(proj)
                 if old_weights:
-                    arrays[selfii] = utils.rebin(arrays[selfii]*old_weights[axis][ii], len(arrays[selfii])//factor, statistic=np.sum)/new_weights[axis][ii]
+                    arrays[selfii] = utils.rebin(arrays[selfii] * old_weights[axis][ii], len(arrays[selfii]) // factor, statistic=np.sum) / new_weights[axis][ii]
                 else:
-                    arrays[selfii] = utils.rebin(arrays[selfii], len(arrays[selfii])//factor, statistic=np.mean)
+                    arrays[selfii] = utils.rebin(arrays[selfii], len(arrays[selfii]) // factor, statistic=np.mean)
 
         for iin, projin in enumerate(inprojs['in']):
             selfiin = self.projsin.index(projin)
             for iout, projout in enumerate(inprojs['out']):
                 selfiout = self.projsout.index(projout)
                 tmp = self.value[selfiin][selfiout]
-                new_shape = tuple(s//f for s,f in zip(tmp.shape, (factorin, factorout)))
+                new_shape = tuple(s // f for s, f in zip(tmp.shape, (factorin, factorout)))
                 oweights, nweights = 1., 1.
                 for iaxis, (axis, ii) in enumerate(zip(['in', 'out'], [iin, iout])):
                     if axis in old_weights:
-                        oweights = oweights * np.expand_dims(old_weights[axis][ii], axis=1-iaxis)
-                        nweights = nweights * np.expand_dims(new_weights[axis][ii], axis=1-iaxis)
-                self.value[selfiin][selfiout] = utils.rebin(self.value[selfiin][selfiout]*oweights, new_shape, statistic=statistic)/nweights
+                        oweights = oweights * np.expand_dims(old_weights[axis][ii], axis=1 - iaxis)
+                        nweights = nweights * np.expand_dims(new_weights[axis][ii], axis=1 - iaxis)
+                self.value[selfiin][selfiout] = utils.rebin(self.value[selfiin][selfiout] * oweights, new_shape, statistic=statistic) / nweights
         self.value = np.bmat(self.value).A
 
     @classmethod
@@ -684,7 +683,7 @@ class BaseMatrix(BaseClass):
         iaxis = ['in', 'out'].index(axes[0])
         if not all(nx == self.nx[iaxis][0] for nx in self.nx[iaxis]):
             raise ValueError('Coordinates do not have same length along input axis {}'.format(axes[0]))
-        reverse = axes[1] % 2 == 0 # we want to sum over second axis of array
+        reverse = axes[1] % 2 == 0  # we want to sum over second axis of array
         if reverse: array = array.T
         shape = (len(projs), len(unpacked))
         if array.shape != shape:
@@ -747,12 +746,12 @@ def odd_wide_angle_coefficients(ell, wa_order=1, los='firstpoint'):
         raise ValueError('Only "firstpoint" and "endpoint" line-of-sight supported')
 
     def coefficient(ell):
-        return ell*(ell+1)/2./(2*ell+1)
+        return ell * (ell + 1) / 2. / (2 * ell + 1)
 
     sign = (-1)**(los == 'endpoint')
     if ell == 1:
-        return [ell + 1], [sign * coefficient(ell+1)]
-    return [ell-1, ell+1], [- sign * coefficient(ell-1), sign * coefficient(ell+1)]
+        return [ell + 1], [sign * coefficient(ell + 1)]
+    return [ell - 1, ell + 1], [- sign * coefficient(ell - 1), sign * coefficient(ell + 1)]
 
 
 class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
@@ -832,14 +831,14 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
         for projin in self.projsin:
             line = []
             for iprojout, projout in enumerate(self.projsout):
-                block = 0.*eye
+                block = 0. * eye
                 if projout.ell == projin.ell and projout.wa_order == projin.wa_order:
                     block = eye
                 else:
                     if projout.wa_order is None:
-                        wa_orders = self.wa_orders # sum over :math:`n`
+                        wa_orders = self.wa_orders  # sum over :math:`n`
                     else:
-                        wa_orders = [projout.wa_order] # projout.wa_order is 1
+                        wa_orders = [projout.wa_order]  # projout.wa_order is 1
                     for wa_order in wa_orders:
                         if wa_order != 1: continue
                         ells, coeffs = odd_wide_angle_coefficients(projout.ell, wa_order=wa_order, los=self.los)
@@ -848,7 +847,7 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
                             block += coeff * eye
                 line.append(block)
             self.projvalue.append(line)
-        self.projvalue = np.array(self.projvalue) # (in, out)
+        self.projvalue = np.array(self.projvalue)  # (in, out)
 
     @staticmethod
     def propose_out(projsin, wa_orders=1):
@@ -857,11 +856,11 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
             wa_orders = [wa_orders]
 
         projsin = [Projection(proj) for proj in projsin]
-        ellsin = [proj.ell for proj in projsin if proj.wa_order == 0] # only consider input wa_order = 0 multipoles
+        ellsin = [proj.ell for proj in projsin if proj.wa_order == 0]  # only consider input wa_order = 0 multipoles
         projsout = []
         for wa_order in wa_orders:
             for ellout in range(1, max(ellsin) + 2, 2):
-                if any(ell in ellsin for ell in odd_wide_angle_coefficients(ellout, wa_order=wa_order)[0]): # check input multipoles are provided
+                if any(ell in ellsin for ell in odd_wide_angle_coefficients(ellout, wa_order=wa_order)[0]):  # check input multipoles are provided
                     projsout.append(Projection(ell=ellout, wa_order=wa_order))
 
         return projsout
@@ -945,21 +944,21 @@ class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
         for projin in self.projsin:
             line = []
             for iprojout, projout in enumerate(self.projsout):
-                block = 0.*eye
+                block = 0. * eye
                 if projout.ell == projin.ell and projout.wa_order == projin.wa_order:
                     block = eye
                 else:
                     if projout.wa_order is None:
-                        wa_orders = self.wa_orders # sum over :math:`n`
+                        wa_orders = self.wa_orders  # sum over :math:`n`
                     else:
-                        wa_orders = [projout.wa_order] # projout.wa_order is 1
+                        wa_orders = [projout.wa_order]  # projout.wa_order is 1
                     for wa_order in wa_orders:
                         if wa_order != 1: continue
                         ells, coeffs = odd_wide_angle_coefficients(projout.ell, wa_order=wa_order, los=self.los)
                         if projin.wa_order == 0 and projin.ell in ells:
                             # - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} (if projin.ell == projout.ell - 1)
                             # or \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} (if projin.ell == projout.ell + 1)
-                            coeff = coeffs[ells.index(projin.ell)]/self.d
+                            coeff = coeffs[ells.index(projin.ell)] / self.d
                             if projin.ell == projout.ell + 1:
                                 coeff_spherical_bessel = - (projin.ell + 1)
                             else:
@@ -973,13 +972,13 @@ class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
                             tmp += np.diag(coeff / deltak, k=-1) - np.diag(coeff / deltak, k=1)
 
                             # taking care of corners
-                            tmp[0,0] += 2.*coeff / deltak[0]
-                            tmp[0,1] = -2.*coeff / deltak[0]
-                            tmp[-1,-1] -= 2.*coeff / deltak[-1]
-                            tmp[-1,-2] = 2.*coeff / deltak[-1]
-                            block += tmp.T # (in, out)
+                            tmp[0, 0] += 2. * coeff / deltak[0]
+                            tmp[0, 1] = -2. * coeff / deltak[0]
+                            tmp[-1, -1] -= 2. * coeff / deltak[-1]
+                            tmp[-1, -2] = 2. * coeff / deltak[-1]
+                            block += tmp.T  # (in, out)
                 line.append(block)
             self.value.append(line)
-        self.value = np.bmat(self.value).A # (in, out)
+        self.value = np.bmat(self.value).A  # (in, out)
 
     propose_out = CorrelationFunctionOddWideAngleMatrix.propose_out

@@ -13,15 +13,8 @@ from .utils import BaseClass
 from . import mpi, utils
 
 
-def _make_array(value, shape, dtype='f8'):
-    # Return numpy array filled with value
-    toret = np.empty(shape, dtype=dtype)
-    toret[...] = value
-    return toret
-
-
 def _normalize(array):
-    return array/utils.distance(array.T)[:,None]
+    return array / utils.distance(array.T)[:, None]
 
 
 def get_default_nrealizations(weights):
@@ -66,12 +59,12 @@ def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, defa
     """
     if nrealizations is None:
         nrealizations = get_default_nrealizations(weights[0])
-    #denom = noffset + sum(utils.popcount(w1 & w2) for w1, w2 in zip(*weights))
+    # denom = noffset + sum(utils.popcount(w1 & w2) for w1, w2 in zip(*weights))
     denom = noffset + sum(utils.popcount(_vlogical_and(*weight)) for weight in zip(*weights))
     mask = denom == 0
     denom[mask] = 1
     toret = np.empty_like(denom, dtype=dtype)
-    toret[...] = nrealizations/denom
+    toret[...] = nrealizations / denom
     toret[mask] = default_value
     return toret
 
@@ -81,7 +74,7 @@ def _format_positions(positions, position_type='xyz', dtype=None, copy=True, mpi
     # position_type in ["xyz", "rdd", "pos"]
 
     def __format_positions(positions):
-        if position_type == 'pos': # array of shape (N, 3)
+        if position_type == 'pos':  # array of shape (N, 3)
             positions = np.array(positions, dtype=dtype, copy=copy)
             if not np.issubdtype(positions.dtype, np.floating):
                 return None, 'Input position arrays should be of floating type, not {}'.format(positions.dtype)
@@ -104,15 +97,16 @@ def _format_positions(positions, position_type='xyz', dtype=None, copy=True, mpi
                 return None, 'All position arrays should be of the same type, you can e.g. provide dtype'
         if len(positions) != 3:
             return None, 'For position type = {}, please provide a list of 3 arrays for positions (found {:d})'.format(position_type, len(positions))
-        if position_type == 'rdd': # RA, Dec, distance
+        if position_type == 'rdd':  # RA, Dec, distance
             positions = utils.sky_to_cartesian(positions, degree=True)
         elif position_type != 'xyz':
             return None, 'Position type should be one of ["pos", "xyz", "rdd"]'
         return np.asarray(positions).T, None
 
     error = None
-    if positions is not None and (position_type == 'pos' or not all(position is None for position in positions)):
-        positions, error = __format_positions(positions) # return error separately to raise on all processes
+    if mpiroot is None or (mpicomm.rank == mpiroot):
+        if positions is not None and (position_type == 'pos' or not all(position is None for position in positions)):
+            positions, error = __format_positions(positions)  # return error separately to raise on all processes
     if mpicomm is not None:
         error = mpicomm.allgather(error)
     else:
@@ -137,9 +131,9 @@ def _format_weights(weights, weight_type='auto', size=None, dtype=None, copy=Tru
         individual_weights, bitwise_weights = [], []
         for w in weights:
             if np.issubdtype(w.dtype, np.integer):
-                if weight_type == 'product_individual': # enforce float individual weight
+                if weight_type == 'product_individual':  # enforce float individual weight
                     individual_weights.append(w)
-                else: # certainly bitwise weight
+                else:  # certainly bitwise weight
                     bitwise_weights.append(w)
             else:
                 individual_weights.append(w)
@@ -162,7 +156,7 @@ def _format_weights(weights, weight_type='auto', size=None, dtype=None, copy=Tru
             raise ValueError('mpiroot = None but weights are None/empty on some ranks')
     else:
         n = mpicomm.bcast(len(weights) if mpicomm.rank == mpiroot else None, root=mpiroot)
-        if mpicomm.rank != mpiroot: weights = [None]*n
+        if mpicomm.rank != mpiroot: weights = [None] * n
         weights = [mpi.scatter_array(weight, mpicomm=mpicomm, root=mpiroot) for weight in weights]
         n_bitwise_weights = mpicomm.bcast(n_bitwise_weights, root=mpiroot)
 
@@ -249,7 +243,7 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
 
     name = 'base'
 
-    def __init__(self, modes, positions1, positions2=None, weights1=None, weights2=None, ells=(0, 2, 4), limits=(0., 2./60.), limit_type='degree',
+    def __init__(self, modes, positions1, positions2=None, weights1=None, weights2=None, ells=(0, 2, 4), limits=(0., 2. / 60.), limit_type='degree',
                  position_type='xyz', weight_type='auto', weight_attrs=None, twopoint_weights=None, los='firstpoint', boxsize=None,
                  dtype='f8', mpiroot=None, mpicomm=mpi.COMM_WORLD, **kwargs):
         r"""
@@ -464,13 +458,13 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
                     if n_bitwise_weights2 == 0:
                         indweights = self.weights1[n_bitwise_weights1] if len(self.weights1) > n_bitwise_weights1 else 1.
                         self.weight_attrs['nrealizations'] = get_nrealizations(self.weights1[:n_bitwise_weights1])
-                        self.weights1 = [self._get_inverse_probability_weight(self.weights1[:n_bitwise_weights1])*indweights]
+                        self.weights1 = [self._get_inverse_probability_weight(self.weights1[:n_bitwise_weights1]) * indweights]
                         self.n_bitwise_weights = 0
                         if self.mpicomm.rank == 0: self.log_info('Setting IIP weights for first catalog.')
                     elif n_bitwise_weights1 == 0:
                         indweights = self.weights2[n_bitwise_weights2] if len(self.weights2) > n_bitwise_weights2 else 1.
                         self.weight_attrs['nrealizations'] = get_nrealizations(self.weights2[:n_bitwise_weights2])
-                        self.weights2 = [self._get_inverse_probability_weight(self.weights2[:n_bitwise_weights2])*indweights]
+                        self.weights2 = [self._get_inverse_probability_weight(self.weights2[:n_bitwise_weights2]) * indweights]
                         self.n_bitwise_weights = 0
                         if self.mpicomm.rank == 0: self.log_info('Setting IIP weights for second catalog.')
                     else:
@@ -509,18 +503,18 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
     def _mpi_decompose(self):
         positions1, positions2 = self.positions1, self.positions2
         weights1, weights2 = self.weights1, self.weights2
-        if self.limit_type == 'theta': # we decompose on the unit sphere: normalize positions, and put original positions in weights for decomposition
-            positions1 = self.positions1/utils.distance(self.positions1.T)[:,None]
+        if self.limit_type == 'theta':  # we decompose on the unit sphere: normalize positions, and put original positions in weights for decomposition
+            positions1 = self.positions1 / utils.distance(self.positions1.T)[:, None]
             weights1 = [self.positions1] + weights1
             if not self.autocorr:
-                positions2 = self.positions2/utils.distance(self.positions2.T)[:,None]
+                positions2 = self.positions2 / utils.distance(self.positions2.T)[:, None]
                 weights2 = [self.positions2] + weights2
         if self.with_mpi:
             (positions1, weights1), (positions2, weights2) = mpi.domain_decompose(self.mpicomm, self.limits[1], positions1, weights1=weights1,
                                                                                   positions2=positions2, weights2=weights2)
         limit_positions1, positions1, weights1 = positions1, positions1, weights1
         limit_positions2, positions2, weights2 = positions2, positions2, weights2
-        if self.limit_type == 'theta': # we remove original positions from the list of weights
+        if self.limit_type == 'theta':  # we remove original positions from the list of weights
             limit_positions1, positions1, weights1 = positions1, weights1[0], weights1[1:]
             if positions2 is not None:
                 limit_positions2, positions2, weights2 = positions2, weights2[0], weights2[1:]
@@ -542,9 +536,9 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
             else:
                 if self.twopoint_weights is None:
                     raise ValueError('{} without bitwise weights and twopoint_weights will yield zero total weights!'.format(self.weight_type))
-                weights = weights - 1. # twopoint_weights are provided, so we compute twopoint_weights - 1
+                weights = weights - 1.  # twopoint_weights are provided, so we compute twopoint_weights - 1
         if len(weights1) > self.n_bitwise_weights:
-            weights = weights * weights1[-1] * weights2[-1] # single individual weight, at the end
+            weights = weights * weights1[-1] * weights2[-1]  # single individual weight, at the end
         return weights
 
     def _sum_auto_weights(self):
@@ -553,7 +547,7 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
             return 0.
         weights = self._twopoint_weights(self.weights1, self.weights1)
         if weights.ndim == 0:
-            return self.size1*weights
+            return self.size1 * weights
         weights = np.sum(weights)
         if self.with_mpi:
             weights = self.mpicomm.allreduce(weights)
@@ -618,32 +612,31 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                 size_max += 10000
                 size1_downsample, size2_downsample = min(size1, size_max), min(size2, size_max)
                 rng = np.random.RandomState(seed=seed)
-                dpositions = np.concatenate([d[0][rng.choice(size, size_downsample, replace=False)] for d, size, size_downsample\
-                                            in zip([d1, d2], [size1, size2], [size1_downsample, size2_downsample])])
+                dpositions = np.concatenate([d[0][rng.choice(size, size_downsample, replace=False)] for d, size, size_downsample
+                                             in zip([d1, d2], [size1, size2], [size1_downsample, size2_downsample])])
                 tree = spatial.cKDTree(dpositions, **kwargs, boxsize=None)
                 npairs = len(tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray'))
-            npairs_downsample = 1 + 3 / max(npairs, 1)**0.5 # 3 sigma margin
-            npairs_downsample *= size1 / max(size1_downsample, 1) * size2 / max(size2_downsample, 1) # scale to size of d1 & d2
+            npairs_downsample = 1 + 3 / max(npairs, 1)**0.5  # 3 sigma margin
+            npairs_downsample *= size1 / max(size1_downsample, 1) * size2 / max(size2_downsample, 1)  # scale to size of d1 & d2
             nslabs = int(npairs_downsample / self._slab_npairs_max + 1.)
-            if nslabs == 1: # do not touch autocorrelation
+            if nslabs == 1:  # do not touch autocorrelation
                 yield (d2, d1) if swap else (d1, d2)
             else:
                 for islab in range(nslabs):
-                    sl = slice(islab*size2//nslabs, (islab+1)*size2//nslabs)
+                    sl = slice(islab * size2 // nslabs, (islab + 1) * size2 // nslabs)
                     tmp2 = tuple(d[sl] for d in d2[:-1]) + ([d[sl] for d in d2[-1]],)
                     yield (tmp2, d1) if swap else (d1, tmp2)
 
         def power_slab(result, distance, mu, weight, ells):
             for ill, ell in enumerate(ells):
-                tmp = weight * special.spherical_jn(ell, self.modes[:, None]*distance, derivative=False) * legendre[ill](mu)
+                tmp = weight * special.spherical_jn(ell, self.modes[:, None] * distance, derivative=False) * legendre[ill](mu)
                 result[ill] += np.sum(tmp, axis=-1)
 
         delta_tree, delta_sum = 0., 0.
 
         for (dlimit_positions1, dpositions1, dweights1), (dlimit_positions2, dpositions2, dweights2) in tree_slab(*self._mpi_decompose(), **kwargs):
 
-            autocorr = dpositions2 is dpositions1
-            #dlimit_positions = dlimit_positions1
+            # dlimit_positions = dlimit_positions1
             # Very unfortunately, cKDTree.query_pairs does not handle cross-correlations...
             # But I feel this could be changed super easily here:
             # https://github.com/scipy/scipy/blob/47bb6febaa10658c72962b9615d5d5aa2513fa3a/scipy/spatial/ckdtree/src/query_pairs.cxx#L210
@@ -654,17 +647,17 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             pairs = tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray')
             delta_tree += time.time() - start_i
             start_i = time.time()
-            distance = utils.distance((dlimit_positions[pairs[:,0]] - dlimit_positions[pairs[:,1]]).T)
+            distance = utils.distance((dlimit_positions[pairs[:, 0]] - dlimit_positions[pairs[:, 1]]).T)
             pairs = pairs[(distance >= self.limits[0]) & (distance < self.limits[1])]
 
-            #if not autocorr: # Let us remove restrict to the pairs 1 <-> 2 (removing 1 <-> 1 and 2 <-> 2)
-            pairs = pairs[(pairs[:,0] < dlimit_positions1.shape[0]) & (pairs[:,1] >= dlimit_positions1.shape[0])]
-            pairs[:,1] -= dlimit_positions1.shape[0]
+            # if not autocorr: # Let us remove restrict to the pairs 1 <-> 2 (removing 1 <-> 1 and 2 <-> 2)
+            pairs = pairs[(pairs[:, 0] < dlimit_positions1.shape[0]) & (pairs[:, 1] >= dlimit_positions1.shape[0])]
+            pairs[:, 1] -= dlimit_positions1.shape[0]
             del tree
             del dlimit_positions
 
-            dpositions1, dpositions2 = dpositions1[pairs[:,0]], dpositions2[pairs[:,1]]
-            dweights1, dweights2 = [w[pairs[:,0]] for w in dweights1], [w[pairs[:,1]] for w in dweights2]
+            dpositions1, dpositions2 = dpositions1[pairs[:, 0]], dpositions2[pairs[:, 1]]
+            dweights1, dweights2 = [w[pairs[:, 0]] for w in dweights1], [w[pairs[:, 1]] for w in dweights2]
             del pairs
             del distance
 
@@ -676,18 +669,18 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             distances[mask_zero] = 1.
             if self.los_type == 'global':
                 los = self.los
-                mu = np.sum(diff * los, axis=-1)/distances
+                mu = np.sum(diff * los, axis=-1) / distances
             else:
                 if self.los_type == 'firstpoint':
-                    mu = np.sum(diff * _normalize(dpositions1), axis=-1)/distances
-                    #if autocorr:
-                    #    mu2 = - np.sum(diff * _normalize(dpositions2), axis=-1)/distances # i>j and i<j
+                    mu = np.sum(diff * _normalize(dpositions1), axis=-1) / distances
+                    # if autocorr:
+                    #     mu2 = - np.sum(diff * _normalize(dpositions2), axis=-1)/distances # i>j and i<j
                 elif self.los_type == 'endpoint':
-                    mu = np.sum(diff * _normalize(dpositions2), axis=-1)/distances
-                    #if autocorr:
-                    #    mu2 = - np.sum(diff * _normalize(dpositions1), axis=-1)/distances # i>j and i<j
+                    mu = np.sum(diff * _normalize(dpositions2), axis=-1) / distances
+                    # if autocorr:
+                    #     mu2 = - np.sum(diff * _normalize(dpositions1), axis=-1)/distances # i>j and i<j
                 elif self.los_type == 'midpoint':
-                    mu = np.sum(diff * _normalize(dpositions1 + dpositions2), axis=-1)/distances
+                    mu = np.sum(diff * _normalize(dpositions1 + dpositions2), axis=-1) / distances
             del diff
             distances[mask_zero] = 0.
 
@@ -696,15 +689,15 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             npairs = distances.size
 
             for islab in range(nslabs_pairs):
-                sl = slice(islab*npairs//nslabs_pairs, (islab+1)*npairs//nslabs_pairs, 1)
+                sl = slice(islab * npairs // nslabs_pairs, (islab + 1) * npairs // nslabs_pairs, 1)
                 d = distances[sl]
                 w = 1. if weights.ndim == 0 else weights[sl]
                 if self.los_type in ['global', 'midpoint']:
                     power_slab(result, d, mu[sl], w, ells)
-                else: # firstpoint, endpoint
+                else:  # firstpoint, endpoint
                     power_slab(result, d, mu[sl], w, ells)
-                    #if autocorr:
-                    #    power_slab(result, d, mu2[sl], w, ells)
+                    # if autocorr:
+                    #     power_slab(result, d, mu2[sl], w, ells)
 
             delta_sum += time.time() - start_i
 
@@ -713,7 +706,7 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             self.log_info('Sum over pairs took {:.2f} s.'.format(delta_sum))
 
         self.power_nonorm = self.mpicomm.allreduce(result)
-        if self.autocorr and self.limits[0] <= 0.: # remove auto-pairs
+        if self.autocorr and self.limits[0] <= 0.:  # remove auto-pairs
             power_slab(self.power_nonorm, 0., 0., -self._sum_auto_weights(), ells)
 
         self.power_nonorm = self.power_nonorm.astype('c16')
@@ -745,7 +738,7 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
         (dlimit_positions1, dpositions1, dweights1), (dlimit_positions2, dpositions2, dweights2) = self._mpi_decompose()
 
         if self.los_type not in ['firstpoint', 'endpoint', 'midpoint']:
-            raise TwoPointCounterError('Corrfunc only supports midpoint / firstpoint / endpoint line-of-sight')
+            raise ValueError('Corrfunc only supports midpoint / firstpoint / endpoint line-of-sight')
         los_type = self.los_type
         if self.los_type == 'endpoint':
             los_type = 'firstpoint'
@@ -757,10 +750,10 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
         weight_type = None
         weight_attrs = None
 
-        weights1, weights2 = dweights1.copy(), dweights2.copy() # copy lists
+        weights1, weights2 = dweights1.copy(), dweights2.copy()  # copy lists
         if self.n_bitwise_weights:
             weight_type = 'inverse_bitwise'
-            dtype = {4:np.int32, 8:np.int64}[self.dtype.itemsize]
+            dtype = {4: np.int32, 8: np.int64}[self.dtype.itemsize]
 
             def reformat_bitweights(weights):
                 return utils.reformat_bitarrays(*weights[:self.n_bitwise_weights], dtype=dtype) + weights[self.n_bitwise_weights:]
@@ -768,7 +761,7 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
             weights1 = reformat_bitweights(dweights1)
             if not autocorr:
                 weights2 = reformat_bitweights(dweights2)
-            weight_attrs = (self.weight_attrs['noffset'], self.weight_attrs['default_value']/self.weight_attrs['nrealizations'])
+            weight_attrs = (self.weight_attrs['noffset'], self.weight_attrs['default_value'] / self.weight_attrs['nrealizations'])
 
         elif dweights1:
             weight_type = 'pair_product'
@@ -781,16 +774,16 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
 
         prefactor = self.weight_attrs['nrealizations'] if self.n_bitwise_weights else 1
 
-        if self.weight_type == 'inverse_bitwise_minus_individual': # let's add weight to be subtracted
+        if self.weight_type == 'inverse_bitwise_minus_individual':  # let's add weight to be subtracted
             weight_type = 'inverse_bitwise'
             if not dweights1[self.n_bitwise_weights:]:
                 weights1.append(np.ones(len(dlimit_positions1), dtype=self.dtype))
                 if not autocorr:
                     weights2.append(np.ones(len(dlimit_positions2), dtype=self.dtype))
             if self.n_bitwise_weights:
-                weights1.append(1./prefactor**0.5 * self._get_inverse_probability_weight(dweights1[:self.n_bitwise_weights]) * np.prod(dweights1[self.n_bitwise_weights:], axis=0))
+                weights1.append(1. / prefactor**0.5 * self._get_inverse_probability_weight(dweights1[:self.n_bitwise_weights]) * np.prod(dweights1[self.n_bitwise_weights:], axis=0))
                 if not autocorr:
-                    weights2.append(1./prefactor**0.5 * self._get_inverse_probability_weight(dweights2[:self.n_bitwise_weights]) * np.prod(dweights2[self.n_bitwise_weights:], axis=0))
+                    weights2.append(1. / prefactor**0.5 * self._get_inverse_probability_weight(dweights2[:self.n_bitwise_weights]) * np.prod(dweights2[self.n_bitwise_weights:], axis=0))
             else:
                 if self.twopoint_weights is None:
                     raise ValueError('{} without bitwise weights and twopoint_weights will yield zero total weights!'.format(self.weight_type))
@@ -808,7 +801,7 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
 
         limit_positions1, positions1 = dlimit_positions1.T, dpositions1.T
         if autocorr:
-            limit_positions2, positions2 = [None]*3, [None]*3
+            limit_positions2, positions2 = [None] * 3, [None] * 3
         else:
             limit_positions2, positions2 = dlimit_positions2.T, dpositions2.T
 
@@ -829,10 +822,10 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
         self.power_nonorm.shape = (len(self.modes), len(ells))
 
         self.power_nonorm = self.power_nonorm.T.astype('c16')
-        if self.autocorr and self.limits[0] <= 0.: # remove auto-pairs
+        if self.autocorr and self.limits[0] <= 0.:  # remove auto-pairs
             weights = self._sum_auto_weights()
             for ill, ell in enumerate(ells):
-                self.power_nonorm[ill] -=  weights * (2 * ell + 1) * special.legendre(ell)(0.) * special.spherical_jn(ell, 0., derivative=False)
+                self.power_nonorm[ill] -= weights * (2 * ell + 1) * special.legendre(ell)(0.) * special.spherical_jn(ell, 0., derivative=False)
 
         for ill, ell in enumerate(ells):
             # Note: in arXiv:1912.08803, eq. 26, should rather be sij = rj - ri

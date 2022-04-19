@@ -1,3 +1,4 @@
+from ._version import __version__
 from .mesh import CatalogMesh, ArrayMesh, ParticleMesh
 from .fft_power import CatalogFFTPower, MeshFFTPower, PowerSpectrumWedges, PowerSpectrumMultipoles, PowerSpectrumStatistics
 from .direct_power import DirectPower

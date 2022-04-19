@@ -5,7 +5,6 @@ import sys
 import time
 import logging
 import traceback
-import functools
 
 import numpy as np
 
@@ -15,8 +14,8 @@ def exception_handler(exc_type, exc_value, exc_traceback):
     # Do not print traceback if the exception has been handled and logged
     _logger_name = 'Exception'
     log = logging.getLogger(_logger_name)
-    line = '='*100
-    #log.critical(line[len(_logger_name) + 5:] + '\n' + ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback)) + line)
+    line = '=' * 100
+    # log.critical(line[len(_logger_name) + 5:] + '\n' + ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback)) + line)
     log.critical('\n' + line + '\n' + ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback)) + line)
     if exc_type is KeyboardInterrupt:
         log.critical('Interrupted by the user.')
@@ -27,7 +26,7 @@ def exception_handler(exc_type, exc_value, exc_traceback):
 def mkdir(dirname):
     """Try to create ``dirnm`` and catch :class:`OSError`."""
     try:
-        os.makedirs(dirname) # MPI...
+        os.makedirs(dirname)  # MPI...
     except OSError:
         return
 
@@ -55,8 +54,8 @@ def setup_logging(level=logging.INFO, stream=sys.stdout, filename=None, filemode
     """
     # Cannot provide stream and filename kwargs at the same time to logging.basicConfig, so handle different cases
     # Thanks to https://stackoverflow.com/questions/30861524/logging-basicconfig-not-creating-log-file-when-i-run-in-pycharm
-    if isinstance(level,str):
-        level = {'info':logging.INFO,'debug':logging.DEBUG,'warning':logging.WARNING}[level.lower()]
+    if isinstance(level, str):
+        level = {'info': logging.INFO, 'debug': logging.DEBUG, 'warning': logging.WARNING}[level.lower()]
     for handler in logging.root.handlers:
         logging.root.removeHandler(handler)
 
@@ -66,16 +65,16 @@ def setup_logging(level=logging.INFO, stream=sys.stdout, filename=None, filemode
 
         def format(self, record):
             self._style._fmt = '[%09.2f] ' % (time.time() - t0) + ' %(asctime)s %(name)-28s %(levelname)-8s %(message)s'
-            return super(MyFormatter,self).format(record)
+            return super(MyFormatter, self).format(record)
 
     fmt = MyFormatter(datefmt='%m-%d %H:%M ')
     if filename is not None:
         mkdir(os.path.dirname(filename))
-        handler = logging.FileHandler(filename,mode=filemode)
+        handler = logging.FileHandler(filename, mode=filemode)
     else:
         handler = logging.StreamHandler(stream=stream)
     handler.setFormatter(fmt)
-    logging.basicConfig(level=level,handlers=[handler],**kwargs)
+    logging.basicConfig(level=level, handlers=[handler], **kwargs)
     sys.excepthook = exception_handler
 
 
@@ -105,11 +104,11 @@ class BaseMetaClass(type):
 
             return logger
 
-        for level in ['debug','info','warning','error','critical']:
+        for level in ['debug', 'info', 'warning', 'error', 'critical']:
             setattr(cls, 'log_{}'.format(level), make_logger(level))
 
 
-class BaseClass(object,metaclass=BaseMetaClass):
+class BaseClass(object, metaclass=BaseMetaClass):
     """
     Base class that implements :meth:`copy`.
     To be used throughout this package.
@@ -144,8 +143,8 @@ class BaseClass(object,metaclass=BaseMetaClass):
             self.log_info('Saving {}.'.format(filename))
             mkdir(os.path.dirname(filename))
             np.save(filename, self.__getstate__(), allow_pickle=True)
-        #if self.with_mpi:
-        #    self.mpicomm.Barrier()
+        # if self.with_mpi:
+        #     self.mpicomm.Barrier()
 
     @classmethod
     def load(cls, filename):
@@ -158,6 +157,22 @@ class BaseClass(object,metaclass=BaseMetaClass):
 def distance(positions):
     """Return cartesian distance, taking coordinates along ``position`` first axis."""
     return np.sqrt(sum(pos**2 for pos in positions))
+
+
+def _make_array(value, shape, dtype='f8'):
+    # Return numpy array filled with value
+    toret = np.empty(shape, dtype=dtype)
+    toret[...] = value
+    return toret
+
+
+def _get_box(*positions):
+    """Return minimal box containing input positions."""
+    pos_min, pos_max = _make_array(np.inf, 3, dtype='f8'), _make_array(-np.inf, 3, dtype='f8')
+    for position in positions:
+        for pos in positions:
+            if pos.shape[0] > 0: pos_min, pos_max = np.min([pos_min, pos.min(axis=0)], axis=0), np.max([pos_max, pos.max(axis=0)], axis=0)
+    return pos_min, pos_max
 
 
 def cartesian_to_sky(positions, wrap=True, degree=True):
@@ -182,10 +197,10 @@ def cartesian_to_sky(positions, wrap=True, degree=True):
     """
     dist = distance(positions)
     ra = np.arctan2(positions[1], positions[0])
-    if wrap: ra %= 2.*np.pi
-    dec = np.arcsin(positions[2]/dist)
-    conversion = np.pi/180. if degree else 1.
-    return [ra/conversion, dec/conversion, dist]
+    if wrap: ra %= 2 * np.pi
+    dec = np.arcsin(positions[2] / dist)
+    conversion = np.pi / 180. if degree else 1.
+    return [ra / conversion, dec / conversion, dist]
 
 
 def sky_to_cartesian(rdd, degree=True, dtype=None):
@@ -206,12 +221,12 @@ def sky_to_cartesian(rdd, degree=True, dtype=None):
         Positions x, y, z in cartesian coordinates.
     """
     conversion = 1.
-    if degree: conversion = np.pi/180.
+    if degree: conversion = np.pi / 180.
     ra, dec, dist = rdd
-    cos_dec = np.cos(dec*conversion)
-    x = dist*cos_dec*np.cos(ra*conversion)
-    y = dist*cos_dec*np.sin(ra*conversion)
-    z = dist*np.sin(dec*conversion)
+    cos_dec = np.cos(dec * conversion)
+    x = dist * cos_dec * np.cos(ra * conversion)
+    y = dist * cos_dec * np.sin(ra * conversion)
+    z = dist * np.sin(dec * conversion)
     return [x, y, z]
 
 
@@ -246,13 +261,13 @@ def rebin(array, new_shape, statistic=np.sum):
     for d, c in zip(new_shape, array.shape):
         if c % d != 0:
             raise ValueError('New shape should divide current shape, but {:d} % {:d} = {:d}'.format(c, d, c % d))
-        pairs.append((d, c//d))
+        pairs.append((d, c // d))
 
-    flattened = [l for p in pairs for l in p]
+    flattened = [ll for p in pairs for ll in p]
     array = array.reshape(flattened)
 
     for i in range(len(new_shape)):
-        array = statistic(array, axis=-1*(i+1))
+        array = statistic(array, axis=-1 * (i + 1))
 
     return array
 
@@ -266,8 +281,8 @@ def popcount(*arrays):
     Return number of 1 bits in each value of input array.
     Inspired from https://github.com/numpy/numpy/issues/16325.
     """
-    #if not np.issubdtype(array.dtype, np.unsignedinteger):
-    #    raise ValueError('input array must be an unsigned int dtype')
+    # if not np.issubdtype(array.dtype, np.unsignedinteger):
+    #     raise ValueError('input array must be an unsigned int dtype')
     toret = _popcount_lookuptable[arrays[0].view((np.uint8, (arrays[0].dtype.itemsize,)))].sum(axis=-1)
     for array in arrays[1:]: toret += popcount(array)
     return toret
@@ -353,12 +368,12 @@ def reformat_bitarrays(*arrays, dtype=np.uint64, copy=True):
                 nremainingbytes = dtype.itemsize
             newarray = toret[-1]
             nremainingbytes -= 1
-            newarray.append(arrayofbyte[...,None])
+            newarray.append(arrayofbyte[..., None])
     for iarray, array in enumerate(toret):
         npad = dtype.itemsize - len(array)
-        if npad: array += [np.zeros_like(array[0])]*npad
+        if npad: array += [np.zeros_like(array[0])] * npad
         if len(array) > 1 or copy:
             toret[iarray] = np.squeeze(np.concatenate(array, axis=-1).view(dtype), axis=-1)
         else:
-            toret[iarray] = array[0][...,0]
+            toret[iarray] = array[0][..., 0]
     return toret

@@ -3,7 +3,6 @@ import time
 import tempfile
 
 import numpy as np
-from matplotlib import pyplot as plt
 
 from cosmoprimo.fiducial import DESI
 from mockfactory import LagrangianLinearMock, Catalog
@@ -30,18 +29,18 @@ def save_lognormal():
     power = DESI().get_fourier().pk_interpolator().to_1d(z=z)
     f = 0.8
     mock = LagrangianLinearMock(power, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
-    mock.set_real_delta_field(bias=bias-1.)
+    mock.set_real_delta_field(bias=bias - 1.)
     mock.set_analytic_selection_function(nbar=nbar)
     mock.poisson_sample(seed=seed, resampler='cic', compensate=True)
     mock.set_rsd(f=f, los=los)
-    #mock.set_rsd(f=f)
+    # mock.set_rsd(f=f)
     data = mock.to_catalog()
     offset = mock.boxcenter - mock.boxsize / 2.
     data['Position'] = (data['Position'] - offset) % mock.boxsize + offset
-    randoms = RandomBoxCatalog(nbar=4.*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=44)
+    randoms = RandomBoxCatalog(nbar=4. * nbar, boxsize=boxsize, boxcenter=boxcenter, seed=44)
 
     for catalog in [data, randoms]:
-        catalog['NZ'] = nbar*catalog.ones()
+        catalog['NZ'] = nbar * catalog.ones()
         catalog['WEIGHT_FKP'] = np.ones(catalog.size, dtype='f8')
 
     data.save_fits(data_fn)
@@ -49,10 +48,10 @@ def save_lognormal():
 
 
 def test_interp():
-    x, y = (np.linspace(0., 10., 10),)*2
+    x, y = (np.linspace(0., 10., 10),) * 2
     from scipy.interpolate import UnivariateSpline, RectBivariateSpline
     assert UnivariateSpline(x, y, k=1, s=0, ext=3)(-1) == 0.
-    assert RectBivariateSpline(x, y, y[:,None] * y, kx=1, ky=1, s=0)(12, 8, grid=False) == 80
+    assert RectBivariateSpline(x, y, y[:, None] * y, kx=1, ky=1, s=0)(12, 8, grid=False) == 80
 
 
 class MemoryMonitor(object):
@@ -88,7 +87,7 @@ class MemoryMonitor(object):
         """Update memory usage."""
         mem = self.proc.memory_info().rss / 1e6
         t = time.time()
-        msg = 'using {:.3f} [Mb] (increase of {:.3f} [Mb]) after {:.3f} [s]'.format(mem,mem-self.mem,t-self.time)
+        msg = 'using {:.3f} [Mb] (increase of {:.3f} [Mb]) after {:.3f} [s]'.format(mem, mem - self.mem, t - self.time)
         if log:
             msg = '[{}] {}'.format(log, msg)
         print(msg, flush=True)
@@ -102,16 +101,16 @@ class MemoryMonitor(object):
 
 def test_fft():
     from pmesh.pm import ParticleMesh, RealField
-    boxsize, nmesh = [1000.]*3, [64]*3
+    boxsize, nmesh = [1000.] * 3, [64] * 3
     pm = ParticleMesh(BoxSize=boxsize, Nmesh=nmesh, dtype='c16', comm=mpi.COMM_WORLD)
     rfield = RealField(pm)
     shape = rfield.value.shape
-    #rfield[...] = 1.
+    # rfield[...] = 1.
     rfield[...] = np.random.uniform(0., 1., size=shape)
     cfield = rfield.r2c().value
-    #print(cfield[0,0,0])
+    # print(cfield[0,0,0])
     from numpy import fft
-    ref = fft.fftn(rfield.value)/np.prod(shape)
+    ref = fft.fftn(rfield.value) / np.prod(shape)
     assert np.allclose(cfield, ref)
 
     a = np.arange(10)
@@ -139,7 +138,7 @@ def test_fft():
     test = fft.irfft(fft.rfft(a) * fft.rfft(b).conj()).conj()
     assert np.allclose(test, c)
 
-    with MemoryMonitor() as mem:
+    with MemoryMonitor():
         pm = ParticleMesh(BoxSize=boxsize, Nmesh=nmesh, dtype='c16', comm=mpi.COMM_WORLD)
         rfield = RealField(pm)
 
@@ -151,29 +150,32 @@ def test_power_statistic():
     for dtype in ['f8', 'c16']:
 
         edges = np.linspace(0., 0.2, 11)
-        modes = (edges[:-1] + edges[1:])/2.
+        modes = (edges[:-1] + edges[1:]) / 2.
         nmodes = np.arange(modes.size)
         ells = (0, 2, 4)
-        power = [ill * np.arange(nmodes.size, dtype='f8') + 0.1j*(np.arange(nmodes.size, dtype='f8') - 5) for ill in ells]
+        power = [ill * np.arange(nmodes.size, dtype='f8') + 0.1j * (np.arange(nmodes.size, dtype='f8') - 5) for ill in ells]
         power = PowerSpectrumStatistics(edges, modes, power, nmodes, ells, statistic='multipole')
         power_ref = power.copy()
         power.rebin(factor=2)
-        assert power.power.shape[1] == power_ref.power.shape[1]//2 # poles are first dimension
-        k = (power_ref.modes[0][::2] * power_ref.nmodes[::2] + power_ref.modes[0][1::2] * power_ref.nmodes[1::2])/(power_ref.nmodes[::2] + power_ref.nmodes[1::2])
+        assert power.power.shape[1] == power_ref.power.shape[1] // 2  # poles are first dimension
+        k = (power_ref.modes[0][::2] * power_ref.nmodes[::2] + power_ref.modes[0][1::2] * power_ref.nmodes[1::2]) / (power_ref.nmodes[::2] + power_ref.nmodes[1::2])
         assert np.allclose(power.k, k)
         assert np.allclose(power.kedges, np.linspace(0., 0.2, 6))
-        assert power.shape == (modes.size//2,)
+        assert power.shape == (modes.size // 2,)
         assert np.allclose(power_ref[::2].power_nonorm, power.power_nonorm)
         power2 = power_ref.copy()
         power2.select((0., 0.1))
         assert np.all(power2.modes[0] <= 0.1)
-        def mid(edges): return (edges[:-1] + edges[1:])/2.
+
+        def mid(edges):
+            return (edges[:-1] + edges[1:]) / 2.
+
         for axis in range(power.ndim): assert np.allclose(power.modeavg(axis=axis, method='mid'), mid(power.edges[axis]))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            #tmp_dir = '_tests'
-            #power.mpicomm = mpicomm # to get a Barrier (otherwise the directory on root=0 may be deleted before other ranks access it)
-            #fn = mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
+            # tmp_dir = '_tests'
+            # power.mpicomm = mpicomm # to get a Barrier (otherwise the directory on root=0 may be deleted before other ranks access it)
+            # fn = mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             fn = os.path.join(tmp_dir, 'tmp.npy')
             power.save(fn)
             test = PowerSpectrumStatistics.load(fn)
@@ -200,29 +202,29 @@ def test_power_statistic():
             assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
             assert np.isnan(power(k=-1., ell=0, complex=complex))
             assert not np.isnan(power(k=modes, complex=complex)).any()
-            assert np.allclose(power(k=[0.1,0.2], ell=power.ells), power(k=[0.1,0.2]))
-            assert power(k=[0.1,0.2], complex=complex).shape == (len(power.ells), 2)
-            assert power(k=[0.1,0.2], ell=0, complex=complex).shape == (2,)
+            assert np.allclose(power(k=[0.1, 0.2], ell=power.ells), power(k=[0.1, 0.2]))
+            assert power(k=[0.1, 0.2], complex=complex).shape == (len(power.ells), 2)
+            assert power(k=[0.1, 0.2], ell=0, complex=complex).shape == (2,)
             assert power(k=0.1, ell=0, complex=complex).shape == ()
             assert power(k=0.1, ell=(0, 2), complex=complex).shape == (2,)
-            assert np.allclose(power(k=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], complex=complex)[...,::-1], atol=0)
-            assert np.allclose(power(k=[0.2, 0.1], ell=(0, 2), complex=complex), power(k=[0.1, 0.2], ell=(2, 0), complex=complex)[::-1,::-1], atol=0)
+            assert np.allclose(power(k=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], complex=complex)[..., ::-1], atol=0)
+            assert np.allclose(power(k=[0.2, 0.1], ell=(0, 2), complex=complex), power(k=[0.1, 0.2], ell=(2, 0), complex=complex)[::-1, ::-1], atol=0)
 
         edges = (np.linspace(0., 0.2, 11), np.linspace(-1., 1., 21))
-        modes = np.meshgrid(*((e[:-1] + e[1:])/2 for e in edges), indexing='ij')
+        modes = np.meshgrid(*((e[:-1] + e[1:]) / 2 for e in edges), indexing='ij')
         nmodes = np.arange(modes[0].size, dtype='i8').reshape(modes[0].shape)
         power = np.arange(nmodes.size, dtype='f8').reshape(nmodes.shape)
         power = power + 0.1j * (power - 5)
         power = PowerSpectrumStatistics(edges, modes, power, nmodes, statistic='wedge')
         power_ref = power.copy()
         power.rebin(factor=(2, 2))
-        assert power.power.shape[0] == power_ref.power.shape[0]//2
+        assert power.power.shape[0] == power_ref.power.shape[0] // 2
         assert power.modes[0].shape == (5, 10)
-        assert not np.isnan(power(0.,0.))
+        assert not np.isnan(power(0., 0.))
         assert np.isnan(power(-1., 0.))
         power.rebin(factor=(1, 10))
         assert power.power_nonorm.shape == (5, 1)
-        assert np.allclose(power_ref[::2,::20].power_nonorm, power.power_nonorm, atol=0)
+        assert np.allclose(power_ref[::2, ::20].power_nonorm, power.power_nonorm, atol=0)
         assert power_ref[1:7:2].shape[0] == 3
         power2 = power_ref.copy()
         power2.select(None, (0., 0.5))
@@ -231,7 +233,7 @@ def test_power_statistic():
         power = power_ref
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            #tmp_dir = '_tests'
+            # tmp_dir = '_tests'
             fn = os.path.join(tmp_dir, 'tmp_wedges.txt')
             power.save_txt(fn, complex=False)
             test = np.loadtxt(fn, unpack=True)
@@ -243,8 +245,8 @@ def test_power_statistic():
 
         for muedges in [np.linspace(-1., 1., 21), np.linspace(-1., 1., 2)]:
             edges = (np.linspace(0., 0.2, 11), muedges)
-            modes = np.meshgrid(*((e[:-1] + e[1:])/2 for e in edges), indexing='ij')
-            nmodes = np.ones(tuple(len(e)-1 for e in edges), dtype='i8')
+            modes = np.meshgrid(*((e[:-1] + e[1:]) / 2 for e in edges), indexing='ij')
+            nmodes = np.ones(tuple(len(e) - 1 for e in edges), dtype='i8')
             power = np.arange(nmodes.size, dtype='f8').reshape(nmodes.shape)
             power = power + 0.1j * (power - 5)
             power = PowerSpectrumStatistics(edges, modes, power, nmodes, statistic='wedge')
@@ -253,15 +255,15 @@ def test_power_statistic():
                 assert np.allclose(power(complex=complex, return_k=True)[1], power.get_power(complex=complex), equal_nan=True)
                 assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
                 assert not np.isnan(power(0., 0., complex=complex))
-                assert np.isnan(power([-1.]*5, 0., complex=complex)).all()
-                assert np.isnan(power(-1., [0.]*5, complex=complex)).all()
-                assert power(k=[0.1,0.2], complex=complex).shape == (2, power.shape[1])
-                assert power(k=[0.1,0.2], mu=[0.3], complex=complex).shape == (2, 1)
-                assert power(k=[[0.1,0.2]]*3, mu=[[0.3]]*2, complex=complex).shape == (3, 2, 2, 1)
-                assert power(k=[0.1,0.2], mu=0., complex=complex).shape == (2,)
+                assert np.isnan(power([-1.] * 5, 0., complex=complex)).all()
+                assert np.isnan(power(-1., [0.] * 5, complex=complex)).all()
+                assert power(k=[0.1, 0.2], complex=complex).shape == (2, power.shape[1])
+                assert power(k=[0.1, 0.2], mu=[0.3], complex=complex).shape == (2, 1)
+                assert power(k=[[0.1, 0.2]] * 3, mu=[[0.3]] * 2, complex=complex).shape == (3, 2, 2, 1)
+                assert power(k=[0.1, 0.2], mu=0., complex=complex).shape == (2,)
                 assert power(k=0.1, mu=0., complex=complex).shape == ()
                 assert power(k=0.1, mu=[0., 0.1], complex=complex).shape == (2,)
-                assert np.allclose(power(k=[0.2, 0.1], mu=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], mu=[0.1, 0.2], complex=complex)[::-1,::-1], atol=0)
+                assert np.allclose(power(k=[0.2, 0.1], mu=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], mu=[0.1, 0.2], complex=complex)[::-1, ::-1], atol=0)
 
 
 def test_ylm():
@@ -270,9 +272,9 @@ def test_ylm():
     x, y, z = [rng.uniform(0., 1., size) for i in range(3)]
     r = np.sqrt(x**2 + y**2 + z**2)
     r[r == 0.] = 1.
-    xhat, yhat, zhat = x/r, y/r, z/r
+    xhat, yhat, zhat = x / r, y / r, z / r
     for ell in range(8):
-        for m in range(-ell, ell+1):
+        for m in range(-ell, ell + 1):
             ylm = get_real_Ylm(ell, m)(xhat, yhat, zhat)
             ylm_scipy = get_real_Ylm(ell, m, modules='scipy')(xhat, yhat, zhat)
             assert np.allclose(ylm_scipy, ylm)
@@ -281,7 +283,7 @@ def test_ylm():
 def test_find_edges():
     x = np.meshgrid(np.arange(10.), np.arange(10.), indexing='ij')
     x0 = np.ones(len(x), dtype='f8')
-    edges = find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD)
+    find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD)
 
 
 def test_project():
@@ -291,7 +293,7 @@ def test_project():
     power = DESI().get_fourier().pk_interpolator().to_1d(z=z)
     mock = LagrangianLinearMock(power, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=42, unitary_amplitude=False)
     # This is Lagrangian bias, Eulerian bias - 1
-    mock.set_real_delta_field(bias=bias-1)
+    mock.set_real_delta_field(bias=bias - 1)
     mesh = mock.mesh_delta_r + 1.
     sum = mesh.csum()
     mesh = mesh.r2c()
@@ -306,21 +308,21 @@ def test_project():
     assert result[1] is not None
     ells = (0, 2)
     result = project_to_basis(mesh, edges, los=(0, 0, 1), ells=ells, antisymmetric=False, exclude_zero=True)
-    zero = sum**2/mesh.pm.Nmesh.prod()**2
-    assert np.allclose(result[0][-1], [((e[0] <= 0.) & (e[1] > 0.))*zero for e in zip(edges[1][:-1], edges[1][1:])])
+    zero = sum**2 / mesh.pm.Nmesh.prod()**2
+    assert np.allclose(result[0][-1], [((e[0] <= 0.) & (e[1] > 0.)) * zero for e in zip(edges[1][:-1], edges[1][1:])])
     from scipy import special
-    assert np.allclose(result[1][-1], [(2*ell+1) * zero * special.legendre(ell)(0.) for ell in ells])
-    #power = MeshFFTPower(mesh_real, ells=(0, 2), los='x', edges=({'step':0.001}, np.linspace(-1., 1., 3)))
+    assert np.allclose(result[1][-1], [(2 * ell + 1) * zero * special.legendre(ell)(0.) for ell in ells])
+    # power = MeshFFTPower(mesh_real, ells=(0, 2), los='x', edges=({'step':0.001}, np.linspace(-1., 1., 3)))
 
 
 def test_field_power():
 
     z = 1.
-    bias, nbar, nmesh, boxsize, boxcenter = 2.0, 1e-3, 64, 1000., 500.
+    bias, nmesh, boxsize, boxcenter = 2.0, 64, 1000., 500.
     power = DESI().get_fourier().pk_interpolator().to_1d(z=z)
     mock = LagrangianLinearMock(power, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=42, unitary_amplitude=False)
     # This is Lagrangian bias, Eulerian bias - 1
-    mock.set_real_delta_field(bias=bias-1)
+    mock.set_real_delta_field(bias=bias - 1)
     mesh_real = mock.mesh_delta_r + 1.
 
     kedges = np.linspace(0., 0.4, 11)
@@ -342,17 +344,17 @@ def test_field_power():
 
     def check_wedges(power, ref_power):
         for imu, muavg in enumerate(power.muavg):
-            mask = power.nmodes[:,imu] > 0
+            mask = power.nmodes[:, imu] > 0
             if hasattr(ref_power, 'k'):
-                k, mu, modes, pk = ref_power.k[:,imu], ref_power.mu[:,imu], ref_power.nmodes[:,imu], ref_power.power[:,imu] + ref_power.shotnoise
+                k, mu, modes, pk = ref_power.k[:, imu], ref_power.mu[:, imu], ref_power.nmodes[:, imu], ref_power.power[:, imu] + ref_power.shotnoise
             else:
-                k, mu, modes, pk = ref_power['k'][:,imu], ref_power['mu'][:,imu], ref_power['modes'][:,imu], ref_power['power'][:,imu].conj()
-                #n = (power.edges[1][imu] <= 0.) & (power.edges[1][imu+1] > 0.)
-                #assert power.nmodes[0, imu] == modes[0] - n # we do not include k = 0
-                #mask &= (power.edges[0][:-1] > 0.)
-            assert np.allclose(power.nmodes[mask,imu], modes[mask], atol=1e-6, rtol=3e-3, equal_nan=True)
-            assert np.allclose(power.k[mask,imu], k[mask], atol=1e-6, rtol=3e-3, equal_nan=True)
-            assert np.allclose(power.mu[mask,imu], mu[mask], atol=1e-6, rtol=3e-3, equal_nan=True)
+                k, mu, modes, pk = ref_power['k'][:, imu], ref_power['mu'][:, imu], ref_power['modes'][:, imu], ref_power['power'][:, imu].conj()
+                # n = (power.edges[1][imu] <= 0.) & (power.edges[1][imu+1] > 0.)
+                # assert power.nmodes[0, imu] == modes[0] - n # we do not include k = 0
+                # mask &= (power.edges[0][:-1] > 0.)
+            assert np.allclose(power.nmodes[mask, imu], modes[mask], atol=1e-6, rtol=3e-3, equal_nan=True)
+            assert np.allclose(power.k[mask, imu], k[mask], atol=1e-6, rtol=3e-3, equal_nan=True)
+            assert np.allclose(power.mu[mask, imu], mu[mask], atol=1e-6, rtol=3e-3, equal_nan=True)
             assert np.allclose(power(mu=muavg)[mask] + power.shotnoise, pk[mask], atol=1e-6, rtol=1e-3, equal_nan=True)
 
     def check_poles(power, ref_power):
@@ -362,20 +364,20 @@ def test_field_power():
                 k, modes, pk = ref_power.k, ref_power.nmodes, ref_power(ell=ell) + ref_power.shotnoise
             else:
                 k, modes, pk = ref_power['k'], ref_power['modes'], ref_power['power_{}'.format(ell)].conj()
-                #assert power.nmodes[0] == modes[0] - 1
-                #mask &= (power.edges[0][:-1] > 0.)
+                # assert power.nmodes[0] == modes[0] - 1
+                # mask &= (power.edges[0][:-1] > 0.)
             assert np.allclose(power.nmodes[mask], modes[mask], atol=1e-6, rtol=5e-3)
             assert np.allclose(power.k[mask], k[mask], atol=1e-6, rtol=5e-3)
             mask[0] = False
-            assert np.allclose(power(ell=ell)[mask] + (ell == 0)*power.shotnoise, pk[mask], atol=1e-3, rtol=1e-6)
-            assert np.allclose(power(ell=ell)[0] + (ell == 0)*power.shotnoise, pk[0], atol=1e-3, rtol=2e-3)
+            assert np.allclose(power(ell=ell)[mask] + (ell == 0) * power.shotnoise, pk[mask], atol=1e-3, rtol=1e-6)
+            assert np.allclose(power(ell=ell)[0] + (ell == 0) * power.shotnoise, pk[0], atol=1e-3, rtol=2e-3)
 
     from pypower import ParticleMesh
     pm = ParticleMesh(BoxSize=mesh_real.pm.BoxSize, Nmesh=mesh_real.pm.Nmesh, dtype='c16', comm=mesh_real.pm.comm)
     mesh_complex = pm.create(type='real')
     mesh_complex[...] = mesh_real[...]
 
-    for los in [(1,0,0), (0,1,0), (0,0,1)]:
+    for los in [(1, 0, 0), (0, 1, 0), (0, 0, 1)]:
         ref_power = get_ref_power(mesh_complex, los)
         ref_kedges = ref_power.power.edges['k']
         power = get_mesh_power(mesh_real, los, edges=(ref_kedges, muedges))
@@ -394,16 +396,15 @@ def test_field_power():
         check_wedges(power.wedges, c_power.wedges)
         check_poles(power.poles, c_power.poles)
 
-        #power = get_mesh_power(mesh_real, los, edges=(np.insert(ref_kedges, 0, -0.1), muedges))
-        #assert np.allclose(power.wedges.nmodes[0], [0, 0, 1, 0, 0]) and power.wedges.k[0,2] == 0.
-        #assert power.poles.nmodes[0] == 1 and power.poles.k[0] == 0.
-        #check_wedges(power.wedges[1:], ref_power.power)
-        #check_poles(power.poles[1:], ref_power.poles)
+        # power = get_mesh_power(mesh_real, los, edges=(np.insert(ref_kedges, 0, -0.1), muedges))
+        # assert np.allclose(power.wedges.nmodes[0], [0, 0, 1, 0, 0]) and power.wedges.k[0,2] == 0.
+        # assert power.poles.nmodes[0] == 1 and power.poles.k[0] == 0.
+        # check_wedges(power.wedges[1:], ref_power.power)
+        # check_poles(power.poles[1:], ref_power.poles)
 
 
 def test_mesh_power():
     boxsize = 600.
-    boxcenter = 0.
     nmesh = 128
     kedges = np.linspace(0., 0.3, 11)
     muedges = np.linspace(-1., 1., 5)
@@ -412,7 +413,7 @@ def test_mesh_power():
     resampler = 'cic'
     interlacing = 2
     dtype = 'f8'
-    data = Catalog.load_fits(data_fn)
+    data = Catalog.read(data_fn)
 
     def get_ref_power(data, los, dtype='c16'):
         los_array = [1. if ax == los else 0. for ax in 'xyz']
@@ -436,17 +437,17 @@ def test_mesh_power():
 
     def check_wedges(power, ref_power):
         for imu, mu in enumerate(power.muavg):
-            assert np.allclose(power.nmodes[:,imu], ref_power['modes'][:,imu], atol=1e-6, rtol=3e-3, equal_nan=True)
-            assert np.allclose(power.k[:,imu], ref_power['k'][:,imu], atol=1e-6, rtol=3e-3, equal_nan=True)
-            assert np.allclose(power(mu=mu) + power.shotnoise, ref_power['power'][:,imu].conj(), atol=1e-6, rtol=3e-3, equal_nan=True)
+            assert np.allclose(power.nmodes[:, imu], ref_power['modes'][:, imu], atol=1e-6, rtol=3e-3, equal_nan=True)
+            assert np.allclose(power.k[:, imu], ref_power['k'][:, imu], atol=1e-6, rtol=3e-3, equal_nan=True)
+            assert np.allclose(power(mu=mu) + power.shotnoise, ref_power['power'][:, imu].conj(), atol=1e-6, rtol=3e-3, equal_nan=True)
 
     def check_poles(power, ref_power):
         for ell in power.ells:
-            #assert np.allclose(power(ell=ell).real + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)].real, atol=1e-6, rtol=3e-3)
+            # assert np.allclose(power(ell=ell).real + (ell == 0)*power.shotnoise, ref_power.poles['power_{}'.format(ell)].real, atol=1e-6, rtol=3e-3)
             # Exact if offset = 0. in to_mesh()
             assert np.allclose(power.nmodes, ref_power['modes'], atol=1e-6, rtol=5e-3)
             assert np.allclose(power.k, ref_power['k'], atol=1e-6, rtol=5e-3)
-            assert np.allclose(power(ell=ell) + (ell == 0)*power.shotnoise, ref_power['power_{}'.format(ell)].conj(), atol=1e-2, rtol=1e-2)
+            assert np.allclose(power(ell=ell) + (ell == 0) * power.shotnoise, ref_power['power_{}'.format(ell)].conj(), atol=1e-2, rtol=1e-2)
 
     for los in ['x', 'z']:
 
@@ -454,18 +455,18 @@ def test_mesh_power():
         ref_kedges = ref_power.power.edges['k']
 
         list_options = []
-        list_options.append({'los':los, 'edges':(ref_kedges, muedges)})
-        list_options.append({'los':los, 'edges':(ref_kedges, muedges), 'slab_npoints_max':10000})
-        list_options.append({'los':[1. if ax == los else 0. for ax in 'xyz'], 'edges':(ref_kedges, muedges)})
-        list_options.append({'los':los, 'edges':({'min':ref_kedges[0], 'max':ref_kedges[-1], 'step':ref_kedges[1] - ref_kedges[0]}, muedges)})
-        list_options.append({'los':los, 'edges':(ref_kedges, muedges), 'dtype':'f4'})
-        list_options.append({'los':los, 'edges':(ref_kedges, muedges[:-1]), 'dtype':'f4'})
-        list_options.append({'los':los, 'edges':(ref_kedges, muedges[:-1]), 'dtype':'c8'})
+        list_options.append({'los': los, 'edges': (ref_kedges, muedges)})
+        list_options.append({'los': los, 'edges': (ref_kedges, muedges), 'slab_npoints_max': 10000})
+        list_options.append({'los': [1. if ax == los else 0. for ax in 'xyz'], 'edges': (ref_kedges, muedges)})
+        list_options.append({'los': los, 'edges': ({'min': ref_kedges[0], 'max': ref_kedges[-1], 'step': ref_kedges[1] - ref_kedges[0]}, muedges)})
+        list_options.append({'los': los, 'edges': (ref_kedges, muedges), 'dtype': 'f4'})
+        list_options.append({'los': los, 'edges': (ref_kedges, muedges[:-1]), 'dtype': 'f4'})
+        list_options.append({'los': los, 'edges': (ref_kedges, muedges[:-1]), 'dtype': 'c8'})
 
         for options in list_options:
             power = get_mesh_power(data, **options)
             with tempfile.TemporaryDirectory() as tmp_dir:
-                #tmp_dir = '_tests'
+                # tmp_dir = '_tests'
                 fn = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
                 fn_txt = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.txt'), root=0)
                 power.save(fn)
@@ -484,13 +485,13 @@ def test_mesh_power():
 
     power_compensation = get_mesh_power_compensation(data, los='x').poles
     for ill, ell in enumerate(power.ells):
-        assert np.allclose(power_compensation.power_nonorm[ill]/power_compensation.wnorm, power.power_nonorm[ill]/power.wnorm)
+        assert np.allclose(power_compensation.power_nonorm[ill] / power_compensation.wnorm, power.power_nonorm[ill] / power.wnorm)
 
     power_cross = get_mesh_power(data, los='x', as_cross=True).poles
     for ell in ells:
-        assert np.allclose(power_cross(ell=ell) - (ell == 0)*power.shotnoise, power(ell=ell))
+        assert np.allclose(power_cross(ell=ell) - (ell == 0) * power.shotnoise, power(ell=ell))
 
-    randoms = Catalog.load_fits(randoms_fn)
+    randoms = Catalog.read(randoms_fn)
 
     def get_ref_power(data, randoms, los, dtype='c16'):
         los_array = [1. if ax == los else 0. for ax in 'xyz']
@@ -498,7 +499,7 @@ def test_mesh_power():
         mesh_data = data.to_nbodykit().to_mesh(position='Position', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
         mesh_randoms = randoms.to_nbodykit().to_mesh(position='Position', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
         mesh = mesh_data.compute() - mesh_randoms.compute()
-        return FFTPower(mesh, mode='2d', poles=ells, Nmu=len(muedges) - 1, los=los_array, dk=dk, kmin=kedges[0], kmax=kedges[-1]+1e-9)
+        return FFTPower(mesh, mode='2d', poles=ells, Nmu=len(muedges) - 1, los=los_array, dk=dk, kmin=kedges[0], kmax=kedges[-1] + 1e-9)
 
     def get_power(data, randoms, los, dtype=dtype):
         mesh = CatalogMesh(data_positions=data['Position'], randoms_positions=randoms['Position'], boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
@@ -516,11 +517,10 @@ def test_normalization():
     nmesh = 128
     resampler = 'tsc'
     interlacing = False
-    boxcenter = np.array([3000.,0.,0.])[None,:]
-    los = None
+    boxcenter = np.array([3000., 0., 0.])[None, :]
     dtype = 'f8'
-    data = Catalog.load_fits(data_fn)
-    randoms = Catalog.load_fits(randoms_fn)
+    data = Catalog.read(data_fn)
+    randoms = Catalog.read(randoms_fn)
     for catalog in [data, randoms]:
         catalog['Position'] += boxcenter
         catalog['Weight'] = catalog.ones()
@@ -533,10 +533,9 @@ def test_normalization():
 
 def test_catalog_mesh():
 
-    data = Catalog.load_fits(data_fn)
-    randoms = Catalog.load_fits(randoms_fn)
+    data = Catalog.read(data_fn)
+    randoms = Catalog.read(randoms_fn)
     boxsize = 600.
-    boxcenter = 0.
     nmesh = 128
     resampler = 'tsc'
     interlacing = 2
@@ -568,15 +567,14 @@ def test_memory():
     from pmesh.pm import ParticleMesh
 
     boxsize = 600.
-    boxcenter = 0.
     nmesh = 300
     resampler = 'tsc'
     interlacing = False
 
     with MemoryMonitor() as mem:
 
-        data = Catalog.load_fits([data_fn])
-        randoms = Catalog.load_fits([randoms_fn]*20)
+        data = Catalog.read([data_fn])
+        randoms = Catalog.read([randoms_fn] * 20)
         for catalog in [data, randoms]:
             catalog['Weight'] = catalog.ones()
             for name in catalog.columns(): catalog[name]
@@ -603,21 +601,21 @@ def test_catalog_power():
     ells = (0, 1, 2, 3, 4)
     resampler = 'tsc'
     interlacing = 2
-    boxcenter = np.array([3000.,0.,0.])[None,:]
+    boxcenter = np.array([3000., 0., 0.])[None, :]
     los = None
     dtype = 'f8'
-    data = Catalog.load_fits(data_fn)
-    randoms = Catalog.load_fits(randoms_fn)
+    data = Catalog.read(data_fn)
+    randoms = Catalog.read(randoms_fn)
     weight_value = 2.
     for catalog in [data, randoms]:
         catalog['Position'] += boxcenter
-        catalog['Weight'] = weight_value*catalog.ones()
+        catalog['Weight'] = weight_value * catalog.ones()
 
     def get_ref_power(data, randoms, dtype='c16'):
         from nbodykit.lab import FKPCatalog, ConvolvedFFTPower
         fkp = FKPCatalog(data.to_nbodykit(), randoms.to_nbodykit(), nbar='NZ')
         mesh = fkp.to_mesh(position='Position', comp_weight='Weight', nbar='NZ', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
-        return ConvolvedFFTPower(mesh, poles=ells, dk=dk, kmin=kedges[0], kmax=kedges[-1]+1e-9)
+        return ConvolvedFFTPower(mesh, poles=ells, dk=dk, kmin=kedges[0], kmax=kedges[-1] + 1e-9)
 
     def get_catalog_power(data, randoms, position_type='pos', edges=kedges, dtype=dtype, as_cross=False, **kwargs):
         data_positions, randoms_positions = data['Position'], randoms['Position']
@@ -643,7 +641,7 @@ def test_catalog_power():
         mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
                            boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
         wnorm = np.real(normalization(mesh))
-        shotnoise = mesh.unnormalized_shotnoise()/wnorm
+        shotnoise = mesh.unnormalized_shotnoise() / wnorm
         field = mesh.to_mesh()
         if as_complex: field = field.r2c()
         field2 = None
@@ -661,7 +659,7 @@ def test_catalog_power():
             # precision is 1e-7 if offset = self.boxcenter - self.boxsize/2. + 0.5*self.boxsize
             ref = ref_power.poles['power_{}'.format(ell)]
             if power.attrs['los_type'] == 'firstpoint': ref = ref.conj()
-            assert np.allclose((power(ell=ell) + (ell == 0)*power.shotnoise)*norm/ref_norm, ref, atol=1e-6, rtol=5e-2)
+            assert np.allclose((power(ell=ell) + (ell == 0) * power.shotnoise) * norm / ref_norm, ref, atol=1e-6, rtol=5e-2)
             assert np.allclose(power.k, ref_power.poles['k'], atol=1e-6, rtol=5e-3)
             assert np.allclose(power.nmodes, ref_power.poles['modes'], atol=1e-6, rtol=5e-3)
 
@@ -671,16 +669,16 @@ def test_catalog_power():
     ref_kedges = ref_power.poles.edges['k']
 
     list_options = []
-    list_options.append({'position_type':'pos'})
-    list_options.append({'position_type':'xyz'})
-    list_options.append({'position_type':'rdd'})
-    list_options.append({'edges':{'min':ref_kedges[0], 'max':ref_kedges[-1], 'step':ref_kedges[1] - ref_kedges[0]}})
+    list_options.append({'position_type': 'pos'})
+    list_options.append({'position_type': 'xyz'})
+    list_options.append({'position_type': 'rdd'})
+    list_options.append({'edges': {'min': ref_kedges[0], 'max': ref_kedges[-1], 'step': ref_kedges[1] - ref_kedges[0]}})
 
     for options in list_options:
         power = get_catalog_power(data, randoms, **options)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            #tmp_dir = '_tests'
+            # tmp_dir = '_tests'
             fn = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             fn_txt = power.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.txt'), root=0)
             power.save(fn)
@@ -699,11 +697,11 @@ def test_catalog_power():
 
     list_options = []
     list_options.append({})
-    list_options.append({'weights':tuple()})
-    list_options.append({'weights':('randoms',)})
-    list_options.append({'weights':('data',)})
-    list_options.append({'slab_npoints_max':10000})
-    list_options.append({'slab_npoints_max':10000, 'weights':('randoms',)})
+    list_options.append({'weights': tuple()})
+    list_options.append({'weights': ('randoms',)})
+    list_options.append({'weights': ('data',)})
+    list_options.append({'slab_npoints_max': 10000})
+    list_options.append({'slab_npoints_max': 10000, 'weights': ('randoms',)})
 
     for options in list_options:
         power_mesh = get_catalog_mesh_power(data, randoms, **options)
@@ -721,7 +719,7 @@ def test_catalog_power():
 
     power_cross = get_catalog_power(data, randoms, as_cross=True)
     for ell in ells:
-        assert np.allclose(power_cross.poles(ell=ell) - (ell == 0)*f_power.shotnoise, f_power.poles(ell=ell))
+        assert np.allclose(power_cross.poles(ell=ell) - (ell == 0) * f_power.shotnoise, f_power.poles(ell=ell))
 
     position = data['Position'].copy()
     data['Position'][0] += boxsize
@@ -759,7 +757,7 @@ def test_catalog_power():
 
     power_shifted = get_catalog_shifted_power(data, randoms, as_cross=True)
     for ell in ells:
-        assert np.allclose(power_shifted.poles(ell=ell) - (ell == 0)*f_power.shotnoise, f_power.poles(ell=ell))
+        assert np.allclose(power_shifted.poles(ell=ell) - (ell == 0) * f_power.shotnoise, f_power.poles(ell=ell))
 
     def get_catalog_shifted_no_randoms_power(data, randoms):
         return CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], shifted_positions1=randoms['Position'], shifted_weights1=randoms['Weight'],
@@ -767,7 +765,7 @@ def test_catalog_power():
 
     power_shifted = get_catalog_shifted_no_randoms_power(data, randoms)
     for ell in ells:
-        assert np.allclose(power_shifted.poles(ell=ell)*power_shifted.wnorm/f_power.wnorm, f_power.poles(ell=ell))
+        assert np.allclose(power_shifted.poles(ell=ell) * power_shifted.wnorm / f_power.wnorm, f_power.poles(ell=ell))
 
 
 def test_mpi():
@@ -775,17 +773,15 @@ def test_mpi():
     boxsize = 1000.
     nmesh = 128
     kedges = np.linspace(0., 0.1, 6)
-    dk = kedges[1] - kedges[0]
     ells = (0,)
     resampler = 'tsc'
     interlacing = 2
-    boxcenter = np.array([3000.,0.,0.])[None,:]
+    boxcenter = np.array([3000., 0., 0.])[None, :]
     dtype = 'f8'
-    cdtype = 'c16'
     los = None
     mpicomm = mpi.COMM_WORLD
-    data = Catalog.load_fits(data_fn, mpicomm=mpicomm)
-    randoms = Catalog.load_fits(randoms_fn, mpicomm=mpicomm)
+    data = Catalog.read(data_fn, mpicomm=mpicomm)
+    randoms = Catalog.read(randoms_fn, mpicomm=mpicomm)
     for catalog in [data, randoms]:
         catalog['Position'] += boxcenter
         catalog['Weight'] = catalog.ones()
@@ -819,7 +815,7 @@ def test_mpi():
         if data.mpicomm.rank == 0:
             power_root = run(mpiroot=None, mpicomm=mpi.COMM_SELF, **kwargs)
             for ell in ref_power.ells:
-                assert np.allclose(power(ell=ell), ref_power(ell=ell))
+                assert np.allclose(power_root(ell=ell), ref_power(ell=ell))
 
     test()
     test(mpiroot=None, position_type='xyz')
@@ -833,13 +829,13 @@ def test_interlacing():
     from matplotlib import pyplot as plt
     boxsize = 1000.
     nmesh = 128
-    kedges = {'min':0., 'step':0.005}
+    kedges = {'min': 0., 'step': 0.005}
     ells = (0,)
     resampler = 'ngp'
-    boxcenter = np.array([3000.,0.,0.])[None,:]
+    boxcenter = np.array([3000., 0., 0.])[None, :]
 
-    data = Catalog.load_fits(data_fn)
-    randoms = Catalog.load_fits(randoms_fn)
+    data = Catalog.read(data_fn)
+    randoms = Catalog.read(randoms_fn)
     for catalog in [data, randoms]:
         catalog['Position'] += boxcenter
         catalog['Weight'] = catalog.ones()
@@ -859,11 +855,11 @@ def test_interlacing():
 if __name__ == '__main__':
 
     setup_logging('debug')
-    #save_lognormal()
-    #test_mesh_power()
-    #test_interlacing()
-    #test_fft()
-    #test_memory()
+    # save_lognormal()
+    # test_mesh_power()
+    # test_interlacing()
+    # test_fft()
+    # test_memory()
     test_mpi()
     test_power_statistic()
     test_find_edges()

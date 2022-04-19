@@ -3,7 +3,7 @@ import numpy as np
 from mpi4py import MPI
 from pmesh.domain import GridND
 
-from . import utils
+from .utils import _get_box
 
 
 COMM_WORLD = MPI.COMM_WORLD
@@ -98,7 +98,7 @@ def gather_array(data, root=0, mpicomm=COMM_WORLD):
         bad_shape = None; bad_dtype = None
 
     if root is not Ellipsis:
-        bad_shape, bad_dtype = mpicomm.bcast((bad_shape, bad_dtype),root=root)
+        bad_shape, bad_dtype = mpicomm.bcast((bad_shape, bad_dtype), root=root)
 
     if bad_shape:
         raise ValueError('mismatch between shape[1:] across ranks in gather_array')
@@ -140,7 +140,6 @@ def gather_array(data, root=0, mpicomm=COMM_WORLD):
         mpicomm.Gatherv([data, dt], [recvbuffer, (counts, offsets), dt], root=root)
 
     dt.Free()
-
     return recvbuffer
 
 
@@ -163,10 +162,7 @@ def local_size(size, mpicomm=COMM_WORLD):
     """
     start = mpicomm.rank * size // mpicomm.size
     stop = (mpicomm.rank + 1) * size // mpicomm.size
-    localsize = stop - start
-    #localsize = size // mpicomm.size
-    #if mpicomm.rank < size % mpicomm.size: localsize += 1
-    return localsize
+    return stop - start
 
 
 def scatter_array(data, counts=None, root=0, mpicomm=COMM_WORLD):
@@ -309,7 +305,12 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
     (positions1, weights1), (positions2, weights2) : arrays
         The (decomposed) set of positions and weights.
     """
-    if mpicomm.size == 1:
+    autocorr = positions2 is None
+    if autocorr:
+        positions2 = positions1
+        weights2 = weights1
+
+    if mpicomm.size == 1 or positions1.size == 0 or positions2.size == 0:
         return (positions1, weights1), (positions2, weights2)
 
     def split_size_3d(s):
@@ -317,8 +318,7 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
         Split `s` into three integers, a, b, c, such
         that a * b * c == s and a <= b <= c.
         """
-        a = int(s ** (1./3.)) + 1
-        d = s
+        a = int(s ** (1. / 3.)) + 1
         while a > 1:
             if s % a == 0:
                 s = s // a
@@ -341,20 +341,12 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
 
     size1 = mpicomm.allreduce(len(positions1))
 
-    auto = positions2 is None
-    if auto:
-        positions2 = positions1
-        weights2 = weights1
-        size2 = size1
-    else:
-        size2 = mpicomm.allreduce(len(positions2))
-
     cpositions1 = positions1
     cpositions2 = positions2
 
     if periodic:
         cpositions1 = cpositions1 % boxsize
-    if auto:
+    if autocorr:
         cpositions2 = cpositions1
     else:
         if periodic:
@@ -364,23 +356,14 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
         posmin = np.zeros_like(boxsize)
         posmax = np.asarray(boxsize)
     else:
-        def get_boxsize(positions):
-            posmin, posmax = positions.min(axis=0), positions.max(axis=0)
-            posmin = np.min(mpicomm.allgather(posmin), axis=0)
-            posmax = np.max(mpicomm.allgather(posmax), axis=0)
-            return posmin, posmax
-
-        posmin, posmax = get_boxsize(cpositions1)
-        if not auto:
-            posmin2, posmax2 = get_boxsize(cpositions2)
-            posmin = np.min([posmin, posmin2], axis=0)
-            posmax = np.max([posmax, posmax2], axis=0)
-        posmin -= 1e-9 # margin to make sure all positions will be included
+        posmin, posmax = _get_box(*([cpositions1] if autocorr else [cpositions1, cpositions2]))
+        posmin, posmax = np.min(mpicomm.allgather(posmin), axis=0), np.max(mpicomm.allgather(posmax), axis=0)
+        posmin -= 1e-9  # margin to make sure all positions will be included
         posmax += 1e-9
 
     # domain decomposition
     grid = [np.linspace(pmin, pmax, grid + 1, endpoint=True) for pmin, pmax, grid in zip(posmin, posmax, ngrid)]
-    domain = GridND(grid, comm=mpicomm, periodic=periodic) # raises VisibleDeprecationWarning: Creating an ndarray from ragged nested sequences
+    domain = GridND(grid, comm=mpicomm, periodic=periodic)  # raises VisibleDeprecationWarning: Creating an ndarray from ragged nested sequences
 
     if not periodic:
         # balance the load
@@ -388,7 +371,7 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
 
     # exchange first particles
     layout = domain.decompose(cpositions1, smoothing=0)
-    positions1 = layout.exchange(positions1) # exchange takes a list of arrays
+    positions1 = layout.exchange(positions1)  # exchange takes a list of arrays
     if weights1 is not None and len(weights1):
         multiple_weights = len(weights1) > 1
         weights1 = layout.exchange(*weights1, pack=False)
@@ -399,7 +382,7 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
 
     # exchange second particles
     if smoothing > boxsize.max() * 0.25:
-        positions2 = [gather_array(p, root=Ellipsis, mpicomm=mpicomm) for p in positions2]
+        positions2 = gather_array(positions2, root=Ellipsis, mpicomm=mpicomm)
         if weights2 is not None: weights2 = [gather_array(w, root=Ellipsis, mpicomm=mpicomm) for w in weights2]
     else:
         layout = domain.decompose(cpositions2, smoothing=smoothing)

@@ -39,7 +39,7 @@ logger = logging.getLogger('FFTWindowLocalLOS')
 cosmo = DESI()
 z = 1.
 pklin = cosmo.get_fourier().pk_interpolator().to_1d(z=z)
-f = cosmo.get_fourier().sigma8_z(z=z, of='theta_cb')/cosmo.get_fourier().sigma8_z(z=z, of='delta_cb')
+f = cosmo.get_fourier().sigma8_z(z=z, of='theta_cb') / cosmo.get_fourier().sigma8_z(z=z, of='delta_cb')
 bias = 1.5
 boxsize = 1000.
 boxcenter = np.array([600., 0., 0.])
@@ -65,7 +65,7 @@ def run_mock(imock=0):
     mock.set_rsd(f=f, los=None)
 
     data = RandomBoxCatalog(nbar=nbar, boxsize=boxsize, boxcenter=boxcenter, seed=seed)
-    randoms = RandomBoxCatalog(nbar=10*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=seed)
+    randoms = RandomBoxCatalog(nbar=10 * nbar, boxsize=boxsize, boxcenter=boxcenter, seed=seed)
     data['Weight'] = mock.readout(data['Position'], field='delta', resampler='tsc', compensate=True) + 1.
 
     ells = (0, 1, 2, 3, 4); edges = np.linspace(0., 0.2, 41)
@@ -76,18 +76,18 @@ def run_mock(imock=0):
 
 def run_window(icut=0, ncuts=1):
     power = CatalogFFTPower.load(mock_fn.format(0))
-    randoms = RandomBoxCatalog(nbar=10*nbar, boxsize=boxsize, boxcenter=boxcenter, seed=42)
-    start, stop = icut*(len(edgesin) - 1)//ncuts, (icut + 1)*(len(edgesin) - 1)//ncuts + 1
+    randoms = RandomBoxCatalog(nbar=10 * nbar, boxsize=boxsize, boxcenter=boxcenter, seed=42)
+    start, stop = icut * (len(edgesin) - 1) // ncuts, (icut + 1) * (len(edgesin) - 1) // ncuts + 1
     window = CatalogFFTWindow(randoms_positions1=randoms['Position'], edgesin=edgesin[start:stop], power_ref=power, position_type='pos').poles
     window.save(window_fn.format(icut))
 
 
 def kaiser_model(k, ell=0):
-    pk = bias**2*pklin(k)
-    beta = f/bias
-    if ell == 0: return (1. + 2./3.*beta + 1./5.*beta**2)*pk + 1./nbar
-    if ell == 2: return (4./3.*beta + 4./7.*beta**2)*pk
-    if ell == 4: return 8./35*beta**2*pk
+    pk = bias**2 * pklin(k)
+    beta = f / bias
+    if ell == 0: return (1. + 2. / 3. * beta + 1. / 5. * beta**2) * pk + 1. / nbar
+    if ell == 2: return (4. / 3. * beta + 4. / 7. * beta**2) * pk
+    if ell == 4: return 8. / 35 * beta**2 * pk
     return np.zeros_like(k)
 
 
@@ -95,7 +95,7 @@ def mock_mean(name='poles'):
     powers = []
     for fn in glob.glob(mock_fn.format('*')):
         powers.append(getattr(CatalogFFTPower.load(fn), name)(complex=False)[-1])
-    return np.mean(powers, axis=0), np.std(powers, axis=0, ddof=1)/len(powers)**0.5
+    return np.mean(powers, axis=0), np.std(powers, axis=0, ddof=1) / len(powers)**0.5
 
 
 def plot_window_matrix():
@@ -106,7 +106,7 @@ def plot_window_matrix():
     for iprojin, projin in enumerate(window.projsin):
         for iprojout, projout in enumerate(window.projsout):
             # Indices in approximate window matrix
-            lax[iprojout][iprojin].plot(window.xout[iprojout], unpacked[iprojin][iprojout][0,:])
+            lax[iprojout][iprojin].plot(window.xout[iprojout], unpacked[iprojin][iprojout][0, :])
             lax[iprojout][iprojin].set_title('${}$ x ${}$'.format(projin.latex(), projout.latex()))
     logger.info('Saving figure to {}.'.format(plot_window_matrix_fn))
     fig.savefig(plot_window_matrix_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
@@ -122,7 +122,7 @@ def plot_window_integ():
         ax.plot(window.xout[iproj], integ[iproj], label=proj.latex(inline=True))
     ax.legend()
     ax.grid(True)
-    ax.set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
+    ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     logger.info('Saving figure to {}.'.format(plot_window_integ_fn))
     fig = plt.gcf()
     fig.savefig(plot_window_integ_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
@@ -132,7 +132,7 @@ def plot_window_integ():
 def plot_poles():
     utils.mkdir(plot_dir)
     window = PowerSpectrumFFTWindowMatrix.load(window_fn.format('all'))
-    #window.select_proj(projsin=[proj for proj in window.projsin if proj.wa_order == 0 or proj.ell % 2 == proj.wa_order])
+    # window.select_proj(projsin=[proj for proj in window.projsin if proj.wa_order == 0 or proj.ell % 2 == proj.wa_order])
     window_wa = window.copy()
     window_wa.resum_input_odd_wide_angle()
     window.select_proj(projsin=[proj for proj in window.projsin if proj.wa_order == 0])
@@ -143,32 +143,32 @@ def plot_poles():
     model_theory = np.array([kaiser_model(kin, ell=ell) for ell in ellsin])
     model_conv = window.dot(model_theory, unpack=True)
     model_theory = np.array([kaiser_model(kin, ell=ell) for ell in ells])
-    model_theory[ells.index(0)] -= 1./nbar
-    model_conv[ells.index(0)] -= 1./nbar
+    model_theory[ells.index(0)] -= 1. / nbar
+    model_conv[ells.index(0)] -= 1. / nbar
     model_theory_wa = np.array([kaiser_model(kin, ell=proj.ell) for proj in window_wa.projsin])
     model_conv_wa = window_wa.dot(model_theory_wa, unpack=True)
-    model_conv_wa[ells.index(0)] -= 1./nbar
+    model_conv_wa[ells.index(0)] -= 1. / nbar
     mean, std = mock_mean('poles')
-    height_ratios = [max(len(ells), 3)] + [1]*len(ells)
-    figsize = (6, 1.5*sum(height_ratios))
-    fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios':height_ratios}, figsize=figsize, squeeze=True)
+    height_ratios = [max(len(ells), 3)] + [1] * len(ells)
+    figsize = (6, 1.5 * sum(height_ratios))
+    fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
     fig.subplots_adjust(hspace=0)
     for ill, ell in enumerate(ells):
-        lax[0].plot(kin, kin*model_theory[ill], linestyle=':', color='C{:d}'.format(ill), label='theory' if ill == 0 else None)
+        lax[0].plot(kin, kin * model_theory[ill], linestyle=':', color='C{:d}'.format(ill), label='theory' if ill == 0 else None)
     for ill, ell in enumerate(ells):
-        lax[0].fill_between(kout, kout*(mean[ill] - std[ill]), kout*(mean[ill] + std[ill]), alpha=0.5, facecolor='C{:d}'.format(ill), linewidth=0, label='mocks' if ill == 0 else None)
-        lax[0].plot(kout, kout*model_conv[ill], linestyle='--', color='C{:d}'.format(ill), label='theory * window' if ill == 0 else None)
-        lax[0].plot(kout, kout*model_conv_wa[ill], linestyle='-', color='C{:d}'.format(ill), label='theory * wa * window' if ill == 0 else None)
+        lax[0].fill_between(kout, kout * (mean[ill] - std[ill]), kout * (mean[ill] + std[ill]), alpha=0.5, facecolor='C{:d}'.format(ill), linewidth=0, label='mocks' if ill == 0 else None)
+        lax[0].plot(kout, kout * model_conv[ill], linestyle='--', color='C{:d}'.format(ill), label='theory * window' if ill == 0 else None)
+        lax[0].plot(kout, kout * model_conv_wa[ill], linestyle='-', color='C{:d}'.format(ill), label='theory * wa * window' if ill == 0 else None)
     for ill, ell in enumerate(ells):
-        lax[ill+1].plot(kout, (model_conv[ill] - mean[ill])/std[ill], linestyle='--', color='C{:d}'.format(ill))
-        lax[ill+1].plot(kout, (model_conv_wa[ill] - mean[ill])/std[ill], linestyle='-', color='C{:d}'.format(ill))
-        lax[ill+1].set_ylim(-4, 4)
-        for offset in [-2., 2.]: lax[ill+1].axhline(offset, color='k', linestyle='--')
-        lax[ill+1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))
+        lax[ill + 1].plot(kout, (model_conv[ill] - mean[ill]) / std[ill], linestyle='--', color='C{:d}'.format(ill))
+        lax[ill + 1].plot(kout, (model_conv_wa[ill] - mean[ill]) / std[ill], linestyle='-', color='C{:d}'.format(ill))
+        lax[ill + 1].set_ylim(-4, 4)
+        for offset in [-2., 2.]: lax[ill + 1].axhline(offset, color='k', linestyle='--')
+        lax[ill + 1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))
     for ax in lax: ax.grid(True)
     lax[0].legend()
     lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
-    lax[-1].set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
+    lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     logger.info('Saving figure to {}.'.format(plot_poles_fn))
     fig.savefig(plot_poles_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
     plt.close(fig)

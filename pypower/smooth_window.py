@@ -7,24 +7,23 @@ following https://arxiv.org/abs/2106.06324.
 
 import math
 from fractions import Fraction
-import logging
 
 import numpy as np
 from scipy.interpolate import UnivariateSpline
 from scipy import special
 
-from .utils import BaseClass
+from .utils import BaseClass, _make_array
 from .fftlog import CorrelationToPower
-from .fft_power import BasePowerSpectrumStatistics, MeshFFTPower, CatalogMesh,\
-                       _get_real_dtype, _make_array, _format_positions, _format_weights,\
-                       get_default_nrealizations, get_inverse_probability_weight, _get_box, _wrap_in_place
+from .fft_power import (BasePowerSpectrumStatistics, MeshFFTPower, CatalogMesh,
+                        _get_real_dtype, _format_positions, _format_weights,
+                        get_default_nrealizations, get_inverse_probability_weight, _get_mesh_attrs, _wrap_positions)
 from .wide_angle import Projection, BaseMatrix, CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix
 from . import mpi, utils
 
 
 def weights_trapz(x):
     """Return weights for trapezoidal integration."""
-    return np.concatenate([[x[1]-x[0]],x[2:]-x[:-2],[x[-1]-x[-2]]])/2.
+    return np.concatenate([[x[1] - x[0]], x[2:] - x[:-2], [x[-1] - x[-2]]]) / 2.
 
 
 class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
@@ -61,7 +60,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         """
         self.projs = [Projection(proj) for proj in projs]
         super(PowerSpectrumSmoothWindow, self).__init__(edges, modes, power_nonorm, nmodes, **kwargs)
-        if np.ndim(self.shotnoise_nonorm) == 0:
+        if np.size(self.shotnoise_nonorm) <= 1:
             shotnoise_nonorm = self.shotnoise_nonorm
             self.shotnoise_nonorm = _make_array(0., len(self.power_nonorm), dtype=self.power_nonorm.dtype)
             for iproj, proj in enumerate(self.projs):
@@ -69,7 +68,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         self.wnorm = _make_array(self.wnorm, len(self.power_nonorm), dtype=self.power_nonorm.dtype)
         self.volume = None
         if 'boxsize' in self.attrs:
-            self.volume = (2.*np.pi)**3 / np.prod(self.attrs['boxsize']) * self.nmodes
+            self.volume = (2. * np.pi)**3 / np.prod(self.attrs['boxsize']) * self.nmodes
 
     @property
     def _power_names(self):
@@ -115,7 +114,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             toret = np.array([toret[iproj].real if proj.ell % 2 == 0 else toret[iproj].imag for iproj, proj in enumerate(self.projs)], dtype=toret.real.dtype)
         return toret
 
-    def __call__(self, proj=None,  k=None, return_k=False, complex=True, default_zero=False, **kwargs):
+    def __call__(self, proj=None, k=None, return_k=False, complex=True, default_zero=False, **kwargs):
         r"""
         Return window function, optionally performing linear interpolation over :math:`k`.
 
@@ -177,9 +176,12 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
                 return kavg, toret
             return toret
         mask_finite_k = ~np.isnan(kavg) & ~np.isnan(power).any(axis=0)
-        kavg, power = kavg[mask_finite_k], power[:,mask_finite_k]
+        kavg, power = kavg[mask_finite_k], power[:, mask_finite_k]
         k = np.asarray(k)
-        interp = lambda array: np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
+
+        def interp(array):
+            return np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
+
         toret = interp(power.real)
         if complex and np.iscomplexobj(power): toret = toret + 1j * interp(power.imag)
         if isscalar:
@@ -246,43 +248,43 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         names = ['power_nonorm', 'power_direct_nonorm', 'nmodes', 'volume']
 
         if frac_nyq is None or np.ndim(frac_nyq) == 0:
-            frac_nyq = (frac_nyq,)*len(others)
+            frac_nyq = (frac_nyq,) * len(others)
         else:
             frac_nyq = list(frac_nyq)
-            frac_nyq += [None]*(len(others) - len(frac_nyq)) # complete with None
+            frac_nyq += [None] * (len(others) - len(frac_nyq))  # complete with None
 
         def get_mask_nqy(ind):
             self = others[ind]
             if frac_nyq[ind] is None:
                 return np.ones(self.shape[0], dtype='?')
-            return self.edges[0][1:] <= frac_nyq[ind] * np.pi * np.min(self.attrs['nmesh']/self.attrs['boxsize'])
+            return self.edges[0][1:] <= frac_nyq[ind] * np.pi * np.min(self.attrs['nmesh'] / self.attrs['boxsize'])
 
         # Start with edges/modes of the first window
         mask_nyq = np.flatnonzero(get_mask_nqy(0))
         for name in names:
-            setattr(new, name, getattr(new, name)[...,mask_nyq])
+            setattr(new, name, getattr(new, name)[..., mask_nyq])
         new.edges[0] = new.edges[0][np.append(mask_nyq, mask_nyq[-1] + 1)]
         new.modes[0] = new.modes[0][mask_nyq]
         # Then expand with edges/modes of other windows, if those have a wider range
         for iother, other in enumerate(others[1:]):
-            mid = (other.edges[0][:-1] + other.edges[0][1:])/2.
-            mask_nyq = get_mask_nqy(iother+1)
+            mid = (other.edges[0][:-1] + other.edges[0][1:]) / 2.
+            mask_nyq = get_mask_nqy(iother + 1)
             mask_low, mask_high = np.flatnonzero((mid < new.edges[0][0]) & mask_nyq), np.flatnonzero((mid > new.edges[0][-1]) & mask_nyq)
             new.edges[0] = np.concatenate([other.edges[0][mask_low], new.edges[0], other.edges[0][mask_high + 1]], axis=0)
             for name in names:
-                setattr(new, name, np.concatenate([getattr(other, name)[...,mask_low], getattr(new, name), getattr(other, name)[...,mask_high]], axis=-1))
-            new.modes[0] = np.concatenate([other.modes[0][...,mask_low], new.modes[0], other.modes[0][...,mask_high]], axis=-1)
+                setattr(new, name, np.concatenate([getattr(other, name)[..., mask_low], getattr(new, name), getattr(other, name)[..., mask_high]], axis=-1))
+            new.modes[0] = np.concatenate([other.modes[0][..., mask_low], new.modes[0], other.modes[0][..., mask_high]], axis=-1)
 
         # For each bin, loop through all windows and select that with the largest number of modes in the given bin, if exists
         tedges = list(zip(new.edges[0][:-1], new.edges[0][1:]))
         for other in others[1:]:
             for iother, tedge in enumerate(zip(other.edges[0][:-1], other.edges[0][1:])):
-                if tedge in tedges: # Search for k-bin in other window, requiring *exact* matching of floating point numbers...
+                if tedge in tedges:  # Search for k-bin in other window, requiring *exact* matching of floating point numbers...
                     inew = tedges.index(tedge)
                     if other.nmodes[iother] > new.nmodes[inew]:
                         for name in names:
-                            getattr(new, name)[...,inew] = getattr(other, name)[...,iother] # replace by value in window with highest number of modes
-                        new.modes[0][...,inew] = other.modes[0][...,iother]
+                            getattr(new, name)[..., inew] = getattr(other, name)[..., iother]  # replace by value in window with highest number of modes
+                        new.modes[0][..., inew] = other.modes[0][..., iother]
 
         return new
 
@@ -421,7 +423,7 @@ class CorrelationFunctionSmoothWindow(BaseClass):
                 return sep, toret
             return toret
         mask_finite_sep = ~np.isnan(sepavg) & ~np.isnan(corr).any(axis=0)
-        sepavg, corr = sepavg[mask_finite_sep], corr[:,mask_finite_sep]
+        sepavg, corr = sepavg[mask_finite_sep], corr[:, mask_finite_sep]
         toret = np.array([UnivariateSpline(sepavg, arr, k=1, s=0, ext='const')(sep) for arr in corr], dtype=corr.dtype)
         if isscalar:
             toret = toret[0]
@@ -445,7 +447,7 @@ class CorrelationFunctionSmoothWindow(BaseClass):
 
 
 def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
-    """
+    r"""
     Compute correlation window function by taking Hankel transforms of input power spectrum window function.
 
     Parameters
@@ -478,7 +480,7 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
         volume = fourier_window.volume[mask_finite]
     else:
         dk = np.diff(k)
-        volume = 4.*np.pi * np.append(dk, dk[-1]) * k**2
+        volume = 4. * np.pi * np.append(dk, dk[-1]) * k**2
     if smooth is None:
         smoothing = 1.
     elif np.ndim(smooth) == 0:
@@ -487,10 +489,10 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
         smoothing = np.asarray(smooth)
         if smoothing.size != k.size:
             raise ValueError('smoothing kernel must be of the same size as k coordinates i.e. {:d}'.format(k.size))
-    #mask = k > 0
-    #k = k[mask]; volume = volume[mask]
+    # mask = k > 0
+    # k = k[mask]; volume = volume[mask]
     if sep is None:
-        sep = 1./k[k>0][::-1]
+        sep = 1. / k[k > 0][::-1]
     else:
         sep = np.asarray(sep)
     window = []
@@ -499,15 +501,15 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
         wk = fourier_window(proj=proj, k=k, complex=False, null_zero_mode=False) * smoothing
         block = np.empty_like(sep)
         nslabs = min(max(len(k) * len(sep) // _slab_npoints_max, 1), len(sep))
-        for islab in range(nslabs): # proceed by slab to save memory
-            sl = slice(islab*len(sep)//nslabs, (islab+1)*len(sep)//nslabs)
-            ks = k[:,None] * sep[sl]
-            integrand = wk[:,None] * 1. / (2.*np.pi)**3 * special.spherical_jn(proj.ell, ks)
+        for islab in range(nslabs):  # proceed by slab to save memory
+            sl = slice(islab * len(sep) // nslabs, (islab + 1) * len(sep) // nslabs)
+            ks = k[:, None] * sep[sl]
+            integrand = wk[:, None] * 1. / (2. * np.pi)**3 * special.spherical_jn(proj.ell, ks)
             # Prefactor is (-i)^ell, but we take in the imaginary part of odd power spectra, hence:
             # (-i)^ell = (-1)^(ell/2) if ell is even
             # (-i)^ell i = (-1)^(ell//2) if ell is odd
             prefactor = (-1) ** (proj.ell // 2)
-            block[sl] = prefactor * np.sum(volume[:,None]*integrand, axis=0)
+            block[sl] = prefactor * np.sum(volume[:, None] * integrand, axis=0)
         window.append(block)
 
     return CorrelationFunctionSmoothWindow(sep, window, fourier_window.projs.copy())
@@ -518,11 +520,11 @@ class CatalogSmoothWindow(MeshFFTPower):
     """Wrapper on :class:`MeshFFTPower` to estimate window function from input random positions and weigths."""
 
     def __init__(self, randoms_positions1=None, randoms_positions2=None,
-                randoms_weights1=None, randoms_weights2=None,
-                edges=None, projs=None, power_ref=None,
-                los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype=None,
-                resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
-                wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                 randoms_weights1=None, randoms_weights2=None,
+                 edges=None, projs=None, power_ref=None,
+                 los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype=None,
+                 resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
+                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogSmoothWindow`, i.e. estimate power spectrum window.
 
@@ -593,7 +595,7 @@ class CatalogSmoothWindow(MeshFFTPower):
             When ``boxsize`` is determined from input positions, take ``boxpad`` times the smallest box enclosing positions as ``boxsize``.
 
         wrap : bool, default=False
-            Whether to wrap input positions?
+            Whether to wrap input positions in [0, boxsize]?
             If ``False`` and input positions do not fit in the the box size, raise a :class:`ValueError`.
 
         dtype : string, dtype, default=None
@@ -669,15 +671,15 @@ class CatalogSmoothWindow(MeshFFTPower):
                 los = power_ref.attrs['los']
                 if los_type != 'global': los = los_type
             if interlacing is None:
-                interlacing = tuple(power_ref.attrs['interlacing{:d}'.format(i+1)] for i in range(2))
+                interlacing = tuple(power_ref.attrs['interlacing{:d}'.format(i + 1)] for i in range(2))
             if resampler is None:
-                resampler = tuple(power_ref.attrs['resampler{:d}'.format(i+1)] for i in range(2))
+                resampler = tuple(power_ref.attrs['resampler{:d}'.format(i + 1)] for i in range(2))
             if projs is None:
                 ellmax = max(power_ref.ells)
                 with_odd = int(any(ell % 2 for ell in power_ref.ells))
-                projs = [(ell, 0) for ell in range(0, 2*ellmax + 1, 2 - with_odd)]
+                projs = [(ell, 0) for ell in range(0, 2 * ellmax + 1, 2 - with_odd)]
                 if los is None or isinstance(los, str) and los in ['firstpoint', 'endpoint']:
-                    projs += [(ell, 1) for ell in range(1 - with_odd, 2*ellmax + 2, 2 - with_odd)] # e.g. P_5^{(1)} contribution to P_4 => ell = 9
+                    projs += [(ell, 1) for ell in range(1 - with_odd, 2 * ellmax + 2, 2 - with_odd)]  # e.g. P_5^{(1)} contribution to P_4 => ell = 9
             if dtype is None: dtype = power_ref.attrs.get('dtype', 'f8')
 
         if dtype is None: dtype = 'f8'
@@ -685,11 +687,11 @@ class CatalogSmoothWindow(MeshFFTPower):
         if projs is None:
             raise ValueError('If no reference power spectrum "power_ref" provided, provide list of projections "projs".')
         projs = [Projection(proj) for proj in projs]
-        ells_for_wa_order = {proj.wa_order:[] for proj in projs}
+        ells_for_wa_order = {proj.wa_order: [] for proj in projs}
         for proj in projs:
             ells_for_wa_order[proj.wa_order].append(proj.ell)
 
-        if cellsize is not None: # if cellsize is provided, remove default nmesh or boxsize value from old_matrix instance.
+        if cellsize is not None:  # if cellsize is provided, remove default nmesh or boxsize value from old_matrix instance.
             mesh_attrs['cellsize'] = cellsize
             if nmesh is None: mesh_attrs.pop('nmesh')
             elif boxsize is None: mesh_attrs.pop('boxsize')
@@ -698,7 +700,7 @@ class CatalogSmoothWindow(MeshFFTPower):
         for name in ['randoms_positions1', 'randoms_positions2']:
             tmp = _format_positions(locals()[name], position_type=position_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
             if tmp is not None: bpositions.append(tmp)
-            label = name.replace('randoms_positions','R')
+            label = name.replace('randoms_positions', 'R')
             positions[label] = tmp
 
         weight_attrs = (weight_attrs or {}).copy()
@@ -713,7 +715,7 @@ class CatalogSmoothWindow(MeshFFTPower):
 
         weights = {}
         for name in ['randoms_weights1', 'randoms_weights2']:
-            label = name.replace('data_weights','D').replace('randoms_weights','R').replace('shifted_weights','S')
+            label = name.replace('data_weights', 'D').replace('randoms_weights', 'R').replace('shifted_weights', 'S')
             weight, n_bitwise_weights = _format_weights(locals()[name], weight_type=weight_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
 
             if n_bitwise_weights:
@@ -721,32 +723,32 @@ class CatalogSmoothWindow(MeshFFTPower):
                 nrealizations = get_nrealizations(bitwise_weight)
                 weights[label] = get_inverse_probability_weight(bitwise_weight, noffset=noffset, nrealizations=nrealizations, default_value=default_value)
                 if len(weight) > n_bitwise_weights:
-                    weights[label] *= weight[n_bitwise_weights] # individual weights
+                    weights[label] *= weight[n_bitwise_weights]  # individual weights
             elif len(weight):
-                weights[label] = weight[0] # individual weights
+                weights[label] = weight[0]  # individual weights
             else:
                 weights[label] = None
 
         autocorr = positions['R2'] is None
 
         # Get box encompassing all catalogs
-        nmesh, boxsize, boxcenter = _get_box(**mesh_attrs, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
+        nmesh, boxsize, boxcenter = _get_mesh_attrs(**mesh_attrs, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
         if resampler is None: resampler = 'tsc'
         if interlacing is None: interlacing = 2
         if not isinstance(resampler, tuple):
-            resampler = (resampler,)*2
+            resampler = (resampler,) * 2
         if not isinstance(interlacing, tuple):
-            interlacing = (interlacing,)*2
+            interlacing = (interlacing,) * 2
 
         if wrap:
-            for position in positions.values():
+            for name, position in positions.items():
                 if position is not None:
-                    _wrap_in_place(position, boxsize, boxcenter - boxsize/2.)
+                    positions[name] = _wrap_positions(position, boxsize, boxcenter - boxsize / 2.)
 
         if wnorm is None and power_ref is not None:
-            wsum = [mpicomm.allreduce(sum(weights['R1']) if weights['R1'] is not None else len(positions['R1']))]*2
+            wsum = [mpicomm.allreduce(sum(weights['R1']) if weights['R1'] is not None else len(positions['R1']))] * 2
             if not autocorr: wsum[1] = mpicomm.allreduce(sum(weights['R2']) if weights['R2'] is not None else len(positions['R2']))
-            ialpha2 = np.prod([wsum[ii]/power_ref.attrs[name] for ii, name in enumerate(['sum_data_weights1', 'sum_data_weights2'])])
+            ialpha2 = np.prod([wsum[ii] / power_ref.attrs[name] for ii, name in enumerate(['sum_data_weights1', 'sum_data_weights2'])])
             wnorm = ialpha2 * power_ref.wnorm
 
         def get_mesh(data_positions, data_weights=None, **kwargs):
@@ -770,7 +772,7 @@ class CatalogSmoothWindow(MeshFFTPower):
                 label = 'R1'
                 weights1 = np.ones_like(positions[label], shape=len(positions[label])) if weights[label] is None else weights[label]
                 d = utils.distance(positions[label].T)
-                mesh1_wa = get_mesh(positions[label], data_weights=weights1/d**wa_order, resampler=resampler[1], interlacing=interlacing[1])
+                mesh1_wa = get_mesh(positions[label], data_weights=weights1 / d**wa_order, resampler=resampler[1], interlacing=interlacing[1])
                 if autocorr:
                     mesh2_wa = mesh1
                 else:
@@ -866,7 +868,6 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
         If :attr:`sum_wa` is ``True``, or output ``projout.wa_order`` is ``None``, sum over :math:`n` (always the case except for debugging purposes).
         For example, see q. D5 and D6 of arXiv:1810.05051.
         """
-        ellsin, ellsout = [proj.ell for proj in self.projsin], [proj.ell for proj in self.projsout]
         window = self.window
         sep = self.xin[0]
         if isinstance(window, PowerSpectrumSmoothWindow):
@@ -885,10 +886,10 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
                     # sum over L = ell, coeff is C_{\ell \ell^{\prime} L}, window is Q_{L}
                     for ell, coeff in zip(ellsw, coeffs):
                         proj = projin.clone(ell=ell)
-                        block += coeff*window(proj=proj, sep=sep, default_zero=self.default_zero)
+                        block += coeff * window(proj=proj, sep=sep, default_zero=self.default_zero)
                 line.append(block)
             self.projvalue.append(line)
-        self.projvalue = np.array(self.projvalue) # (in, out)
+        self.projvalue = np.array(self.projvalue)  # (in, out)
 
     @property
     def value(self):
@@ -989,7 +990,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
             self.k = xy / self.sep[::-1]
         elif sep is None:
             self.k = np.asarray(k)
-            self.sep = xy/self.kin[::-1]
+            self.sep = xy / self.kin[::-1]
         else:
             self.sep = np.asarray(sep)
             self.k = np.asarray(k)
@@ -1044,7 +1045,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
 
         self.value = []
 
-        krebin = utils.rebin(self.k, len(self.k)//self.kin_rebin, statistic=np.mean)
+        krebin = utils.rebin(self.k, len(self.k) // self.kin_rebin, statistic=np.mean)
         maskin = np.ones(len(krebin), dtype='?')
         if self.kin_lim is not None:
             maskin &= (krebin >= self.kin_lim[0]) & (krebin <= self.kin_lim[-1])
@@ -1057,26 +1058,26 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
                 nout = len(self.xout[iout])
                 block = np.empty((nin, nout), dtype=self.corrmatrix.dtype)
                 nslabs = min(max(len(self.sep) * nout // self._slab_npoints_max, 1), nout)
-                for islab in range(nslabs): # proceed by slab to save memory (if nin << len(self.sep))
-                    slout = slice(islab*nout//nslabs, (islab+1)*nout//nslabs)
+                for islab in range(nslabs):  # proceed by slab to save memory (if nin << len(self.sep))
+                    slout = slice(islab * nout // nslabs, (islab + 1) * nout // nslabs)
                     xout = self.xout[iout][slout]
                     # tmp is j_{\ell}(ks) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
-                    tmp = special.spherical_jn(projout.ell, xout[:,None]*self.sep) * self.corrmatrix[iin, iout] # matrix has dimensions (kout,s)
-                    #from hankl import P2xi, xi2P
+                    tmp = special.spherical_jn(projout.ell, xout[:, None] * self.sep) * self.corrmatrix[iin, iout]  # matrix has dimensions (kout,s)
+                    # from hankl import P2xi, xi2P
                     fftlog = CorrelationToPower(self.sep, ell=projin.ell, q=self.q, xy=self.xy, lowring=False, complex=False)
-                    xin, tmp = fftlog(tmp) # matrix has dimensions (kout, k)
+                    xin, tmp = fftlog(tmp)  # matrix has dimensions (kout, k)
                     assert np.allclose(xin, self.k)
                     # Current prefactor is 4 \pi i^{\ell^{\prime}}, real part for even poles, imag part for odd poles = 4 \pi (-1)^{\ell^{\prime}/2}
                     # Desired prefactor is 2/\pi i^{\ell} (-i)^{\ell^{\prime}}, but:
                     # - we provide the imag part for odd poles: i^{\ell} => (-1)^{\ell/2}
                     # - we take in the imag part for odd poles: (-i)^{\ell^{\prime}} => (-i)^{\ell^{\prime}} i = (-1)^{\ell^{\prime}/2} when \ell^{\prime} is odd
-                    prefactor = 1./(2.*np.pi**2) * (-1)**(projout.ell // 2) #* (-1)**(projin.ell // 2) / (-1)**(projin.ell // 2)
+                    prefactor = 1 / (2 * np.pi**2) * (-1)**(projout.ell // 2)  # * (-1)**(projin.ell // 2) / (-1)**(projin.ell // 2)
                     # tmp is dk^{\prime} k^{\prime 2} \frac{2}{\pi} (-1)^{\ell} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
-                    tmp = np.real(prefactor * tmp) * weights_trapz(xin**3) / 3. # everything should be real now
-                    block[:,slout] = utils.rebin(tmp.T, (len(krebin), len(xout)), statistic=np.sum)[maskin,:] # matrix has dimensions (k, kout)
+                    tmp = np.real(prefactor * tmp) * weights_trapz(xin**3) / 3.  # everything should be real now
+                    block[:, slout] = utils.rebin(tmp.T, (len(krebin), len(xout)), statistic=np.sum)[maskin, :]  # matrix has dimensions (k, kout)
                 line.append(block)
             self.value.append(line)
-        self.value = np.bmat(self.value).A # (in, out)
+        self.value = np.bmat(self.value).A  # (in, out)
 
     propose_out = CorrelationFunctionSmoothWindowMatrix.propose_out
 
@@ -1135,34 +1136,34 @@ def wigner3j_square(ellout, ellin, prefactor=True):
             The numerator and denominator.
         """
         toret = 1
-        for p in range(1, p+1): toret *= (2*p - 1)
+        for p in range(1, p + 1): toret *= (2 * p - 1)
         return toret, math.factorial(p)
 
-    for p in range(min(ellin,ellout)+1):
+    for p in range(min(ellin, ellout) + 1):
 
         numer, denom = [], []
 
         # numerator of product of G(x)
-        for r in [G(ellout-p), G(p), G(ellin-p)]:
+        for r in [G(ellout - p), G(p), G(ellin - p)]:
             numer.append(r[0])
             denom.append(r[1])
 
         # divide by this
-        a,b = G(ellin+ellout-p)
+        a, b = G(ellin + ellout - p)
         numer.append(b)
         denom.append(a)
 
-        numer.append(2*(ellin+ellout) - 4*p + 1)
-        denom.append(2*(ellin+ellout) - 2*p + 1)
+        numer.append(2 * (ellin + ellout) - 4 * p + 1)
+        denom.append(2 * (ellin + ellout) - 2 * p + 1)
 
-        q = ellin + ellout - 2*p
+        q = ellin + ellout - 2 * p
         if prefactor:
-            numer.append(2*ellout + 1)
-            denom.append(2*q + 1)
+            numer.append(2 * ellout + 1)
+            denom.append(2 * q + 1)
 
         numer = Fraction(np.prod(numer))
         denom = Fraction(np.prod(denom))
-        coeffs.append(numer*1./denom)
+        coeffs.append(numer * 1. / denom)
         qvals.append(q)
 
     return qvals[::-1], coeffs[::-1]

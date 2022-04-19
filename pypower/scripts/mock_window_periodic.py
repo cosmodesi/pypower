@@ -39,7 +39,7 @@ logger = logging.getLogger('PeriodicWindow')
 cosmo = DESI()
 z = 1.
 pklin = cosmo.get_fourier().pk_interpolator().to_1d(z=z)
-f = cosmo.get_fourier().sigma8_z(z=z, of='theta_cb')/cosmo.get_fourier().sigma8_z(z=z, of='delta_cb')
+f = cosmo.get_fourier().sigma8_z(z=z, of='theta_cb') / cosmo.get_fourier().sigma8_z(z=z, of='delta_cb')
 bias = 1.5
 nbar = 1e-3
 edgesin = np.linspace(0., 0.4, 101)
@@ -77,17 +77,17 @@ def run_mock(imock=0, sample=True):
 
 def run_window(icut=0, ncuts=1):
     power = CatalogFFTPower.load(mock_fn.format(0))
-    start, stop = icut*(len(edgesin) - 1)//ncuts, (icut + 1)*(len(edgesin) - 1)//ncuts + 1
+    start, stop = icut * (len(edgesin) - 1) // ncuts, (icut + 1) * (len(edgesin) - 1) // ncuts + 1
     window = MeshFFTWindow(edgesin=edgesin[start:stop], power_ref=power, periodic=True)
     window.save(window_fn.format(icut))
 
 
 def kaiser_model_poles(k, ell=0):
-    pk = bias**2*pklin(k)
-    beta = f/bias
-    if ell == 0: return (1. + 2./3.*beta + 1./5.*beta**2)*pk + 1./nbar
-    if ell == 2: return (4./3.*beta + 4./7.*beta**2)*pk
-    if ell == 4: return 8./35*beta**2*pk
+    pk = bias**2 * pklin(k)
+    beta = f / bias
+    if ell == 0: return (1. + 2. / 3. * beta + 1. / 5. * beta**2) * pk + 1. / nbar
+    if ell == 2: return (4. / 3. * beta + 4. / 7. * beta**2) * pk
+    if ell == 4: return 8. / 35 * beta**2 * pk
 
 
 def kaiser_model_wedges(k, wedge):
@@ -104,7 +104,7 @@ def mock_mean(name='poles'):
     powers = []
     for fn in glob.glob(mock_fn.format('*')):
         powers.append(getattr(CatalogFFTPower.load(fn), name)(complex=False)[-1])
-    return np.mean(powers, axis=0), np.std(powers, axis=0, ddof=1)/len(powers)**0.5
+    return np.mean(powers, axis=0), np.std(powers, axis=0, ddof=1) / len(powers)**0.5
 
 
 def plot_poles():
@@ -116,27 +116,27 @@ def plot_poles():
     ells = [proj.ell for proj in window.projsout]
     model_theory = np.array([kaiser_model_poles(kin, ell=ell) for ell in ellsin])
     model_conv = window.dot(model_theory, unpack=True)
-    model_theory[ellsin.index(0)] -= 1./nbar
-    model_conv[ells.index(0)] -= 1./nbar
+    model_theory[ellsin.index(0)] -= 1. / nbar
+    model_conv[ells.index(0)] -= 1. / nbar
     mean, std = mock_mean('poles')
-    height_ratios = [max(len(ells), 3)] + [1]*len(ells)
-    figsize = (6, 1.5*sum(height_ratios))
-    fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios':height_ratios}, figsize=figsize, squeeze=True)
+    height_ratios = [max(len(ells), 3)] + [1] * len(ells)
+    figsize = (6, 1.5 * sum(height_ratios))
+    fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
     fig.subplots_adjust(hspace=0)
     for ill, ell in enumerate(ellsin):
-        lax[0].plot(kin, kin*model_theory[ill], linestyle=':', color='C{:d}'.format(ill), label='theory' if ill == 0 else None)
+        lax[0].plot(kin, kin * model_theory[ill], linestyle=':', color='C{:d}'.format(ill), label='theory' if ill == 0 else None)
     for ill, ell in enumerate(ells):
-        lax[0].fill_between(kout, kout*(mean[ill] - std[ill]), kout*(mean[ill] + std[ill]), alpha=0.5, facecolor='C{:d}'.format(ill), linewidth=0, label='mocks' if ill == 0 else None)
-        lax[0].plot(kout, kout*model_conv[ill], linestyle='-', color='C{:d}'.format(ill), label='theory * window' if ill == 0 else None)
+        lax[0].fill_between(kout, kout * (mean[ill] - std[ill]), kout * (mean[ill] + std[ill]), alpha=0.5, facecolor='C{:d}'.format(ill), linewidth=0, label='mocks' if ill == 0 else None)
+        lax[0].plot(kout, kout * model_conv[ill], linestyle='-', color='C{:d}'.format(ill), label='theory * window' if ill == 0 else None)
     for ill, ell in enumerate(ells):
-        lax[ill+1].plot(kout, (model_conv[ill] - mean[ill])/std[ill], linestyle='-', color='C{:d}'.format(ill))
-        lax[ill+1].set_ylim(-4, 4)
-        for offset in [-2., 2.]: lax[ill+1].axhline(offset, color='k', linestyle='--')
-        lax[ill+1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))
+        lax[ill + 1].plot(kout, (model_conv[ill] - mean[ill]) / std[ill], linestyle='-', color='C{:d}'.format(ill))
+        lax[ill + 1].set_ylim(-4, 4)
+        for offset in [-2., 2.]: lax[ill + 1].axhline(offset, color='k', linestyle='--')
+        lax[ill + 1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))
     for ax in lax: ax.grid(True)
     lax[0].legend()
     lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
-    lax[-1].set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
+    lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     logger.info('Saving figure to {}.'.format(plot_poles_fn))
     fig.savefig(plot_poles_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
     plt.close(fig)
@@ -156,28 +156,28 @@ def plot_wedges():
     ellsin = [proj.ell for proj in window.projsin]
     model_theory = np.array([kaiser_model_poles(kin, ell=ell) for ell in ellsin])
     model_conv = window.dot(model_theory, unpack=False)
-    model_conv = [model_conv[mask] - 1./nbar for mask in masks]
-    model_theory = [kaiser_model_wedges(kin, wedge=wedge) - 1./nbar for wedge in wedges]
+    model_conv = [model_conv[mask] - 1. / nbar for mask in masks]
+    model_theory = [kaiser_model_wedges(kin, wedge=wedge) - 1. / nbar for wedge in wedges]
     mean, std = mock_mean('wedges')
     mean, std = mean.T[mask_positive[:-1]], std.T[mask_positive[:-1]]
-    height_ratios = [max(len(wedges), 3)] + [1]*len(wedges)
-    figsize = (6, 1.5*sum(height_ratios))
-    fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios':height_ratios}, figsize=figsize, squeeze=True)
+    height_ratios = [max(len(wedges), 3)] + [1] * len(wedges)
+    figsize = (6, 1.5 * sum(height_ratios))
+    fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
     fig.subplots_adjust(hspace=0)
     for imu, mu in enumerate(muout):
-        lax[0].plot(kin, kin*model_theory[imu], linestyle=':', color='C{:d}'.format(imu), label='theory' if imu == 0 else None)
+        lax[0].plot(kin, kin * model_theory[imu], linestyle=':', color='C{:d}'.format(imu), label='theory' if imu == 0 else None)
     for imu, mu in enumerate(muout):
-        lax[0].fill_between(kout[imu], kout[imu]*(mean[imu] - std[imu]), kout[imu]*(mean[imu] + std[imu]), alpha=0.5, facecolor='C{:d}'.format(imu), linewidth=0, label='mocks' if imu == 0 else None)
-        lax[0].plot(kout[imu], kout[imu]*model_conv[imu], linestyle='-', color='C{:d}'.format(imu), label='theory * window' if imu == 0 else None)
+        lax[0].fill_between(kout[imu], kout[imu] * (mean[imu] - std[imu]), kout[imu] * (mean[imu] + std[imu]), alpha=0.5, facecolor='C{:d}'.format(imu), linewidth=0, label='mocks' if imu == 0 else None)
+        lax[0].plot(kout[imu], kout[imu] * model_conv[imu], linestyle='-', color='C{:d}'.format(imu), label='theory * window' if imu == 0 else None)
     for imu, mu in enumerate(muout):
-        lax[imu+1].plot(kout[imu], (model_conv[imu] - mean[imu])/std[imu], linestyle='-', color='C{:d}'.format(imu))
-        lax[imu+1].set_ylim(-4, 4)
-        for offset in [-2., 2.]: lax[imu+1].axhline(offset, color='k', linestyle='--')
-        lax[imu+1].set_ylabel(r'$\Delta P / \sigma_{P}$')
+        lax[imu + 1].plot(kout[imu], (model_conv[imu] - mean[imu]) / std[imu], linestyle='-', color='C{:d}'.format(imu))
+        lax[imu + 1].set_ylim(-4, 4)
+        for offset in [-2., 2.]: lax[imu + 1].axhline(offset, color='k', linestyle='--')
+        lax[imu + 1].set_ylabel(r'$\Delta P / \sigma_{P}$')
     for ax in lax: ax.grid(True)
     lax[0].legend()
     lax[0].set_ylabel(r'$k P(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
-    lax[-1].set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
+    lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     logger.info('Saving figure to {}.'.format(plot_wedges_fn))
     fig.savefig(plot_wedges_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
     plt.close(fig)

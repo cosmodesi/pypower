@@ -3,11 +3,11 @@
 import numpy as np
 from mpi4py import MPI
 
-from pmesh.pm import RealField, ComplexField, ParticleMesh
+from pmesh.pm import ParticleMesh
 from pmesh.window import FindResampler, ResampleWindow
-from .utils import BaseClass
-from .direct_power import _make_array, _format_positions, _format_weights
-from . import mpi, utils
+from .utils import BaseClass, _make_array, _get_box
+from .direct_power import _format_positions, _format_weights
+from . import mpi
 
 
 def _get_real_dtype(dtype):
@@ -19,7 +19,7 @@ def _get_resampler(resampler):
     # Return :class:`ResampleWindow` from string or :class:`ResampleWindow` instance
     if isinstance(resampler, ResampleWindow):
         return resampler
-    conversions = {'ngp':'nnb', 'cic':'cic', 'tsc':'tsc', 'pcs':'pcs'}
+    conversions = {'ngp': 'nnb', 'cic': 'cic', 'tsc': 'tsc', 'pcs': 'pcs'}
     if resampler not in conversions:
         raise ValueError('Unknown resampler {}, choices are {}'.format(resampler, list(conversions.keys())))
     resampler = conversions[resampler]
@@ -28,12 +28,12 @@ def _get_resampler(resampler):
 
 def _get_resampler_name(resampler):
     # Translate input :class:`ResampleWindow` instance to string
-    conversions = {'nearest':'ngp', 'tunednnb':'ngp', 'tunedcic':'cic', 'tunedtsc':'tsc', 'tunedpcs':'pcs'}
+    conversions = {'nearest': 'ngp', 'tunednnb': 'ngp', 'tunedcic': 'cic', 'tunedtsc': 'tsc', 'tunedpcs': 'pcs'}
     return conversions[resampler.kind]
 
 
 def _get_compensation_window(resampler='cic', shotnoise=False):
-    """
+    r"""
     Return the compensation function, which corrects for the particle-mesh assignment (resampler) kernel.
 
     Taken from https://github.com/bccp/nbodykit/blob/master/nbodykit/source/mesh/catalog.py,
@@ -67,7 +67,7 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
             def window(*x):
                 return 1.
 
-        if resampler == 'cic':
+        elif resampler == 'cic':
 
             def window(*x):
                 toret = 1.
@@ -75,26 +75,26 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
                     toret = toret * (1 - 2. / 3 * np.sin(0.5 * xi) ** 2) ** 0.5
                 return toret
 
-        if resampler == 'tsc':
+        elif resampler == 'tsc':
 
             def window(*x):
                 toret = 1.
                 for xi in x:
                     s = np.sin(0.5 * xi)**2
-                    toret = toret * (1 - s + 2./15 * s**2) ** 0.5
+                    toret = toret * (1 - s + 2. / 15 * s**2) ** 0.5
                 return toret
 
-        if resampler == 'pcs':
+        elif resampler == 'pcs':
 
             def window(*x):
                 toret = 1.
                 for xi in x:
                     s = np.sin(0.5 * xi)**2
-                    toret = toret * (1 - 4./3. * s + 2./5. * s**2 - 4./315. * s**3) ** 0.5
+                    toret = toret * (1 - 4. / 3. * s + 2. / 5. * s**2 - 4. / 315. * s**3) ** 0.5
                 return toret
 
     else:
-        p = {'ngp':1,'cic':2,'tsc':3,'pcs':4}[resampler]
+        p = {'ngp': 1, 'cic': 2, 'tsc': 3, 'pcs': 4}[resampler]
 
         def window(*x):
             toret = 1.
@@ -105,11 +105,11 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
     return window
 
 
-def _wrap_in_place(array, boxsize, offset=0.):
-    array[:] = (array - offset) % boxsize + offset
+def _wrap_positions(array, boxsize, offset=0.):
+    return (array - offset) % boxsize + offset
 
 
-def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=None, boxpad=2., check=True, mpicomm=mpi.COMM_WORLD):
+def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=None, boxpad=2., check=True, mpicomm=mpi.COMM_WORLD):
     """
     Compute enclosing box.
 
@@ -162,9 +162,7 @@ def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=
         if not isinstance(positions, (tuple, list)):
             positions = [positions]
         # Find bounding coordinates
-        pos_min, pos_max = _make_array(np.inf, 3, dtype='f8'), _make_array(-np.inf, 3, dtype='f8')
-        for pos in positions:
-            if pos.shape[0] > 0: pos_min, pos_max = np.min([pos_min, pos.min(axis=0)], axis=0), np.max([pos_max, pos.max(axis=0)], axis=0)
+        pos_min, pos_max = _get_box(*positions)
         pos_min, pos_max = np.min(mpicomm.allgather(pos_min), axis=0), np.max(mpicomm.allgather(pos_max), axis=0)
         delta = np.abs(pos_max - pos_min)
         if boxcenter is None: boxcenter = 0.5 * (pos_min + pos_max)
@@ -178,7 +176,7 @@ def _get_box(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, positions=
 
     if nmesh is None:
         if cellsize is not None:
-            nmesh = np.rint(boxsize/cellsize).astype(int)
+            nmesh = np.rint(boxsize / cellsize).astype('i8')
         else:
             raise ValueError('nmesh (or cellsize) must be specified')
     nmesh = _make_array(nmesh, 3, dtype='i4')
@@ -220,7 +218,7 @@ def ArrayMesh(array, boxsize, mpiroot=0, mpicomm=MPI.COMM_WORLD):
     pm = ParticleMesh(BoxSize=boxsize, Nmesh=shape, dtype=dtype, comm=mpicomm)
     mesh = pm.create(type='real')
     if mpicomm.rank == mpiroot:
-        array = array.ravel() # ignore data from other ranks
+        array = array.ravel()  # ignore data from other ranks
     else:
         array = np.empty((0,), dtype)
     mesh.unravel(array)
@@ -332,13 +330,13 @@ class CatalogMesh(BaseClass):
 
     def __repr__(self):
         """String representation of current mesh."""
-        info = ['{}={}'.format(name, getattr(self,name)) for name in ['nmesh', 'boxsize', 'boxcenter', 'dtype']]
-        return '{}({})'.format(self.__class__.__name__,', '.join(info))
+        info = ['{}={}'.format(name, getattr(self, name)) for name in ['nmesh', 'boxsize', 'boxcenter', 'dtype']]
+        return '{}({})'.format(self.__class__.__name__, ', '.join(info))
 
     @property
     def compensation(self):
         """Return dictionary specifying compensation scheme for particle-mesh resampling."""
-        return {'resampler':_get_resampler_name(self.resampler), 'shotnoise': not bool(self.interlacing)}
+        return {'resampler': _get_resampler_name(self.resampler), 'shotnoise': not bool(self.interlacing)}
 
     def clone(self, data_positions=None, data_weights=None, randoms_positions=None, randoms_weights=None,
               shifted_positions=None, shifted_weights=None,
@@ -354,7 +352,7 @@ class CatalogMesh(BaseClass):
         loc = locals()
         for name in ['boxsize', 'nmesh', 'boxcenter', 'dtype', 'resampler', 'interlacing', 'mpicomm']:
             kwargs[name] = loc[name] if loc[name] is not None else getattr(self, name)
-        if cellsize is not None: # if cellsize is provided, remove default nmesh or boxsize value from current instance.
+        if cellsize is not None:  # if cellsize is provided, remove default nmesh or boxsize value from current instance.
             kwargs['cellsize'] = cellsize
             if nmesh is None: kwargs.pop('nmesh')
             elif boxsize is None: kwargs.pop('boxsize')
@@ -376,11 +374,11 @@ class CatalogMesh(BaseClass):
         positions = [self.data_positions]
         if self.with_randoms: positions += [self.randoms_positions]
         if self.with_shifted: positions += [self.shifted_positions]
-        self.nmesh, self.boxsize, self.boxcenter = _get_box(nmesh=nmesh, boxsize=boxsize, cellsize=cellsize, boxcenter=boxcenter,
+        self.nmesh, self.boxsize, self.boxcenter = _get_mesh_attrs(nmesh=nmesh, boxsize=boxsize, cellsize=cellsize, boxcenter=boxcenter,
                                                             positions=positions, boxpad=boxpad, check=not wrap, mpicomm=self.mpicomm)
         if wrap:
             for position in positions:
-                _wrap_in_place(position, self.boxsize, self.boxcenter - self.boxsize/2.)
+                _wrap_positions(position, self.boxsize, self.boxcenter - self.boxsize / 2.)
 
     def _set_positions(self, data_positions, randoms_positions=None, shifted_positions=None, position_type='xyz', copy=False, mpiroot=None):
         # Set data and optionally shifted and randoms positions, scattering on all ranks if not already
@@ -471,38 +469,38 @@ class CatalogMesh(BaseClass):
         if self.with_shifted: allowed_fields |= set(['shifted', 'data-normalized_shifted', 'fkp'])
         if self.with_randoms: allowed_fields |= set(['randoms', 'data-normalized_randoms', 'fkp'])
         if field not in list(set(allowed_fields)):
-            raise ReconstructionError('Unknown field {}. Choices are {}'.format(field, allowed_fields))
+            raise ValueError('Unknown field {}. Choices are {}'.format(field, allowed_fields))
         positions, weights = [], []
         if field in ['data', 'fkp']:
             positions += [self.data_positions]
             weights += [(self.data_weights, None)]
         if field in ['normalized_data']:
             positions += [self.data_positions]
-            weights += [(self.data_weights, self.nmesh.prod()/self.sum_data_weights)] # mean mesh is 1
+            weights += [(self.data_weights, self.nmesh.prod() / self.sum_data_weights)]  # mean mesh is 1
         if field in ['fkp']:
             if self.with_shifted:
                 positions += [self.shifted_positions]
-                weights += [(self.shifted_weights, -self.sum_data_weights/self.sum_shifted_weights)]
+                weights += [(self.shifted_weights, -self.sum_data_weights / self.sum_shifted_weights)]
             else:
                 positions += [self.randoms_positions]
-                weights += [(self.randoms_weights, -self.sum_data_weights/self.sum_randoms_weights)]
+                weights += [(self.randoms_weights, -self.sum_data_weights / self.sum_randoms_weights)]
         if field in ['shifted', 'data-normalized_shifted']:
             positions += [self.shifted_positions]
             if field == 'data-normalized_shifted':
-                weights += [(self.shifted_weights, self.sum_data_weights/self.sum_shifted_weights)]
+                weights += [(self.shifted_weights, self.sum_data_weights / self.sum_shifted_weights)]
             else:
                 weights += [(self.shifted_weights, None)]
         if field in ['randoms', 'data-normalized_randoms']:
             positions += [self.randoms_positions]
             if field == 'data-normalized_randoms':
-                weights += [(self.randoms_weights, self.sum_data_weights/self.sum_randoms_weights)]
+                weights += [(self.randoms_weights, self.sum_data_weights / self.sum_randoms_weights)]
             else:
                 weights += [(self.randoms_weights, None)]
 
         pm = ParticleMesh(BoxSize=self.boxsize, Nmesh=self.nmesh, dtype=dtype, comm=self.mpicomm)
-        offset = self.boxcenter - self.boxsize/2.
-        #offset = self.boxcenter
-        #offset = 0.
+        offset = self.boxcenter - self.boxsize / 2.
+        # offset = self.boxcenter
+        # offset = 0.
 
         def paint(positions, weights, scaling, out, transform=None):
             positions = positions - offset
@@ -571,13 +569,13 @@ class CatalogMesh(BaseClass):
         if self.interlacing:
             if self.mpicomm.rank == 0:
                 self.log_info('Running interlacing at order {:d}.'.format(self.interlacing))
-            cellsize = self.boxsize/self.nmesh
-            shifts = np.arange(self.interlacing)*1./self.interlacing
+            cellsize = self.boxsize / self.nmesh
+            shifts = np.arange(self.interlacing) * 1. / self.interlacing
             # remove 0 shift, already computed
             shifts = shifts[1:]
             out = out.r2c()
             for shift in shifts:
-                transform = pm.affine.shift(shift) # this shifts particle positions by ``shift`` before painting to mesh
+                transform = pm.affine.shift(shift)  # this shifts particle positions by ``shift`` before painting to mesh
                 # paint to two shifted meshes
                 mesh_shifted = pm.create(type='real', value=0.)
                 for p, w in zip(positions, weights): paint(p, *w, mesh_shifted, transform=transform)
@@ -603,15 +601,15 @@ class CatalogMesh(BaseClass):
         if self.mpicomm.rank == 0:
             self.log_info('Applying compensation {}.'.format(self.compensation))
         # Apply compensation window for particle-assignment scheme
-        window = _get_compensation_window(**compensation)
+        window = _get_compensation_window(**self.compensation)
 
-        cellsize = self.boxsize/self.nmesh
+        cellsize = self.boxsize / self.nmesh
         for k, slab in zip(cfield.slabs.x, cfield.slabs):
             kc = tuple(ki * ci for ki, ci in zip(k, cellsize))
             slab[...] /= window(*kc)
 
     def unnormalized_shotnoise(self):
-        """
+        r"""
         Return unnormalized shotnoise, as:
 
         .. math::
@@ -627,9 +625,9 @@ class CatalogMesh(BaseClass):
 
         shotnoise = sum_weights2(self.data_positions, self.data_weights)
         if self.with_shifted:
-            alpha = self.sum_data_weights/self.sum_shifted_weights
+            alpha = self.sum_data_weights / self.sum_shifted_weights
             shotnoise += alpha**2 * sum_weights2(self.shifted_positions, self.shifted_weights)
         elif self.with_randoms:
-            alpha = self.sum_data_weights/self.sum_randoms_weights
+            alpha = self.sum_data_weights / self.sum_randoms_weights
             shotnoise += alpha**2 * sum_weights2(self.randoms_positions, self.randoms_weights)
         return shotnoise

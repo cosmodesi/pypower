@@ -17,6 +17,5 @@ setup(name=package_basename,
       license='BSD3',
       url='http://github.com/cosmodesi/pypower',
       install_requires=['numpy', 'scipy', 'pmesh'],
-      extras_require={'extras':['sympy', 'numexpr']},
-      packages=['pypower']
-)
+      extras_require={'extras': ['sympy', 'numexpr']},
+      packages=[package_basename])
