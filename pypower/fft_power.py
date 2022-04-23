@@ -1165,7 +1165,7 @@ def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.C
     return toret
 
 
-def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10.):
+def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10., fields=None):
     r"""
     Return DESI-like normalization, summing over mesh cells:
 
@@ -1208,9 +1208,12 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
 
     if (not uniform) and isinstance(mesh1, CatalogMesh) and isinstance(mesh2, CatalogMesh):
 
-        # If one of input meshes do not have randoms, assume uniform density (and same volume)
-        if (not mesh1.with_randoms) or (not mesh2.with_randoms):
-            return (mesh1.sum_data_weights * mesh2.sum_data_weights) / np.prod(mesh1.boxsize)
+        if fields is None:
+            # If one of input meshes do not have randoms, assume uniform density (and same volume)
+            if (not mesh1.with_randoms) or (not mesh2.with_randoms):
+                return (mesh1.sum_data_weights * mesh2.sum_data_weights) / np.prod(mesh1.boxsize)
+            fields = [('data', 'randoms')]
+            if not autocorr: fields.append(('randoms', 'data'))
 
         # Make sure to put mesh1 and mesh2 on the same mesh
         def get_positions(mesh):
@@ -1234,11 +1237,13 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
                               nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, resampler=resampler, interlacing=False, position_type='pos').to_mesh(field=field)
 
         # Sum over meshes
-        toret = (get_mesh_nbar(mesh1, field='data') * get_mesh_nbar(mesh2, field='randoms')).csum()
-        if not autocorr:
-            toret = (toret + (get_mesh_nbar(mesh2, field='data') * get_mesh_nbar(mesh1, field='randoms')).csum()) / 2.
+        toret = 0.
+        nfields = 0
+        for field1, field2 in fields:
+            toret += (get_mesh_nbar(mesh1, field=field1) * get_mesh_nbar(mesh2, field=field2)).csum()
+            nfields += 1
         # Meshes are in "weights units" (1/dV missing in each mesh), so multiply by dV * (1/dV)^2
-        toret /= np.prod(cellsize)
+        toret /= nfields * np.prod(cellsize)
         return toret
 
     # One of input meshes does not come from a catalog; assume uniform density (and same volume)
@@ -1347,15 +1352,8 @@ class MeshFFTPower(BaseClass):
         self._set_ells(ells)
         self._set_mesh(mesh1, mesh2=mesh2, boxcenter=boxcenter)
         self._set_edges(edges)
-        self.wnorm = wnorm
-        if wnorm is None:
-            self.wnorm = np.real(normalization(mesh1, mesh2))
-        self.shotnoise = shotnoise
-        if shotnoise is None:
-            self.shotnoise = 0.
-            # Shot noise is non zero only if we can estimate it
-            if self.autocorr and isinstance(mesh1, CatalogMesh):
-                self.shotnoise = mesh1.unnormalized_shotnoise() / self.wnorm
+        self._set_normalization(wnorm, mesh1, mesh2=mesh2)
+        self._set_shotnoise(shotnoise, mesh1=mesh1, mesh2=mesh2)
         self.attrs.update(self._get_attrs())
         t1 = time.time()
         if self.mpicomm.rank == 0:
@@ -1366,6 +1364,21 @@ class MeshFFTPower(BaseClass):
         if self.mpicomm.rank == 0:
             self.log_info('Mesh calculations performed in elapsed time {:.2f} s.'.format(t2 - t1))
             self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(t2 - t0))
+
+    def _set_normalization(self, wnorm, mesh1, mesh2=None):
+        # Set :attr:`wnorm`
+        self.wnorm = wnorm
+        if wnorm is None:
+            self.wnorm = np.real(normalization(mesh1, mesh2))
+
+    def _set_shotnoise(self, shotnoise, mesh1=None, mesh2=None):
+        # Set :attr:`shotnoise`
+        self.shotnoise = shotnoise
+        if shotnoise is None:
+            self.shotnoise = 0.
+            # Shot noise is non zero only if we can estimate it
+            if self.autocorr and isinstance(mesh1, CatalogMesh):
+                self.shotnoise = mesh1.unnormalized_shotnoise() / self.wnorm
 
     def _set_compensations(self, compensations):
         # Set :attr:`compensations`
@@ -1776,6 +1789,36 @@ class MeshFFTPower(BaseClass):
         self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
 
+def _format_all_weights(dtype=None, weight_type=None, weight_attrs=None, mpicomm=None, mpiroot=None, **kwargs):
+
+    weight_attrs = (weight_attrs or {}).copy()
+    noffset = weight_attrs.get('noffset', 1)
+    default_value = weight_attrs.get('default_value', 0)
+    weight_attrs.update(noffset=noffset, default_value=default_value)
+
+    def get_nrealizations(weights):
+        nrealizations = weight_attrs.get('nrealizations', None)
+        if nrealizations is None: nrealizations = get_default_nrealizations(weights)
+        return nrealizations
+
+    bweights, n_bitwise_weights, weights = {}, {}, {}
+    for name in kwargs:
+        label = name.replace('data_weights', 'D').replace('randoms_weights', 'R').replace('shifted_weights', 'S')
+        bweights[label], n_bitwise_weights[label] = _format_weights(kwargs[name], weight_type=weight_type, dtype=dtype, mpicomm=mpicomm, mpiroot=mpiroot)
+        if n_bitwise_weights[label]:
+            bitwise_weight = bweights[label][:n_bitwise_weights[label]]
+            nrealizations = get_nrealizations(bitwise_weight)
+            weights[label] = get_inverse_probability_weight(bitwise_weight, noffset=noffset, nrealizations=nrealizations, default_value=default_value)
+            if len(bweights[label]) > n_bitwise_weights[label]:
+                weights[label] *= bweights[label][n_bitwise_weights[label]]  # individual weights
+        elif len(bweights[label]):
+            weights[label] = bweights[label][0]  # individual weights
+        else:
+            weights[label] = None
+
+    return weights, bweights, n_bitwise_weights, weight_attrs
+
+
 class CatalogFFTPower(MeshFFTPower):
 
     """Wrapper on :class:`MeshFFTPower` to estimate power spectrum directly from positions and weights."""
@@ -1981,44 +2024,22 @@ class CatalogFFTPower(MeshFFTPower):
             The MPI communicator.
         """
         rdtype = _get_real_dtype(dtype)
+        loc = locals()
         bpositions, positions = [], {}
         for name in ['data_positions1', 'data_positions2', 'randoms_positions1', 'randoms_positions2', 'shifted_positions1', 'shifted_positions2']:
-            tmp = _format_positions(locals()[name], position_type=position_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
-            if tmp is not None:
-                bpositions.append(tmp)
+            tmp = _format_positions(loc[name], position_type=position_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
+            if tmp is not None: bpositions.append(tmp)
             label = name.replace('data_positions', 'D').replace('randoms_positions', 'R').replace('shifted_positions', 'S')
             positions[label] = tmp
-
-        weight_attrs = (weight_attrs or {}).copy()
-        noffset = weight_attrs.get('noffset', 1)
-        default_value = weight_attrs.get('default_value', 0)
-        weight_attrs.update(noffset=noffset, default_value=default_value)
-
-        def get_nrealizations(weights):
-            nrealizations = weight_attrs.get('nrealizations', None)
-            if nrealizations is None: nrealizations = get_default_nrealizations(weights)
-            return nrealizations
-
-        bweights, n_bitwise_weights, weights = {}, {}, {}
-        for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']:
-            label = name.replace('data_weights', 'D').replace('randoms_weights', 'R').replace('shifted_weights', 'S')
-            bweights[label], n_bitwise_weights[label] = _format_weights(locals()[name], weight_type=weight_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
-            if n_bitwise_weights[label]:
-                bitwise_weight = bweights[label][:n_bitwise_weights[label]]
-                nrealizations = get_nrealizations(bitwise_weight)
-                weights[label] = get_inverse_probability_weight(bitwise_weight, noffset=noffset, nrealizations=nrealizations, default_value=default_value)
-                if len(bweights[label]) > n_bitwise_weights[label]:
-                    weights[label] *= bweights[label][n_bitwise_weights[label]]  # individual weights
-            elif len(bweights[label]):
-                weights[label] = bweights[label][0]  # individual weights
-            else:
-                weights[label] = None
 
         with_shifted = positions['S1'] is not None
         with_randoms = positions['R1'] is not None
         autocorr = positions['D2'] is None
         if autocorr and (positions['R2'] is not None or positions['S2'] is not None):
             raise ValueError('randoms_positions2 or shifted_positions2 are provided, but not data_positions2')
+
+        weights = {name: loc[name] for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']}
+        weights, bweights, n_bitwise_weights, weight_attrs = _format_all_weights(dtype=rdtype, weight_type=weight_type, weight_attrs=weight_attrs, mpicomm=mpicomm, mpiroot=mpiroot, **weights)
 
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_mesh_attrs(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
@@ -2066,25 +2087,27 @@ class CatalogFFTPower(MeshFFTPower):
                 if autocorr and label21 in powers and powers[label21][1].is_reversible:
                     powers[label12] = (powers[label21][0], powers[label21][1].reversed())
                     continue
-                with_bitwise = n_bitwise_weights[label1] and (n_bitwise_weights[label2] or (autocorr and label2[:-1] == label1[:-1]))
-                if label2[:-1] != label1[:-1]:
-                    if autocorr:
-                        label2 = label2.replace('2', '1')
-                    for label in [label1, label2]:
-                        if positions[label] is None:
-                            raise ValueError('{} must be provided'.format(label))
-                with_bitwise = n_bitwise_weights[label1] and (n_bitwise_weights[label2] or (autocorr and label2[:-1] == label1[:-1]))
+
                 twopoint_weights_12 = twopoint_weights[label12]
-                # in case of autocorrelation, los = firstpoint or endpoint, R1D2 = R1D1 should get the same angular weight as D1R2 = D2R1
-                if autocorr and label2[:-1] != label1[:-1] and twopoint_weights_12 is None:
-                    twopoint_weights_12 = twopoint_weights[label21]
+                if autocorr:
+                    if label2[:-1] == label1[:-1]:
+                        label2 = None
+                    else:
+                        # label12 is D1R2, but we only have R1, so switch label2 to R1; same for D1S2
+                        label2 = label2.replace('2', '1')
+                        # In case of autocorrelation, los = firstpoint or endpoint, R1D2 = R1D1 should get the same angular weight as D1R2 = D2R1
+                        if twopoint_weights_12 is None: twopoint_weights_12 = twopoint_weights[label21]
+
+                with_bitwise = n_bitwise_weights[label1] and (label2 is None or n_bitwise_weights[label2])
                 if with_bitwise or twopoint_weights_12:
                     if self.los_type == 'global':
                         raise NotImplementedError('mu-wedge direct computation not handled yet')
                     if self.mpicomm.rank == 0:
                         self.log_info('Computing direct estimation {}.'.format(label12))
-                    powers[label12] = (coeff, DirectPowerEngine(self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions[label2], weights2=bweights[label2], ells=ells,
-                                                                limits=direct_limits, limit_type=direct_limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights_12,
+                        for label in [label1] + ([label2] if label2 is not None else []):
+                            if positions[label] is None: raise ValueError('{} must be provided'.format(label))
+                    powers[label12] = (coeff, DirectPowerEngine(self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions[label2] if label2 is not None else None, weights2=bweights[label2] if label2 is not None else None,
+                                                                ells=ells, limits=direct_limits, limit_type=direct_limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights_12,
                                                                 weight_attrs=weight_attrs, los=self.los_type, position_type='pos', mpicomm=self.mpicomm))
             for coeff, power in powers.values():
                 self.poles.power_direct_nonorm += coeff * power.power_nonorm

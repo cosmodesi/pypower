@@ -11,10 +11,9 @@ from pmesh.pm import ParticleMesh, RealField, ComplexField
 from . import mpi
 from .fftlog import PowerToCorrelation
 from .utils import _make_array
-from .fft_power import MeshFFTPower, get_real_Ylm, _transform_rslab, _get_real_dtype, project_to_basis, PowerSpectrumMultipoles, PowerSpectrumWedges, normalization
+from .fft_power import MeshFFTPower, get_real_Ylm, _transform_rslab, _get_real_dtype, _format_positions, _format_all_weights, project_to_basis, PowerSpectrumMultipoles, PowerSpectrumWedges, normalization
 from .wide_angle import BaseMatrix, Projection, PowerSpectrumOddWideAngleMatrix
 from .mesh import CatalogMesh, _get_mesh_attrs, _wrap_positions
-from .direct_power import _format_positions, _format_weights, get_default_nrealizations, get_inverse_probability_weight
 
 
 def Si(x):
@@ -929,40 +928,18 @@ class CatalogFFTWindow(MeshFFTWindow):
             if nmesh is None: mesh_attrs.pop('nmesh')
             elif boxsize is None: mesh_attrs.pop('boxsize')
 
+        loc = locals()
         bpositions, positions = [], {}
         for name in ['randoms_positions1', 'randoms_positions2']:
-            tmp = _format_positions(locals()[name], position_type=position_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
+            tmp = _format_positions(loc[name], position_type=position_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
             if tmp is not None: bpositions.append(tmp)
             label = name.replace('randoms_positions', 'R')
             positions[label] = tmp
 
-        weight_attrs = (weight_attrs or {}).copy()
-        noffset = weight_attrs.get('noffset', 1)
-        default_value = weight_attrs.get('default_value', 0)
-        weight_attrs.update(noffset=noffset, default_value=default_value)
-
-        def get_nrealizations(weights):
-            nrealizations = weight_attrs.get('nrealizations', None)
-            if nrealizations is None: nrealizations = get_default_nrealizations(weights)
-            return nrealizations
-
-        weights = {}
-        for name in ['randoms_weights1', 'randoms_weights2']:
-            label = name.replace('data_weights', 'D').replace('randoms_weights', 'R').replace('shifted_weights', 'S')
-            weight, n_bitwise_weights = _format_weights(locals()[name], weight_type=weight_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
-
-            if n_bitwise_weights:
-                bitwise_weight = weight[:n_bitwise_weights]
-                nrealizations = get_nrealizations(bitwise_weight)
-                weights[label] = get_inverse_probability_weight(bitwise_weight, noffset=noffset, nrealizations=nrealizations, default_value=default_value)
-                if len(weight) > n_bitwise_weights:
-                    weights[label] *= weight[n_bitwise_weights]  # individual weights
-            elif len(weight):
-                weights[label] = weight[0]  # individual weights
-            else:
-                weights[label] = None
-
         autocorr = positions['R2'] is None
+
+        weights = {name: loc[name] for name in ['randoms_weights1', 'randoms_weights2']}
+        weights, bweights, n_bitwise_weights, weight_attrs = _format_all_weights(dtype=rdtype, weight_type=weight_type, weight_attrs=weight_attrs, mpicomm=mpicomm, mpiroot=mpiroot, **weights)
 
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_mesh_attrs(**mesh_attrs, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)

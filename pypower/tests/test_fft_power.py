@@ -582,14 +582,14 @@ def test_memory():
         mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
                            shifted_positions=randoms['Position'], shifted_weights=randoms['Weight'],
                            boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype='f8')
-        #del data
-        #del randoms
+        # del data
+        # del randoms
         mesh._slab_npoints_max = 10000000
         mem('init')
-        array = mesh.to_mesh()
+        mesh.to_mesh()
         mem('painted')
         pm = ParticleMesh(BoxSize=mesh.boxsize, Nmesh=mesh.nmesh, dtype=mesh.dtype, comm=mesh.mpicomm)
-        array2 = pm.create(type='real', value=0.)
+        pm.create(type='real', value=0.)
         mem('create')
 
 

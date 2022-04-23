@@ -375,7 +375,7 @@ class CatalogMesh(BaseClass):
         if self.with_randoms: positions += [self.randoms_positions]
         if self.with_shifted: positions += [self.shifted_positions]
         self.nmesh, self.boxsize, self.boxcenter = _get_mesh_attrs(nmesh=nmesh, boxsize=boxsize, cellsize=cellsize, boxcenter=boxcenter,
-                                                            positions=positions, boxpad=boxpad, check=not wrap, mpicomm=self.mpicomm)
+                                                                   positions=positions, boxpad=boxpad, check=not wrap, mpicomm=self.mpicomm)
         if wrap:
             for position in positions:
                 _wrap_positions(position, self.boxsize, self.boxcenter - self.boxsize / 2.)
@@ -468,7 +468,7 @@ class CatalogMesh(BaseClass):
         allowed_fields = set(['data', 'normalized_data'])
         if self.with_shifted: allowed_fields |= set(['shifted', 'data-normalized_shifted', 'fkp'])
         if self.with_randoms: allowed_fields |= set(['randoms', 'data-normalized_randoms', 'fkp'])
-        if field not in list(set(allowed_fields)):
+        if field not in allowed_fields:
             raise ValueError('Unknown field {}. Choices are {}'.format(field, allowed_fields))
         positions, weights = [], []
         if field in ['data', 'fkp']:
