@@ -403,7 +403,7 @@ def test_direct_power():
             assert np.allclose(test_mpi.power_nonorm, test.power_nonorm, **tol)
             data1 = [d if mpicomm.rank == mpiroot else dref[:0] for d, dref in zip(data1, data1_ref)]
             data2 = [d if mpicomm.rank == mpiroot else dref[:0] for d, dref in zip(data2, data2_ref)]
-            test_mpi = run(mpiroot=mpiroot)
+            test_mpi = run(mpiroot=None)
             assert np.allclose(test_mpi.power_nonorm, ref, **tol)
             test_mpi = run(mpiroot=mpiroot, pass_zero=True)
 

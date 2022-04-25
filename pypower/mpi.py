@@ -310,7 +310,7 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
         positions2 = positions1
         weights2 = weights1
 
-    if mpicomm.size == 1 or positions1.size == 0 or positions2.size == 0:
+    if mpicomm.size == 1 or mpicomm.allreduce(len(positions1)) == 0 or mpicomm.allreduce(len(positions2)) == 0:
         return (positions1, weights1), (positions2, weights2)
 
     def split_size_3d(s):
