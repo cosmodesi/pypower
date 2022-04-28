@@ -742,6 +742,34 @@ class BasePowerSpectrumStatistics(BaseClass):
             new.mpicomm = self.mpicomm
         return new
 
+    @classmethod
+    def sum(cls, *others):
+        """
+        Sum input power spectra, weighted by their :attr:`wnorm`.
+
+        Warning
+        -------
+        Input power spectra have same edges / number of modes for this operation to make sense
+        (no checks performed).
+        """
+        new = others[0].deepcopy()
+        for name in cls._attrs:
+            if name.endswith('nonorm') and hasattr(new, name):
+                setattr(new, name, sum(getattr(other, name) for other in others))
+        new.wnorm = sum(other.wnorm for other in others)
+        return new
+
+    def __add__(self, other):
+        return self.sum(self, other)
+
+    def __radd__(self, other):
+        if other == 0: return self.deepcopy()
+        return self.__add__(other)
+
+    def __iadd__(self, other):
+        if other == 0: return self.deepcopy()
+        return self.__add__(other)
+
     def save_txt(self, filename, fmt='%.12e', delimiter=' ', header=None, comments='# ', **kwargs):
         """
         Save power spectrum as txt file.

@@ -107,6 +107,7 @@ def test_fft():
     shape = rfield.value.shape
     # rfield[...] = 1.
     rfield[...] = np.random.uniform(0., 1., size=shape)
+    assert np.allclose((rfield - rfield).value, 0.)
     cfield = rfield.r2c().value
     # print(cfield[0,0,0])
     from numpy import fft
@@ -145,8 +146,6 @@ def test_fft():
 
 def test_power_statistic():
 
-    mpicomm = mpi.COMM_WORLD
-
     for dtype in ['f8', 'c16']:
 
         edges = np.linspace(0., 0.2, 11)
@@ -172,6 +171,11 @@ def test_power_statistic():
 
         for axis in range(power.ndim): assert np.allclose(power.modeavg(axis=axis, method='mid'), mid(power.edges[axis]))
 
+        power2 = power_ref + power_ref
+        assert np.allclose(power2.power, power_ref.power, equal_nan=True)
+        assert np.allclose(power2.wnorm, 2. * power_ref.wnorm, equal_nan=True)
+
+        power = power_ref.copy()
         with tempfile.TemporaryDirectory() as tmp_dir:
             # tmp_dir = '_tests'
             # power.mpicomm = mpicomm # to get a Barrier (otherwise the directory on root=0 may be deleted before other ranks access it)
@@ -179,7 +183,7 @@ def test_power_statistic():
             fn = os.path.join(tmp_dir, 'tmp.npy')
             power.save(fn)
             test = PowerSpectrumStatistics.load(fn)
-            assert np.all(test.power == power.power)
+            assert np.allclose(test.power, power.power, equal_nan=True)
             fn = os.path.join(tmp_dir, 'tmp.npy')
             test.save(fn)
 
@@ -230,7 +234,23 @@ def test_power_statistic():
         power2.select(None, (0., 0.5))
         assert np.all(power2.modes[1] <= 0.5)
         for axis in range(power.ndim): assert np.allclose(power.modeavg(axis=axis, method='mid'), mid(power.edges[axis]))
-        power = power_ref
+
+        power2 = power_ref + power_ref
+        assert np.allclose(power2.power, power_ref.power)
+        assert np.allclose(power2.wnorm, 2. * power_ref.wnorm)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # tmp_dir = '_tests'
+            # power.mpicomm = mpicomm # to get a Barrier (otherwise the directory on root=0 may be deleted before other ranks access it)
+            # fn = mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
+            fn = os.path.join(tmp_dir, 'tmp.npy')
+            power.save(fn)
+            test = PowerSpectrumStatistics.load(fn)
+            assert np.all(test.power == power.power)
+            fn = os.path.join(tmp_dir, 'tmp.npy')
+            test.save(fn)
+
+        power = power_ref.copy()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # tmp_dir = '_tests'
@@ -860,7 +880,6 @@ if __name__ == '__main__':
     # test_interlacing()
     # test_fft()
     # test_memory()
-    test_mpi()
     test_power_statistic()
     test_find_edges()
     test_ylm()

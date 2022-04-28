@@ -450,6 +450,11 @@ def test_catalog_power():
                               ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
     assert np.allclose(power.poles.power_direct_nonorm, direct_D1D2.power_nonorm - direct_D1R2.power_nonorm - direct_R1D2.power_nonorm)
 
+    power = power.poles
+    power2 = power + power
+    assert np.allclose(power2.power, power.power, equal_nan=True)
+    assert np.allclose(power2.wnorm, 2. * power.wnorm, equal_nan=True)
+
 
 if __name__ == '__main__':
 
