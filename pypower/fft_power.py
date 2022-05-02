@@ -1253,8 +1253,8 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
         if not autocorr: positions += get_positions(mesh2)
         # Determine bounding box
         nmesh, boxsize, boxcenter = _get_mesh_attrs(cellsize=cellsize, positions=positions, boxpad=1.1, mpicomm=mesh1.mpicomm)
-        nmesh += 1
-        boxsize = nmesh * cellsize  # enforce exact cellsize
+        # nmesh += 1
+        # boxsize = nmesh * cellsize  # enforce exact cellsize
         cellsize = boxsize / nmesh  # just to get correct shape
 
         # Assign positions/weights to mesh

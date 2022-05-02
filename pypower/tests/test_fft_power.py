@@ -637,7 +637,7 @@ def test_catalog_power():
         mesh = fkp.to_mesh(position='Position', comp_weight='Weight', nbar='NZ', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
         return ConvolvedFFTPower(mesh, poles=ells, dk=dk, kmin=kedges[0], kmax=kedges[-1] + 1e-9)
 
-    def get_catalog_power(data, randoms, position_type='pos', edges=kedges, dtype=dtype, as_cross=False, **kwargs):
+    def get_catalog_power(data, randoms, position_type='pos', edges=kedges, dtype=dtype, as_cross=False, nmesh=nmesh, **kwargs):
         data_positions, randoms_positions = data['Position'], randoms['Position']
         if position_type == 'xyz':
             data_positions, randoms_positions = data['Position'].T, randoms['Position'].T
@@ -648,11 +648,11 @@ def test_catalog_power():
         return CatalogFFTPower(data_positions1=data_positions, data_weights1=data['Weight'], randoms_positions1=randoms_positions, randoms_weights1=randoms['Weight'],
                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=edges, position_type=position_type, dtype=dtype, **kwargs)
 
-    def get_catalog_mesh_power(data, randoms, dtype=dtype, slab_npoints_max=None, weights=('data', 'randoms')):
+    def get_catalog_mesh_power(data, randoms, dtype=dtype, slab_npoints_max=None, nmesh=nmesh, weights=('data', 'randoms'), **kwargs):
         data_weights = data['Weight'] if 'data' in weights else None
         randoms_weights = randoms['Weight'] if 'randoms' in weights else None
         mesh = CatalogMesh(data_positions=data['Position'], data_weights=data_weights, randoms_positions=randoms['Position'], randoms_weights=randoms_weights,
-                           boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
+                           boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype, **kwargs)
         if slab_npoints_max is not None:
             mesh._slab_npoints_max = slab_npoints_max
         return MeshFFTPower(mesh, ells=ells, los=los, edges=kedges)
@@ -728,6 +728,13 @@ def test_catalog_power():
         remove_shotnoise = options.get('weights', ('data', 'randoms')) == ('data', 'randoms')
         for ell in ells:
             assert np.allclose(power_mesh.poles(ell=ell, remove_shotnoise=remove_shotnoise), f_power.poles(ell=ell, remove_shotnoise=remove_shotnoise))
+
+    options = {'nmesh': None, 'cellsize': 10}
+    power_catalog = get_catalog_power(data, randoms, **options)
+    power_mesh = get_catalog_mesh_power(data, randoms, **options)
+    remove_shotnoise = options.get('weights', ('data', 'randoms')) == ('data', 'randoms')
+    for ell in ells:
+        assert np.allclose(power_mesh.poles(ell=ell, remove_shotnoise=remove_shotnoise), power_catalog.poles(ell=ell, remove_shotnoise=remove_shotnoise))
 
     power_mesh = get_mesh_power(data, randoms, as_complex=False)
     for ell in ells:

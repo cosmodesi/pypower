@@ -130,7 +130,8 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
     cellsize : array, float, default=None
         Physical size of mesh cells.
         If not ``None``, and mesh size ``nmesh`` is not ``None``, used to set ``boxsize`` as ``nmesh * cellsize``.
-        If ``nmesh`` is ``None``, it is set as (the nearest integer(s) to) ``boxsize/cellsize``.
+        If ``nmesh`` is ``None``, it is set as (the next nearest even integer(s) to) ``boxsize/cellsize``.
+        If ``boxsize`` was not provided, scale ``boxsize`` to exactly match ``nmesh * cellsize``.
 
     positions : (list of) (N, 3) arrays, default=None
         If ``boxsize`` and / or ``boxcenter`` is ``None``, use this (list of) position arrays
@@ -156,7 +157,8 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
     boxcenter : array
         Box center.
     """
-    if boxsize is None or boxcenter is None or check:
+    provided_boxsize = boxsize is not None
+    if not provided_boxsize or boxcenter is None or check:
         if positions is None:
             raise ValueError('positions must be provided if boxsize and boxcenter are not specified, or check is True')
         if not isinstance(positions, (tuple, list)):
@@ -176,7 +178,10 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
 
     if nmesh is None:
         if cellsize is not None:
-            nmesh = np.rint(boxsize / cellsize).astype('i8')
+            nmesh = np.ceil(boxsize / cellsize).astype('i8')
+            nmesh += nmesh % 2  # to make it even
+            if not provided_boxsize:
+                boxsize = nmesh * cellsize  # enforce exact cellsize
         else:
             raise ValueError('nmesh (or cellsize) must be specified')
     nmesh = _make_array(nmesh, 3, dtype='i4')
