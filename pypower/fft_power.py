@@ -1279,7 +1279,7 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
         s1 = mesh1.sum_data_weights
         boxsize = mesh1.boxsize
     elif isinstance(mesh1, ComplexField):
-        s1 = mesh1.pm.Nmesh.prod()
+        s1 = mesh1.pm.Nmesh.prod(dtype='f8')
         boxsize = mesh1.pm.BoxSize
     else:
         s1 = mesh1.csum()
@@ -1290,7 +1290,7 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
         if isinstance(mesh2, CatalogMesh):
             s2 = mesh2.sum_data_weights
         elif isinstance(mesh1, ComplexField):
-            s2 = mesh1.pm.Nmesh.prod()
+            s2 = mesh1.pm.Nmesh.prod(dtype='f8')
         else:
             s2 = mesh2.csum()
 
@@ -1662,7 +1662,7 @@ class MeshFFTPower(BaseClass):
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': self.shotnoise * self.wnorm, 'attrs': self.attrs, 'mpicomm': self.mpicomm}
         k, mu, power, nmodes, power_zero = result
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-        power, power_zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, power_zero))
+        power, power_zero = (self.nmesh.prod(dtype='f8')**2 * tmp.conj() for tmp in (power, power_zero))
         # Format the power results into :class:`PowerSpectrumWedges` instance
         self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, **kwargs)
 
@@ -1670,7 +1670,7 @@ class MeshFFTPower(BaseClass):
             # Format the power results into :class:`PowerSpectrumMultipoles` instance
             k, power, nmodes, power_zero = result_poles
             # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-            power, power_zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, power_zero))
+            power, power_zero = (self.nmesh.prod(dtype='f8')**2 * tmp.conj() for tmp in (power, power_zero))
             self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def _run_local_los(self):
@@ -1809,7 +1809,7 @@ class MeshFFTPower(BaseClass):
             k, nmodes = proj_result[0], proj_result[3]
 
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-        power, power_zero = (self.nmesh.prod()**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
+        power, power_zero = (self.nmesh.prod(dtype='f8')**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
         if swap: power, power_zero = (tmp.conj() for tmp in (power, power_zero))
         # Format the power results into :class:`PowerSpectrumMultipoles` instance
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)

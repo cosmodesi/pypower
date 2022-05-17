@@ -474,7 +474,7 @@ class MeshFFTWindow(MeshFFTPower):
 
         remove_shotnoise = ellout == projin.ell == projin.wa_order == 0
         if remove_shotnoise:
-            shotnoise = self.shotnoise * self.wnorm / self.nmesh.prod() / (4 * np.pi)  # normalization of Ylmin * Ylmout
+            shotnoise = self.shotnoise * self.wnorm / self.nmesh.prod(dtype='f8') / (4 * np.pi)  # normalization of Ylmin * Ylmout
 
         for Ylmin in Ylmins:
 
@@ -560,13 +560,13 @@ class MeshFFTWindow(MeshFFTPower):
         # Format the power results into :class:`PowerSpectrumWedges` instance
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': 0., 'attrs': self.attrs}
         k, mu, power, nmodes, power_zero = result
-        power, power_zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, power_zero))
+        power, power_zero = (self.nmesh.prod(dtype='f8')**2 * tmp.conj() for tmp in (power, power_zero))
         self.wedges = PowerSpectrumWedges(modes=(k, mu), edges=self.edges, power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, **kwargs)
 
         if result_poles:
             # Format the power results into :class:`PolePowerSpectrum` instance
             k, power, nmodes, power_zero = result_poles
-            power, power_zero = (self.nmesh.prod()**2 * tmp.conj() for tmp in (power, power_zero))
+            power, power_zero = (self.nmesh.prod(dtype='f8')**2 * tmp.conj() for tmp in (power, power_zero))
             self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def _run_local_los(self, projin, deriv):
@@ -606,7 +606,7 @@ class MeshFFTWindow(MeshFFTPower):
 
         del dfield
 
-        power, power_zero = (self.nmesh.prod()**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
+        power, power_zero = (self.nmesh.prod(dtype='f8')**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
         if self.swap: power, power_zero = (tmp.conj() for tmp in (power, power_zero))
         k, nmodes = np.squeeze(k), np.squeeze(nmodes)
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': 0., 'attrs': self.attrs}
@@ -663,7 +663,7 @@ class MeshFFTWindow(MeshFFTPower):
                     cfield1[islab, ...] = cfield1[islab].conj() * cfield2[islab]
 
                 self.qfield = cfield1.c2r()
-                shotnoise = self.shotnoise * self.wnorm / self.nmesh.prod()
+                shotnoise = self.shotnoise * self.wnorm / self.nmesh.prod(dtype='f8')
                 for i, c in zip(self.qfield.slabs.i, self.qfield.slabs):
                     mask_zero = True
                     for ii in i: mask_zero = mask_zero & (ii == 0)

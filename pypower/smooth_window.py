@@ -6,7 +6,6 @@ following https://arxiv.org/abs/2106.06324.
 """
 
 import math
-from fractions import Fraction
 
 import numpy as np
 from scipy.interpolate import UnivariateSpline
@@ -1138,9 +1137,7 @@ def wigner3j_square(ellout, ellin, prefactor=True):
             numer.append(2 * ellout + 1)
             denom.append(2 * q + 1)
 
-        numer = Fraction(np.prod(numer))
-        denom = Fraction(np.prod(denom))
-        coeffs.append(numer * 1. / denom)
+        coeffs.append(np.prod(numer, dtype='f8') * 1. / np.prod(denom, dtype='f8'))
         qvals.append(q)
 
     return qvals[::-1], coeffs[::-1]

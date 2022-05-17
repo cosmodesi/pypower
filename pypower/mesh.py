@@ -484,7 +484,7 @@ class CatalogMesh(BaseClass):
             weights += [(self.data_weights, None)]
         if field in ['normalized_data']:
             positions += [self.data_positions]
-            weights += [(self.data_weights, self.nmesh.prod() / self.sum_data_weights)]  # mean mesh is 1
+            weights += [(self.data_weights, self.nmesh.prod(dtype='f8') / self.sum_data_weights)]  # mean mesh is 1
         if field in ['fkp']:
             if self.with_shifted:
                 positions += [self.shifted_positions]
