@@ -8,7 +8,7 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import LagrangianLinearMock, Catalog
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, PowerSpectrumStatistics, mpi, utils, setup_logging
+from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, ArrayMesh, PowerSpectrumStatistics, mpi, utils, setup_logging
 from pypower.fft_power import normalization, normalization_from_nbar, find_unique_edges, get_real_Ylm, project_to_basis
 
 
@@ -551,6 +551,18 @@ def test_normalization():
     assert np.allclose(new, old, atol=0, rtol=1e-1)
 
 
+def test_array_mesh():
+
+    shape = (60, 50, 20)
+    array = np.arange(np.prod(shape, dtype='i'), dtype='f8')
+    array.shape = shape
+    mesh_root = ArrayMesh(array, boxsize=1., mpiroot=0)
+    mpicomm = mesh_root.pm.comm
+    array = np.ravel(array)
+    mesh_scattered = ArrayMesh(array[mpicomm.rank * array.size // mpicomm.size:(mpicomm.rank + 1) * array.size // mpicomm.size], boxsize=1., nmesh=shape, mpiroot=None)
+    assert np.allclose(mesh_scattered.value, mesh_root.value)
+
+
 def test_catalog_mesh():
 
     data = Catalog.read(data_fn)
@@ -890,6 +902,7 @@ if __name__ == '__main__':
     test_power_statistic()
     test_find_edges()
     test_ylm()
+    test_array_mesh()
     test_catalog_mesh()
     test_field_power()
     test_mesh_power()

@@ -1938,8 +1938,8 @@ class CatalogFFTPower(MeshFFTPower):
         nmesh : array, int, default=None
             Mesh size, i.e. number of mesh nodes along each axis.
 
-        boxsize : float, default=None
-            Physical size of the box, defaults to maximum extent taken by all input positions, times ``boxpad``.
+        boxsize : array, float, default=None
+            Physical size of the box along each axis, defaults to maximum extent taken by all input positions, times ``boxpad``.
 
         boxcenter : array, float, default=None
             Box center, defaults to center of the Cartesian box enclosing all input positions.
@@ -1947,7 +1947,7 @@ class CatalogFFTPower(MeshFFTPower):
         cellsize : array, float, default=None
             Physical size of mesh cells.
             If not ``None``, and mesh size ``nmesh`` is not ``None``, used to set ``boxsize`` as ``nmesh * cellsize``.
-            If ``nmesh`` is ``None``, it is set as (the nearest integer(s) to) ``boxsize/cellsize``.
+            If ``nmesh`` is ``None``, it is set as (the nearest integer(s) to) ``boxsize / cellsize``.
 
         boxpad : float, default=2.
             When ``boxsize`` is determined from input positions, take ``boxpad`` times the smallest box enclosing positions as ``boxsize``.

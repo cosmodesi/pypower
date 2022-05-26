@@ -130,8 +130,8 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
     cellsize : array, float, default=None
         Physical size of mesh cells.
         If not ``None``, ``boxsize`` is ``None`` and mesh size ``nmesh`` is not ``None``, used to set ``boxsize`` to ``nmesh * cellsize``.
-        If ``nmesh`` is ``None``, it is set to (the nearest integer(s) to) ``boxsize/cellsize`` if ``boxsize`` is provided,
-        else to the nearest even integer to ``boxsize/cellsize``, and ``boxsize`` is then reset to ``nmesh * cellsize``.
+        If ``nmesh`` is ``None``, it is set to (the nearest integer(s) to) ``boxsize / cellsize`` if ``boxsize`` is provided,
+        else to the nearest even integer to ``boxsize / cellsize``, and ``boxsize`` is then reset to ``nmesh * cellsize``.
 
     positions : (list of) (N, 3) arrays, default=None
         If ``boxsize`` and / or ``boxcenter`` is ``None``, use this (list of) position arrays
@@ -193,7 +193,7 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
     return nmesh, boxsize, boxcenter
 
 
-def ArrayMesh(array, boxsize, mpiroot=0, mpicomm=MPI.COMM_WORLD):
+def ArrayMesh(array, boxsize, nmesh=None, mpiroot=0, mpicomm=MPI.COMM_WORLD):
     """
     Turn numpy array into :class:`pmesh.pm.RealField`.
 
@@ -202,11 +202,15 @@ def ArrayMesh(array, boxsize, mpiroot=0, mpicomm=MPI.COMM_WORLD):
     array : array
         Mesh numpy array gathered on ``mpiroot``.
 
-    boxsize : array
-        Physical box size.
+    boxsize : array, float, default=None
+        Physical size of the box along each axis.
+
+    nmesh : array, int, default=None
+        If ``mpiroot`` is ``None``, mesh size, i.e. number of mesh nodes along each axis.
 
     mpiroot : int, default=0
         MPI rank where input array is gathered.
+        If input array is scattered accross all ranks in C ordering, pass ``mpiroot = None`` and specify ``nmesh``.
 
     mpicomm : MPI communicator, default=MPI.COMM_WORLD
         The MPI communicator.
@@ -215,20 +219,28 @@ def ArrayMesh(array, boxsize, mpiroot=0, mpicomm=MPI.COMM_WORLD):
     -------
     mesh : pmesh.pm.RealField
     """
-    if mpicomm.rank == mpiroot:
-        dtype, shape = array.dtype, array.shape
+    if mpiroot is None:
+        dtype = array.dtype
+        if nmesh is None:
+            raise ValueError('In case input mesh is scattered accross all ranks, provide its shape (nmesh)')
+        shape = _make_array(nmesh, 3, dtype='i8')
     else:
-        dtype, shape, array = None, None, None
+        if mpicomm.rank == mpiroot:
+            dtype, shape = array.dtype, array.shape
+        else:
+            dtype, shape, array = None, None, None
+        dtype = mpicomm.bcast(dtype, root=mpiroot)
+        shape = mpicomm.bcast(shape, root=mpiroot)
 
-    dtype = mpicomm.bcast(dtype, root=mpiroot)
-    shape = mpicomm.bcast(shape, root=mpiroot)
     boxsize = _make_array(boxsize, 3, dtype='f8')
     pm = ParticleMesh(BoxSize=boxsize, Nmesh=shape, dtype=dtype, comm=mpicomm)
     mesh = pm.create(type='real')
-    if mpicomm.rank == mpiroot:
-        array = array.ravel()  # ignore data from other ranks
+
+    if mpiroot is None or mpicomm.rank == mpiroot:
+        array = np.ravel(array)  # ignore data from other ranks
     else:
-        array = np.empty((0,), dtype)
+        array = np.empty((0,), dtype=dtype)
+
     mesh.unravel(array)
     return mesh
 
@@ -273,20 +285,17 @@ class CatalogMesh(BaseClass):
 
         nmesh : array, int, default=None
             Mesh size, i.e. number of mesh nodes along each axis.
-            If not provided, see ``value``.
 
-        boxsize : float, default=None
-            Physical size of the box.
-            If not provided, see ``positions``.
+        boxsize : array, float, default=None
+            Physical size of the box along each axis, defaults to maximum extent taken by all input positions, times ``boxpad``.
 
         boxcenter : array, float, default=None
-            Box center.
-            If not provided, see ``positions``.
+            Box center, defaults to center of the Cartesian box enclosing all input positions.
 
         cellsize : array, float, default=None
             Physical size of mesh cells.
             If not ``None``, and mesh size ``nmesh`` is not ``None``, used to set ``boxsize`` as ``nmesh * cellsize``.
-            If ``nmesh`` is ``None``, it is set as (the nearest integer(s) to) ``boxsize/cellsize``.
+            If ``nmesh`` is ``None``, it is set as (the nearest integer(s) to) ``boxsize / cellsize``.
 
         wrap : bool, default=False
             Whether to wrap input positions?

@@ -308,7 +308,7 @@ class BaseMatrix(BaseClass):
                             new.append(kwargs.get(name, old[0]))
                     setattr(self, name, new)
 
-        self.value = []
+        value = []
         for iin, projin in enumerate(self.projsin):
             line = []
             for iout, projout in enumerate(self.projsout):
@@ -323,8 +323,8 @@ class BaseMatrix(BaseClass):
                     else:
                         tmp = np.zeros(shape, dtype=self.dtype)
                 line.append(tmp)
-            self.value.append(line)
-        self.value = np.bmat(self.value).A
+            value.append(line)
+        self.value = np.bmat(value).A
 
     def __getitem__(self, slices):
         """Call :meth:`slice_x`."""
@@ -355,7 +355,7 @@ class BaseMatrix(BaseClass):
             List of output projections to apply slicing to.
             Defaults to :attr:`projsout`.
         """
-        self.value = self.unpacked()  # unpack first, as based on :attr:`xin`, :attr:`xout`
+        value = self.unpacked()  # unpack first, as based on :attr:`xin`, :attr:`xout`
 
         inprojs, masks, factors = {}, {}, {}
         for axis in ['in', 'out']:
@@ -398,9 +398,9 @@ class BaseMatrix(BaseClass):
             selfiin = self.projsin.index(projin)
             for iout, projout in enumerate(inprojs['out']):
                 selfiout = self.projsout.index(projout)
-                self.value[selfiin][selfiout] = self.value[selfiin][selfiout][np.ix_(masks['in'][iin], masks['out'][iout])]
+                value[selfiin][selfiout] = value[selfiin][selfiout][np.ix_(masks['in'][iin], masks['out'][iout])]
 
-        self.value = np.bmat(self.value).A
+        self.value = np.bmat(value).A
         if not all(f == 1 for f in factors.values()):
             self.rebin_x(factorin=factors['in'], factorout=factors['out'], projsin=inprojs['in'], projsout=inprojs['out'])
 
@@ -427,7 +427,7 @@ class BaseMatrix(BaseClass):
             Defaults to :attr:`projsout`.
         """
         # One could also set the slices, and call slice_x, but this is inefficient in case x is different for each projection
-        self.value = self.unpacked()  # unpack first, as based on :attr:`xin`, :attr:`xout`
+        value = self.unpacked()  # unpack first, as based on :attr:`xin`, :attr:`xout`
 
         inprojs, masks = {}, {}
         for axis in ['in', 'out']:
@@ -461,9 +461,9 @@ class BaseMatrix(BaseClass):
             selfiin = self.projsin.index(projin)
             for iout, projout in enumerate(inprojs['out']):
                 selfiout = self.projsout.index(projout)
-                self.value[selfiin][selfiout] = self.value[selfiin][selfiout][np.ix_(masks['in'][iin], masks['out'][iout])]
+                value[selfiin][selfiout] = value[selfiin][selfiout][np.ix_(masks['in'][iin], masks['out'][iout])]
 
-        self.value = np.bmat(self.value).A
+        self.value = np.bmat(value).A
 
     def rebin_x(self, factorin=1, factorout=1, projsin=None, projsout=None, statistic=None):
         """
@@ -495,7 +495,7 @@ class BaseMatrix(BaseClass):
             self.rebin_x(factorin=factorin, factorout=1, projsin=projsin, projsout=projsout, statistic=np.sum)
             return
 
-        self.value = self.unpacked()  # unpack first, as based on :attr:`xin`, :attr:`xout`
+        value = self.unpacked()  # unpack first, as based on :attr:`xin`, :attr:`xout`
 
         inprojs, old_weights, new_weights = {}, {}, {}
         for axis in ['in', 'out']:
@@ -532,15 +532,15 @@ class BaseMatrix(BaseClass):
             selfiin = self.projsin.index(projin)
             for iout, projout in enumerate(inprojs['out']):
                 selfiout = self.projsout.index(projout)
-                tmp = self.value[selfiin][selfiout]
+                tmp = value[selfiin][selfiout]
                 new_shape = tuple(s // f for s, f in zip(tmp.shape, (factorin, factorout)))
                 oweights, nweights = 1., 1.
                 for iaxis, (axis, ii) in enumerate(zip(['in', 'out'], [iin, iout])):
                     if axis in old_weights:
                         oweights = oweights * np.expand_dims(old_weights[axis][ii], axis=1 - iaxis)
                         nweights = nweights * np.expand_dims(new_weights[axis][ii], axis=1 - iaxis)
-                self.value[selfiin][selfiout] = utils.rebin(self.value[selfiin][selfiout] * oweights, new_shape, statistic=statistic) / nweights
-        self.value = np.bmat(self.value).A
+                value[selfiin][selfiout] = utils.rebin(value[selfiin][selfiout] * oweights, new_shape, statistic=statistic) / nweights
+        self.value = np.bmat(value).A
 
     @classmethod
     def concatenate_proj(cls, *others, axis='in'):
@@ -939,7 +939,7 @@ class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
         """
         k = self.xin[0]
         eye = np.eye(len(k), dtype=k.dtype)
-        self.value = []
+        value = []
 
         for projin in self.projsin:
             line = []
@@ -978,7 +978,7 @@ class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
                             tmp[-1, -2] = 2. * coeff / deltak[-1]
                             block += tmp.T  # (in, out)
                 line.append(block)
-            self.value.append(line)
-        self.value = np.bmat(self.value).A  # (in, out)
+            value.append(line)
+        self.value = np.bmat(value).A  # (in, out)
 
     propose_out = CorrelationFunctionOddWideAngleMatrix.propose_out
