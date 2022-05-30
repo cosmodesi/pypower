@@ -471,9 +471,9 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
                         raise ValueError('Incompatible length of bitwise weights: {:d} and {:d} bytes'.format(n_bitwise_weights1, n_bitwise_weights2))
 
         if len(self.weights1) == len(self.weights2) + 1:
-            self.weights2.append(np.ones(len(self.positions1), dtype=self.dtype))
+            self.weights2.append(np.ones(len(self.positions2), dtype=self.dtype))
         elif len(self.weights1) == len(self.weights2) - 1:
-            self.weights1.append(np.ones(len(self.positions2), dtype=self.dtype))
+            self.weights1.append(np.ones(len(self.positions1), dtype=self.dtype))
         elif len(self.weights1) != len(self.weights2):
             raise ValueError('Something fishy happened with weights; number of weights1/weights2 is {:d}/{:d}'.format(len(self.weights1), len(self.weights2)))
 
@@ -618,7 +618,7 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                 npairs = len(tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray'))
             npairs_downsample = 1 + 3 / max(npairs, 1)**0.5  # 3 sigma margin
             npairs_downsample *= size1 / max(size1_downsample, 1) * size2 / max(size2_downsample, 1)  # scale to size of d1 & d2
-            nslabs = int(npairs_downsample / self._slab_npairs_max + 1.)
+            nslabs = min(int(npairs_downsample / self._slab_npairs_max + 1.), len(d2[0]))
             if nslabs == 1:  # do not touch autocorrelation
                 yield (d2, d1) if swap else (d1, d2)
             else:
