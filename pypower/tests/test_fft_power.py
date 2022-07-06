@@ -554,13 +554,21 @@ def test_normalization():
 def test_array_mesh():
 
     shape = (60, 50, 20)
-    array = np.arange(np.prod(shape, dtype='i'), dtype='f8')
-    array.shape = shape
-    mesh_root = ArrayMesh(array, boxsize=1., mpiroot=0)
-    mpicomm = mesh_root.pm.comm
-    array = np.ravel(array)
-    mesh_scattered = ArrayMesh(array[mpicomm.rank * array.size // mpicomm.size:(mpicomm.rank + 1) * array.size // mpicomm.size], boxsize=1., nmesh=shape, mpiroot=None)
-    assert np.allclose(mesh_scattered.value, mesh_root.value)
+    for dtype in ['f8', 'c8']:
+        for type in ['real', 'complex', 'untransposedcomplex']:
+            array = np.arange(np.prod(shape, dtype='i'), dtype=dtype)
+            array.shape = shape
+            if 'complex' in type:
+                nmesh = shape[:-1] + (shape[-1] * 2 - 1,)
+            else:
+                nmesh = shape
+            mesh_root = ArrayMesh(array, type=type, nmesh=nmesh if 'complex' in type else None, boxsize=1., mpiroot=0)
+            from pmesh.pm import _typestr_to_type
+            assert isinstance(mesh_root, _typestr_to_type(type))
+            mpicomm = mesh_root.pm.comm
+            array = np.ravel(array)
+            mesh_scattered = ArrayMesh(array[mpicomm.rank * array.size // mpicomm.size:(mpicomm.rank + 1) * array.size // mpicomm.size], type=type, nmesh=nmesh, boxsize=1., mpiroot=None)
+            assert np.allclose(mesh_scattered.value, mesh_root.value)
 
 
 def test_catalog_mesh():

@@ -14,7 +14,7 @@ import time
 import numpy as np
 from scipy.interpolate import UnivariateSpline, RectBivariateSpline
 from scipy import special
-from pmesh.pm import RealField, ComplexField
+from pmesh.pm import RealField, BaseComplexField, UntransposedComplexField, TransposedComplexField, ComplexField
 
 from .utils import BaseClass, _make_array
 from . import mpi, utils
@@ -1278,7 +1278,7 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
     if isinstance(mesh1, CatalogMesh):
         s1 = mesh1.sum_data_weights
         boxsize = mesh1.boxsize
-    elif isinstance(mesh1, ComplexField):
+    elif isinstance(mesh1, BaseComplexField):
         s1 = mesh1.pm.Nmesh.prod(dtype='f8')
         boxsize = mesh1.pm.BoxSize
     else:
@@ -1289,7 +1289,7 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
     else:
         if isinstance(mesh2, CatalogMesh):
             s2 = mesh2.sum_data_weights
-        elif isinstance(mesh1, ComplexField):
+        elif isinstance(mesh1, BaseComplexField):
             s2 = mesh1.pm.Nmesh.prod(dtype='f8')
         else:
             s2 = mesh2.csum()
@@ -1466,7 +1466,7 @@ class MeshFFTPower(BaseClass):
                 data_size = mesh.pm.Nmesh.prod()
                 self.attrs['data_size{:d}'.format(i + 1)] = data_size
                 self.attrs['randoms_size{:d}'.format(i + 1)] = 0
-                if isinstance(mesh, ComplexField):
+                if isinstance(mesh, BaseComplexField):
                     sum_data = data_size
                 else:
                     sum_data = mesh.csum().real
@@ -1499,9 +1499,11 @@ class MeshFFTPower(BaseClass):
 
     @staticmethod
     def _to_complex(mesh, copy=True):
-        if isinstance(mesh, ComplexField):
+        if isinstance(mesh, TransposedComplexField):
             if copy: return mesh.copy()
             return mesh
+        elif isinstance(mesh, UntransposedComplexField):
+            return mesh.cast(TransposedComplexField)
         return mesh.r2c()
 
     @staticmethod

@@ -193,9 +193,9 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
     return nmesh, boxsize, boxcenter
 
 
-def ArrayMesh(array, boxsize, nmesh=None, mpiroot=0, mpicomm=MPI.COMM_WORLD):
+def ArrayMesh(array, boxsize, type='real', nmesh=None, mpiroot=0, mpicomm=MPI.COMM_WORLD):
     """
-    Turn numpy array into :class:`pmesh.pm.RealField`.
+    Turn numpy array into :class:`pmesh.pm.Field`.
 
     Parameters
     ----------
@@ -205,8 +205,11 @@ def ArrayMesh(array, boxsize, nmesh=None, mpiroot=0, mpicomm=MPI.COMM_WORLD):
     boxsize : array, float, default=None
         Physical size of the box along each axis.
 
+    type : str, default='real'
+        Type of field, 'real', 'complex', 'untransposedcomplex'.
+
     nmesh : array, int, default=None
-        If ``mpiroot`` is ``None``, mesh size, i.e. number of mesh nodes along each axis.
+        In case ``mpiroot`` is ``None`` or complex field, mesh size, i.e. number of mesh nodes along each axis.
 
     mpiroot : int, default=0
         MPI rank where input array is gathered.
@@ -217,29 +220,42 @@ def ArrayMesh(array, boxsize, nmesh=None, mpiroot=0, mpicomm=MPI.COMM_WORLD):
 
     Returns
     -------
-    mesh : pmesh.pm.RealField
+    mesh : pmesh.pm.Field
     """
-    if mpiroot is None:
-        dtype = array.dtype
-        if nmesh is None:
-            raise ValueError('In case input mesh is scattered accross all ranks, provide its shape (nmesh)')
-        shape = _make_array(nmesh, 3, dtype='i8')
-    else:
-        if mpicomm.rank == mpiroot:
-            dtype, shape = array.dtype, array.shape
+    type = type.lower()
+
+    if nmesh is None:
+        if type == 'real' and mpiroot is not None:
+            nmesh = mpicomm.bcast(array.shape if mpicomm.rank == mpiroot else None, root=mpiroot)
         else:
-            dtype, shape, array = None, None, None
-        dtype = mpicomm.bcast(dtype, root=mpiroot)
-        shape = mpicomm.bcast(shape, root=mpiroot)
+            raise ValueError('In case of scattered or complex mesh, provide nmesh')
+
+    nmesh = _make_array(nmesh, 3, dtype='i8')
+
+    if mpiroot is None:
+        array_dtype = array.dtype
+        csize = mpicomm.allreduce(array.size)
+    else:
+        array_dtype = mpicomm.bcast(array.dtype if mpicomm.rank == mpiroot else None, root=mpiroot)
+        csize = mpicomm.bcast(array.size if mpicomm.rank == mpiroot else None, root=mpiroot)
+
+    dtype = array_dtype
+    if 'complex' in type:
+        itemsize = dtype.itemsize
+        if 'complex' not in dtype.name: itemsize *= 2
+        if np.prod(nmesh) != csize:  # hermitian symmetry
+            dtype = np.dtype('f{:d}'.format(itemsize // 2))
+        else:
+            dtype = np.dtype('c{:d}'.format(itemsize))
 
     boxsize = _make_array(boxsize, 3, dtype='f8')
-    pm = ParticleMesh(BoxSize=boxsize, Nmesh=shape, dtype=dtype, comm=mpicomm)
-    mesh = pm.create(type='real')
+    pm = ParticleMesh(BoxSize=boxsize, Nmesh=nmesh, dtype=dtype, comm=mpicomm)
+    mesh = pm.create(type=type)
 
     if mpiroot is None or mpicomm.rank == mpiroot:
         array = np.ravel(array)  # ignore data from other ranks
     else:
-        array = np.empty((0,), dtype=dtype)
+        array = np.empty((0,), dtype=array_dtype)
 
     mesh.unravel(array)
     return mesh
