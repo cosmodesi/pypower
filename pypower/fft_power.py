@@ -977,19 +977,19 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
         toret = np.nan * np.zeros((k.size, mu.size), dtype=power.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
         mask_mu = (mu >= self.edges[1][0]) & (mu <= self.edges[1][-1])
-        k, mu = k[mask_k], mu[mask_mu]
-        if mask_k.any() and mask_mu.any():
+        k_masked, mu_masked = k[mask_k], mu[mask_mu]
+        if k_masked.size and mu_masked.size:
             if muavg.size == 1:
 
                 def interp(array):
-                    return UnivariateSpline(kavg, array, k=1, s=0, ext='const')(k)[:, None]
+                    return UnivariateSpline(kavg, array, k=1, s=0, ext='const')(k_masked)[:, None]
 
             else:
-                i_k = np.argsort(k); ii_k = np.argsort(i_k)
-                i_mu = np.argsort(mu); ii_mu = np.argsort(i_mu)
+                i_k = np.argsort(k_masked); ii_k = np.argsort(i_k)
+                i_mu = np.argsort(mu_masked); ii_mu = np.argsort(i_mu)
 
                 def interp(array):
-                    return RectBivariateSpline(kavg, muavg, array, kx=1, ky=1, s=0)(k[i_k], mu[i_mu], grid=True)[np.ix_(ii_k, ii_mu)]
+                    return RectBivariateSpline(kavg, muavg, array, kx=1, ky=1, s=0)(k_masked[i_k], mu_masked[i_mu], grid=True)[np.ix_(ii_k, ii_mu)]
 
             toret[np.ix_(mask_k, mask_mu)] = interp(power.real)
             if complex and np.iscomplexobj(power):
@@ -1001,6 +1001,45 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
                 return k, mu, toret
             return k, toret
         return toret
+
+    def plot(self, ax=None, fn=None, kw_save=None, show=False):
+        r"""
+        Plot power spectrum.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, default=None
+            Axes where to plot samples. If ``None``, takes current axes.
+
+        fn : string, default=None
+            If not ``None``, file name where to save figure.
+
+        kw_save : dict, default=None
+            Optional arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            Whether to show figure.
+
+        Returns
+        -------
+        ax : matplotlib.axes.Axes
+        """
+        from matplotlib import pyplot as plt
+        if ax is None: ax = plt.gca()
+        k, power = self.k, self(complex=False)
+        wedges = self.edges[1]
+        for iwedge, wedge in enumerate(zip(wedges[:-1], wedges[1:])):
+            ax.plot(k[:, iwedge], k[:, iwedge] * power[:, iwedge], label=r'${:.2f} < \mu < {:.2f}$'.format(*wedge))
+        ax.legend()
+        ax.grid(True)
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        ax.set_ylabel(r'$k P(k, \mu)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        if not self.with_mpi or self.mpicomm.rank == 0:
+            if fn is not None:
+                utils.savefig(fn, **(kw_save or {}))
+            if show:
+                plt.show()
+        return ax
 
 
 class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
@@ -1139,11 +1178,11 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         k = np.asarray(k)
         toret = np.nan * np.zeros((len(ells),) + k.shape, dtype=power.dtype)
         mask_k = (k >= self.edges[0][0]) & (k <= self.edges[0][-1])
-        k = k[mask_k]
-        if mask_k.any():
+        k_masked = k[mask_k]
+        if k_masked.size:
 
             def interp(array):
-                return np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k) for arr in array], dtype=array.dtype)
+                return np.array([UnivariateSpline(kavg, arr, k=1, s=0, ext='const')(k_masked) for arr in array], dtype=array.dtype)
 
             toret[..., mask_k] = interp(power.real)
             if complex and np.iscomplexobj(power):
@@ -1153,6 +1192,44 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         if return_k:
             return k, toret
         return toret
+
+    def plot(self, ax=None, fn=None, kw_save=None, show=False):
+        r"""
+        Plot power spectrum.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, default=None
+            Axes where to plot samples. If ``None``, takes current axes.
+
+        fn : string, default=None
+            If not ``None``, file name where to save figure.
+
+        kw_save : dict, default=None
+            Optional arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            Whether to show figure.
+
+        Returns
+        -------
+        ax : matplotlib.axes.Axes
+        """
+        from matplotlib import pyplot as plt
+        if ax is None: ax = plt.gca()
+        for ill, ell in enumerate(self.ells):
+            k, power = self(ell=ell, return_k=True, complex=False)
+            ax.plot(k, k * power, label=r'$\ell = {:d}$'.format(ell))
+        ax.legend()
+        ax.grid(True)
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        if not self.with_mpi or self.mpicomm.rank == 0:
+            if fn is not None:
+                utils.savefig(fn, **(kw_save or {}))
+            if show:
+                plt.show()
+        return ax
 
 
 def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.COMM_WORLD):
@@ -1536,7 +1613,9 @@ class MeshFFTPower(BaseClass):
         if self.mpicomm.rank == 0:
             self.log_info('Using {:d} k-bins between {:.3f} and {:.3f}.'.format(len(kedges) - 1, kedges[0], kedges[-1]))
         if muedges is None:
-            muedges = np.linspace(-1, 1, 2, endpoint=True)  # single :math:`\mu`-wedge
+            muedges = np.linspace(-1., 1., 2, endpoint=True)  # single :math:`\mu`-wedge
+        elif self.los_type != 'global' and muedges.size > 2:
+            raise ValueError('Cannot compute wedges with local {} line-of-sight'.format(self.los_type))
         self.edges = (np.asarray(kedges, dtype='f8'), np.asarray(muedges, dtype='f8'))
 
     def _set_ells(self, ells):

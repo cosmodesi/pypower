@@ -871,6 +871,17 @@ def test_mpi():
     test(position_type='xyz', pass_none=mpicomm.rank > 0)
 
 
+def test_plot():
+    kedges = {'min': 0., 'step': 0.005}
+    data = Catalog.read(data_fn)
+
+    power = CatalogFFTPower(data_positions1=data['Position'], edges=(kedges, np.linspace(-1., 1., 4)),
+                            ells=(0, 2, 4), boxsize=600., nmesh=128, resampler='tsc', interlacing=3, los='x', position_type='pos')
+    tmp_dir = '_tests'
+    power.wedges.plot(fn=os.path.join(tmp_dir, 'wedges.png'), show=True)
+    power.poles.plot(fn=os.path.join(tmp_dir, 'poles.png'), show=True)
+
+
 def test_interlacing():
 
     from matplotlib import pyplot as plt
@@ -901,7 +912,7 @@ def test_interlacing():
 
 if __name__ == '__main__':
 
-    setup_logging('debug')
+    setup_logging('info')
     # save_lognormal()
     # test_mesh_power()
     # test_interlacing()
@@ -917,3 +928,4 @@ if __name__ == '__main__':
     test_catalog_power()
     test_normalization()
     test_mpi()
+    test_plot()

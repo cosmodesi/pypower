@@ -9,6 +9,9 @@ import traceback
 import numpy as np
 
 
+logger = logging.getLogger('Utils')
+
+
 def exception_handler(exc_type, exc_value, exc_traceback):
     """Print exception with a logger."""
     # Do not print traceback if the exception has been handled and logged
@@ -29,6 +32,38 @@ def mkdir(dirname):
         os.makedirs(dirname)  # MPI...
     except OSError:
         return
+
+
+def savefig(filename, fig=None, bbox_inches='tight', pad_inches=0.1, dpi=200, **kwargs):
+    """
+    Save figure to ``filename``.
+
+    Warning
+    -------
+    Take care to close figure at the end, ``plt.close(fig)``.
+
+    Parameters
+    ----------
+    filename : string
+        Path where to save figure.
+
+    fig : matplotlib.figure.Figure, default=None
+        Figure to save. Defaults to current figure.
+
+    kwargs : dict
+        Optional arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    from matplotlib import pyplot as plt
+    mkdir(os.path.dirname(filename))
+    logger.info('Saving figure to {}.'.format(filename))
+    if fig is None:
+        fig = plt.gcf()
+    fig.savefig(filename, bbox_inches=bbox_inches, pad_inches=pad_inches, dpi=dpi, **kwargs)
+    return fig
 
 
 def setup_logging(level=logging.INFO, stream=sys.stdout, filename=None, filemode='w', **kwargs):
