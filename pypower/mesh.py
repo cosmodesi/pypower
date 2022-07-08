@@ -181,12 +181,9 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
         if cellsize is not None:
             cellsize = _make_array(cellsize, 3, dtype='f8')
             nmesh = boxsize / cellsize
-            if provided_boxsize:
-                nmesh = np.rint(nmesh).astype('i8')
-            else:
-                nmesh = np.ceil(nmesh).astype('i8')
-                nmesh += nmesh % 2  # to make it even
-                boxsize = nmesh * cellsize  # enforce exact cellsize
+            nmesh = np.ceil(nmesh).astype('i8')
+            nmesh += nmesh % 2  # to make it even
+            boxsize = nmesh * cellsize  # enforce exact cellsize
         else:
             raise ValueError('nmesh (or cellsize) must be specified')
     nmesh = _make_array(nmesh, 3, dtype='i4')
