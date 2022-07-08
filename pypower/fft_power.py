@@ -1617,6 +1617,9 @@ class MeshFFTPower(BaseClass):
         elif self.los_type != 'global' and muedges.size > 2:
             raise ValueError('Cannot compute wedges with local {} line-of-sight'.format(self.los_type))
         self.edges = (np.asarray(kedges, dtype='f8'), np.asarray(muedges, dtype='f8'))
+        for name, edges in zip(['k', 'mu'], self.edges):
+            if len(edges) < 2:
+                raise ValueError('{}-edges are of size {:d} < 2'.format(name))
 
     def _set_ells(self, ells):
         # Set :attr:`ells`

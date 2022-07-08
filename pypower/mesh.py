@@ -176,8 +176,10 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
         if check and (boxsize < delta).any():
             raise ValueError('boxsize {} too small to contain all data (max {})'.format(boxsize, delta))
 
+    boxsize = _make_array(boxsize, 3, dtype='f8')
     if nmesh is None:
         if cellsize is not None:
+            cellsize = _make_array(cellsize, 3, dtype='f8')
             nmesh = boxsize / cellsize
             if provided_boxsize:
                 nmesh = np.rint(nmesh).astype('i8')
@@ -188,7 +190,6 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
         else:
             raise ValueError('nmesh (or cellsize) must be specified')
     nmesh = _make_array(nmesh, 3, dtype='i4')
-    boxsize = _make_array(boxsize, 3, dtype='f8')
     boxcenter = _make_array(boxcenter, 3, dtype='f8')
     return nmesh, boxsize, boxcenter
 
