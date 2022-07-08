@@ -157,8 +157,7 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
     boxcenter : array
         Box center.
     """
-    provided_boxsize = boxsize is not None
-    if not provided_boxsize or boxcenter is None or check:
+    if boxsize is None or boxcenter is None or check:
         if positions is None:
             raise ValueError('positions must be provided if boxsize and boxcenter are not specified, or check is True')
         if not isinstance(positions, (tuple, list)):
