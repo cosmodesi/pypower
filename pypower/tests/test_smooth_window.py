@@ -54,7 +54,7 @@ def test_power_spectrum_window_matrix():
     sep = np.geomspace(swin[0], swin[-1], 1024 * 16 * 2)
     kin = 1. / sep[::-1] / (sep[1] / sep[0])
 
-    wm = PowerSpectrumSmoothWindowMatrix(kout, projsin, projsout=projsout, window=window, k=kin, kin_rebin=2, kin_lim=None, sep=sep, sum_wa=False)
+    wm = PowerSpectrumSmoothWindowMatrix(kout, projsin, projsout=projsout, weightsout=2 * np.ones_like(kout), window=window, k=kin, kin_rebin=2, kin_lim=None, sep=sep, sum_wa=False)
     kin = wm.xin[0]
     mask = (kin > 0.001) & (kin < 1.)
     test = wm.value.T

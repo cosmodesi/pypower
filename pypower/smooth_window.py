@@ -908,7 +908,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
 
     _slab_npoints_max = 10 * 1000
 
-    def __init__(self, kout, projsin, projsout=None, k=None, kin_rebin=1, kin_lim=(1e-4, 1.), sep=None, window=None, xy=1, q=0, sum_wa=True, default_zero=False, attrs=None):
+    def __init__(self, kout, projsin, projsout=None, weightsout=None, k=None, kin_rebin=1, kin_lim=(1e-4, 1.), sep=None, window=None, xy=1, q=0, sum_wa=True, default_zero=False, attrs=None):
         """
         Initialize :class:`PowerSpectrumSmoothWindowMatrix`.
 
@@ -922,6 +922,12 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
 
         projsout : list, default=None
             Output projections. Defaults to ``propose_out(projsin, sum_wa=sum_wa)``.
+
+        weightsout : array, list, default=None
+            Optionally, list of weights to apply when rebinning output "observed" coordinates.
+            Typically, one would use for ``kout`` and ``weightsout`` the modes :attr:`BasePowerSpectrumStatistics.k`
+            and number of modes :attr:`BasePowerSpectrumStatistics.nmodes` of the observed power spectrum,
+            such that output k-modes of power spectrum and window matrix match after rebinning.
 
         k : array, default=None
             Wavenumber for Hankel transforms; must be log-spaced.
@@ -993,7 +999,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
         else:
             self.projsout = [Projection(proj, default_wa_order=None if self.sum_wa else 0) for proj in projsout]
 
-        self._set_xw(xin=self.k, xout=kout)
+        self._set_xw(xin=self.k, xout=kout, weightsout=weightsout)
         self.run()
 
     def run(self):
