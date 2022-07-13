@@ -163,6 +163,8 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
         if not isinstance(positions, (tuple, list)):
             positions = [positions]
         # Find bounding coordinates
+        if mpicomm.allreduce(sum(pos.shape[0] for pos in positions)) <= 1:
+            raise ValueError('<= 1 particles found; cannot infer boxsize')
         pos_min, pos_max = _get_box(*positions)
         pos_min, pos_max = np.min(mpicomm.allgather(pos_min), axis=0), np.max(mpicomm.allgather(pos_max), axis=0)
         delta = np.abs(pos_max - pos_min)

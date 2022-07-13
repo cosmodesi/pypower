@@ -1604,10 +1604,10 @@ class MeshFFTPower(BaseClass):
             kmax = kedges.get('max', np.pi / (self.boxsize / self.nmesh).max())
             dk = kedges.get('step', None)
             if dk is None:
-                # find unique edges
+                # Find unique edges
                 k = [k.real for k in self.pm.create_coords('complex')]
                 dk = 2 * np.pi / self.boxsize
-                kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax + 1e-5 * dk, mpicomm=self.mpicomm)  # margin required for float32
+                kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax + 1e-5 * dk.min(), mpicomm=self.mpicomm)  # margin required for float32
             else:
                 kedges = np.arange(kmin, kmax + 1e-5 * dk, dk)
         if self.mpicomm.rank == 0:

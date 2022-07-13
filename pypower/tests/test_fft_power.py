@@ -503,6 +503,9 @@ def test_mesh_power():
             if power.wedges.edges[1][-1] == 1.:
                 check_poles(power.poles, ref_power.poles)
 
+    power = get_mesh_power(data, los='x', edges=None)
+    assert len(power.edges[0]) == 3416 and np.allclose(power.edges[0][0], 0.)
+
     power = get_mesh_power(data, los='x').poles
 
     power_compensation = get_mesh_power_compensation(data, los='x').poles

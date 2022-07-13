@@ -764,7 +764,7 @@ class CatalogSmoothWindow(MeshFFTPower):
         del self.ells
 
     @classmethod
-    def concatenate(cls, *others, **kwargs):
+    def concatenate_x(cls, *others, **kwargs):
         """
         Concatenate :attr:`poles`.
         Same argument as :meth:`PowerSpectrumSmoothWindow.concatenate_x`.
