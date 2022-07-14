@@ -534,12 +534,13 @@ class BaseMatrix(BaseClass):
                 selfiout = self.projsout.index(projout)
                 tmp = value[selfiin][selfiout]
                 new_shape = tuple(s // f for s, f in zip(tmp.shape, (factorin, factorout)))
-                oweights, nweights = 1., 1.
+                old_2dweights, new_2dweights = 1., 1.
                 for iaxis, (axis, ii) in enumerate(zip(['in', 'out'], [iin, iout])):
                     if axis in old_weights:
-                        oweights = oweights * np.expand_dims(old_weights[axis][ii], axis=1 - iaxis)
-                        nweights = nweights * np.expand_dims(new_weights[axis][ii], axis=1 - iaxis)
-                value[selfiin][selfiout] = utils.rebin(value[selfiin][selfiout] * oweights, new_shape, statistic=statistic) / nweights
+                        oweights, nweights = old_weights[axis][ii], new_weights[axis][ii]
+                        old_2dweights = old_2dweights * np.expand_dims(oweights, axis=1 - iaxis)
+                        new_2dweights = new_2dweights * np.expand_dims(utils.rebin(oweights, len(nweights), statistic=statistic), axis=1 - iaxis)
+                value[selfiin][selfiout] = utils.rebin(value[selfiin][selfiout] * old_2dweights, new_shape, statistic=statistic) / new_2dweights
         self.value = np.bmat(value).A
 
     @classmethod
