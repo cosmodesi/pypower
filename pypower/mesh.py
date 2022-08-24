@@ -371,23 +371,17 @@ class CatalogMesh(BaseClass):
         return {'resampler': _get_resampler_name(self.resampler), 'shotnoise': not bool(self.interlacing)}
 
     def clone(self, data_positions=None, data_weights=None, randoms_positions=None, randoms_weights=None,
-              shifted_positions=None, shifted_weights=None,
-              boxsize=None, cellsize=None, nmesh=None, boxcenter=None, dtype=None,
-              resampler=None, interlacing=None, position_type='xyz', mpicomm=None):
+              shifted_positions=None, shifted_weights=None, position_type='xyz', **kwargs):
         """
         Clone current instance, i.e. copy and set new positions and weights.
         Arguments 'boxsize', 'nmesh', 'boxcenter', 'dtype', 'resampler', 'interlacing', 'mpicomm', if ``None``,
         are overriden by those of the current instance.
         """
         new = self.__class__.__new__(self.__class__)
-        kwargs = {}
-        loc = locals()
-        for name in ['boxsize', 'nmesh', 'boxcenter', 'dtype', 'resampler', 'interlacing', 'mpicomm']:
-            kwargs[name] = loc[name] if loc[name] is not None else getattr(self, name)
-        if cellsize is not None:  # if cellsize is provided, remove default nmesh or boxsize value from current instance.
-            kwargs['cellsize'] = cellsize
-            if nmesh is None: kwargs.pop('nmesh')
-            elif boxsize is None: kwargs.pop('boxsize')
+        # If cellsize is provided, do not use nmesh or boxsize value from current instance
+        for name in ['boxsize', 'nmesh'] * ('cellsize' not in kwargs) + ['boxcenter', 'dtype', 'resampler', 'interlacing', 'mpicomm']:
+            tmp = kwargs.get(name, None)
+            kwargs[name] = tmp if tmp is not None else getattr(self, name)
         new.__init__(data_positions=data_positions, data_weights=data_weights, randoms_positions=randoms_positions, randoms_weights=randoms_weights,
                      shifted_positions=shifted_positions, shifted_weights=shifted_weights, position_type=position_type, **kwargs)
         return new

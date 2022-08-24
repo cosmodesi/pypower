@@ -36,16 +36,15 @@ def gather_array(data, root=0, mpicomm=COMM_WORLD):
     """
     if root is None: root = Ellipsis
 
-    if np.isscalar(data):
-        if root == Ellipsis:
+    if all(mpicomm.allgather(np.isscalar(data))):
+        if root is Ellipsis:
             return np.array(mpicomm.allgather(data))
         gathered = mpicomm.gather(data, root=root)
         if mpicomm.rank == root:
             return np.array(gathered)
         return None
 
-    if not isinstance(data, np.ndarray):
-        raise ValueError('`data` must be numpy array in gather_array')
+    data = np.asarray(data)
 
     # need C-contiguous order
     if not data.flags['C_CONTIGUOUS']:

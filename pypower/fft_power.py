@@ -194,7 +194,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
     Returns
     -------
     result : tuple
-        The 2D binned results; a tuple of ``(xmean2d, mumean2d, y2d, n2d)``, where:
+        The 2D binned results; a tuple of ``(xmean2d, mumean2d, y2d, n2d, zero2d)``, where:
 
             - xmean2d : array_like, (nx, nmu)
                 The mean :math:`x` value in each 2D bin
@@ -204,9 +204,11 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
                 The mean ``y3d`` value in each 2D bin
             - n2d : array_like, (nx, nmu)
                 The number of values averaged in each 2D bin
+            - zero2d : array_like, (nmu, )
+                Value of the power spectrum at k = 0
 
     result_poles : tuple or None
-        The multipole results; if ``ells`` supplied it is a tuple of ``(xmean1d, poles, n1d)``,
+        The multipole results; if ``ells`` supplied it is a tuple of ``(xmean1d, poles, n1d, poles_zero)``,
         where:
 
             - xmean1d : array_like, (nx,)
@@ -215,6 +217,8 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
                 The mean multipoles value in each 1D bin
             - n1d : array_like, (nx,)
                 The number of values averaged in each 1D bin
+            - poles_zero : array_like, (nell,)
+                Value of the power spectrum at k = 0
     """
     comm = y3d.pm.comm
     x3d = y3d.x
@@ -224,7 +228,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
     from scipy.special import legendre
 
     # Setup the bin edges and number of bins
-    xedges, muedges = edges
+    xedges, muedges = (np.asarray(edge) for edge in edges)
     nx = len(xedges) - 1
     nmu = len(muedges) - 1
     xdtype = max(xedges.dtype, muedges.dtype)
@@ -1025,7 +1029,8 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
         ax : matplotlib.axes.Axes
         """
         from matplotlib import pyplot as plt
-        if ax is None: ax = plt.gca()
+        fig = None
+        if ax is None: fig, ax = plt.subplots()
         k, power = self.k, self(complex=False)
         wedges = self.edges[1]
         for iwedge, wedge in enumerate(zip(wedges[:-1], wedges[1:])):
@@ -1036,7 +1041,7 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
         ax.set_ylabel(r'$k P(k, \mu)$ [$(\mathrm{Mpc}/h)^{2}$]')
         if not self.with_mpi or self.mpicomm.rank == 0:
             if fn is not None:
-                utils.savefig(fn, **(kw_save or {}))
+                utils.savefig(fn, fig=fig, **(kw_save or {}))
             if show:
                 plt.show()
         return ax
@@ -1216,7 +1221,8 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         ax : matplotlib.axes.Axes
         """
         from matplotlib import pyplot as plt
-        if ax is None: ax = plt.gca()
+        fig = None
+        if ax is None: fig, ax = plt.subplots()
         for ill, ell in enumerate(self.ells):
             k, power = self(ell=ell, return_k=True, complex=False)
             ax.plot(k, k * power, label=r'$\ell = {:d}$'.format(ell))
@@ -1226,7 +1232,7 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         if not self.with_mpi or self.mpicomm.rank == 0:
             if fn is not None:
-                utils.savefig(fn, **(kw_save or {}))
+                utils.savefig(fn, fig=fig, **(kw_save or {}))
             if show:
                 plt.show()
         return ax
@@ -1339,7 +1345,7 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
             if field == 'randoms':
                 field = 'data-normalized_randoms'
             return mesh.clone(data_positions=mesh.data_positions, data_weights=mesh.data_weights, randoms_positions=mesh.randoms_positions, randoms_weights=mesh.randoms_weights,
-                              nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, resampler=resampler, interlacing=False, position_type='pos').to_mesh(field=field)
+                              nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, resampler=resampler, interlacing=False, position_type='pos').to_mesh(field=field, compensate=False)
 
         # Sum over meshes
         toret = 0.

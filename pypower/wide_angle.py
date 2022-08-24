@@ -444,11 +444,14 @@ class BaseMatrix(BaseClass):
             masks[axis] = []
             x = getattr(self, 'x{}'.format(axis))
             lim = locals()['x{}lim'.format(axis)]
-            if lim is None: lim = (-np.inf, np.inf)
             for proj in projs:
                 selfii = selfprojs.index(proj)
-                tmp = (x[selfii] >= lim[0]) & (x[selfii] <= lim[1])
-                masks[axis].append(np.all(tmp, axis=tuple(range(1, tmp.ndim))))
+                if lim is not None:
+                    tmp = (x[selfii] >= lim[0]) & (x[selfii] <= lim[1])
+                    tmp = np.all(tmp, axis=tuple(range(1, tmp.ndim)))
+                else:
+                    tmp = np.ones(x[selfii].shape[0], dtype='?')
+                masks[axis].append(tmp)
 
             for name in ['x', 'weights']:
                 arrays = getattr(self, '{}{}'.format(name, axis))
