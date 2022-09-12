@@ -647,6 +647,10 @@ class BaseMatrix(BaseClass):
                 setattr(new, name, tmp)
         return new
 
+    def deepcopy(self):
+        import copy
+        return copy.deepcopy(self)
+
     @property
     def nx(self):
         """Tuple of list of length of input and output coordinates."""
