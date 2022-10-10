@@ -165,6 +165,9 @@ def test_power_statistic():
         power2 = power_ref.copy()
         power2.select((0., 0.1))
         assert np.all(power2.modes[0] <= 0.1)
+        wedges = power_ref.to_wedges(muedges=np.linspace(-1., 1., 11))
+        assert wedges.shape == power_ref.shape + (10,)
+        wedges.get_power()
 
         def mid(edges):
             return (edges[:-1] + edges[1:]) / 2.
@@ -535,6 +538,10 @@ def test_mesh_power():
     power = get_power(data, randoms, los='x')
     check_wedges(power.wedges, ref_power.power)
     check_poles(power.poles, ref_power.poles)
+
+    wedges = power.poles.to_wedges(power.wedges.edges[1])
+    mask = (~np.isnan(wedges.power_nonorm)) & (~np.isnan(power.wedges.power_nonorm))
+    assert np.allclose(wedges.power[mask], power.wedges.power[mask], atol=0., rtol=0.2)
 
 
 def test_normalization():
@@ -925,6 +932,8 @@ if __name__ == '__main__':
     # test_interlacing()
     # test_fft()
     # test_memory()
+    test_mesh_power()
+    exit()
     test_power_statistic()
     test_find_edges()
     test_ylm()

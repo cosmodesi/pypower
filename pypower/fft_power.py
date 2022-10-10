@@ -661,14 +661,9 @@ class BasePowerSpectrumStatistics(BaseClass):
             raise IndexError('Too many indices: statistics is {:d}-dimensional, but {:d} were indexed'.format(self.ndim, len(slices)))
         slices, eslices, factor = [], [], []
         for iaxis, sl in enumerate(inslices):
-            start, stop, step = sl.start, sl.stop, sl.step
-            if start is None: start = 0
-            if step is None: step = 1
-            indices = np.arange(self.nmodes.shape[iaxis])[slice(start, stop, 1)]
-            if indices.size:
-                stop = indices[-1] + 1  # somewhat hacky, but correct!
-            else:
-                stop = 0
+            start, stop, step = sl.indices(self.nmodes.shape[iaxis])
+            if step < 0:
+                raise IndexError('Positive slicing step only supported')
             slices.append(slice(start, stop, 1))
             eslices.append(slice(start, stop + 1, 1))
             factor.append(step)
@@ -687,13 +682,13 @@ class BasePowerSpectrumStatistics(BaseClass):
     def rebin(self, factor=1):
         """
         Rebin power spectrum estimation in place, by factor(s) ``factor``.
-        A tuple must be provided in case :attr:`ndim` is greater than 1.
         Input factors must divide :attr:`shape`.
         """
         if np.ndim(factor) == 0:
             factor = (factor,)
-        if len(factor) != self.ndim:
-            raise ValueError('Provide a rebinning factor for each dimension')
+        factor = list(factor) + [1] * (self.ndim - len(factor))
+        if len(factor) > self.ndim:
+            raise ValueError('Too many rebinning factors: statistics is {:d}-dimensional, but got {:d} factors'.format(self.ndim, len(factor)))
         if any(s % f for s, f in zip(self.shape, factor)):
             raise ValueError('Rebinning factor must divide shape')
         new_shape = tuple(s // f for s, f in zip(self.shape, factor))
@@ -1090,6 +1085,46 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         """Mode-weighted average wavenumber = :attr:`k`."""
         return self.k
 
+    def to_wedges(self, muedges, ells=None):
+        r"""Transform poles to wedges, with input :math:`\mu`-edges.
+
+        Parameters
+        ----------
+        muedges : array
+            :math:`\mu`-edges.
+
+        ells : tuple, list, default=None
+            Multipole orders to use in the Legendre expansion.
+            If ``None``, all poles are used.
+
+        Returns
+        -------
+        wedges : PowerSpectrumWedges
+            Power spectrum wedges.
+        """
+        if ells is None:
+            ells = self.ells
+        elif np.ndim(ells) == 0:
+            ells = [ells]
+        muedges = np.array(muedges)
+        mu = (muedges[:-1] + muedges[1:]) / 2.
+        dmu = np.diff(muedges)
+        edges = (self.kedges.copy(), muedges)
+        modes = (np.repeat(self.modes[0][:, None], len(dmu), axis=-1), np.repeat(mu[None, :], len(self.k), axis=0))
+        power_nonorm, power_direct_nonorm = 0, 0
+        for ell in ells:
+            poly = np.diff(special.legendre(ell).integ()(muedges)) / dmu
+            power_nonorm += self.power_nonorm[self.ells.index(ell), ..., None] * poly
+            power_direct_nonorm += self.power_direct_nonorm[self.ells.index(ell), ..., None] * poly
+        if 0 in self.ells:
+            power_zero_nonorm = self.power_zero_nonorm[self.ells.index(0)]
+        else:
+            power_zero_nonorm = np.array(0., dtype=self.power_zero_nonorm.dtype)
+        nmodes = self.nmodes[:, None] / dmu
+        return PowerSpectrumWedges(edges, modes, power_nonorm, nmodes, wnorm=self.wnorm, shotnoise_nonorm=self.shotnoise_nonorm,
+                                   power_zero_nonorm=power_zero_nonorm, power_direct_nonorm=power_direct_nonorm,
+                                   attrs=self.attrs, mpicomm=getattr(self, 'mpicomm', None))
+
     def get_power(self, add_direct=True, remove_shotnoise=True, null_zero_mode=True, divide_wnorm=True, complex=True):
         """
         Return power spectrum, computed using various options.
@@ -1380,6 +1415,33 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
     return (s1 * s2) / np.prod(boxsize)
 
 
+def _get_los(los):
+    # Return line-of-sight type (global or local), and line-of-sight vector if global, else None
+    los_type = 'global'
+    if los is None:
+        los_type = 'firstpoint'
+        los = None
+    elif isinstance(los, str):
+        los = los.lower()
+        allowed_los = ['firstpoint', 'endpoint', 'x', 'y', 'z']
+        if los not in allowed_los:
+            raise ValueError('los should be one of {}'.format(allowed_los))
+        if los in ['firstpoint', 'endpoint']:
+            los_type = los
+            los = None
+        else:
+            los_type = 'global'
+            los = 'xyz'.index(los)
+    if los_type == 'global':
+        if np.ndim(los) == 0:
+            ilos = los
+            los = np.zeros(3, dtype='f8')
+            los[ilos] = 1.
+        los = np.array(los, dtype='f8')
+        los = los / utils.distance(los)
+    return los_type, los
+
+
 class MeshFFTPower(BaseClass):
     """
     Class that computes power spectrum from input mesh(es), using global or local line-of-sight, following https://arxiv.org/abs/1704.02357.
@@ -1644,28 +1706,7 @@ class MeshFFTPower(BaseClass):
 
     def _set_los(self, los):
         # Set :attr:`los`
-        self.los_type = 'global'
-        if los is None:
-            self.los_type = 'firstpoint'
-            self.los = None
-        elif isinstance(los, str):
-            los = los.lower()
-            allowed_los = ['firstpoint', 'endpoint', 'x', 'y', 'z']
-            if los not in allowed_los:
-                raise ValueError('los should be one of {}'.format(allowed_los))
-            if los in ['firstpoint', 'endpoint']:
-                self.los_type = los
-                self.los = None
-            else:
-                self.los_type = 'global'
-                los = 'xyz'.index(los)
-        if self.los_type == 'global':
-            if np.ndim(los) == 0:
-                ilos = los
-                los = np.zeros(3, dtype='f8')
-                los[ilos] = 1.
-            los = np.array(los, dtype='f8')
-            self.los = los / utils.distance(los)
+        self.los_type, self.los = _get_los(los)
 
     @property
     def boxsize(self):
@@ -1708,6 +1749,25 @@ class MeshFFTPower(BaseClass):
         for name in ['autocorr', 'nmesh', 'boxsize', 'boxcenter', 'dtype', 'los', 'los_type', 'compensations']:
             state[name] = getattr(self, name)
         return state
+
+    def __copy__(self):
+        new = super(MeshFFTPower, self).__copy__()
+        new.attrs = self.attrs.copy()
+        for name in ['wedges', 'poles']:
+            if hasattr(new, name):
+                setattr(new, name, getattr(new, name).__copy__())
+        return new
+
+    def deepcopy(self):
+        import copy
+        new = super(MeshFFTPower, self).__copy__()
+        new.attrs = copy.deepcopy(self.attrs)
+        for name in ['wedges', 'poles']:
+            if hasattr(new, name):
+                setattr(new, name, getattr(new, name).deepcopy())
+        if hasattr(self, 'mpicomm'):
+            new.mpicomm = self.mpicomm
+        return new
 
     def __getstate__(self):
         """Return this class state dictionary."""
