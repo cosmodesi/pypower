@@ -371,15 +371,15 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
 def find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD):
     """
     Construct unique edges for distribution of Cartesian distances corresponding to coordinates ``x``.
-    Taken from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py.
+    Adapted from https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py.
 
     Parameters
     ----------
     x : list of ndim arrays
         List of ndim (broadcastable) coordinate arrays.
 
-    x0 : array_like of shape (ndim, )
-        3-vector of fundamental coordinate separation.
+    x0 : float
+        Fundamental coordinate separation.
 
     xmin : float, default=0.
         Minimum separation.
@@ -395,20 +395,19 @@ def find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD):
     edges : array
         Edges, starting at 0, such that each bin contains a unique value of Cartesian distances.
     """
-    def find_unique_local(x, x0):
-        fx2 = sum(xi**2 for xi in x).ravel()
-        ix2 = np.int64(fx2 / (x0.min() * 0.5) ** 2 + 0.5)
-        ix2, ind = np.unique(ix2, return_index=True)
-        fx = fx2[ind] ** 0.5
-        return fx[(fx >= xmin) & (fx <= xmax)]
+    def unique_index(x2):
+        return np.unique(np.int64(x2 / (0.5 * x0)**2 + 0.5), return_index=True)[1]
 
-    x0 = _make_array(x0, len(x), dtype='f8')
-    fx = find_unique_local(x, x0)
+    def unique_local(x):
+        fx2 = sum(xi**2 for xi in x).ravel()
+        fx2 = fx2[unique_index(fx2)]
+        return fx2[(fx2 >= xmin**2) & (fx2 <= xmax**2)]
+
+    fx2 = unique_local(x)
     if mpicomm is not None:
-        fx = np.concatenate(mpicomm.allgather(fx), axis=0)
+        fx2 = np.concatenate(mpicomm.allgather(fx2), axis=0)
     # may have duplicates after allgather
-    fx = np.unique(fx)
-    fx.sort()
+    fx = fx2[unique_index(fx2)]**0.5
 
     # now make edges around unique coordinates
     width = np.diff(fx)
@@ -1673,9 +1672,9 @@ class MeshFFTPower(BaseClass):
             dk = kedges.get('step', None)
             if dk is None:
                 # Find unique edges
-                k = [k.real for k in self.pm.create_coords('complex')]
-                dk = 2 * np.pi / self.boxsize
-                kedges = find_unique_edges(k, dk, xmin=kmin, xmax=kmax + 1e-5 * dk.min(), mpicomm=self.mpicomm)  # margin required for float32
+                k = [k.real.astype('f8') for k in self.pm.create_coords('complex')]
+                dk = np.min(2. * np.pi / self.boxsize)
+                kedges = find_unique_edges(k, x0=dk, xmin=kmin, xmax=kmax + 1e-5 * dk, mpicomm=self.mpicomm)
             else:
                 kedges = np.arange(kmin, kmax + 1e-5 * dk, dk)
         if self.mpicomm.rank == 0:
