@@ -191,6 +191,12 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
     ells : tuple of ints, default=None
         If provided, a list of integers specifying multipole numbers to project the 2D :math:`(x, \mu)` bins on to.
 
+    antisymmetric : bool, default=False
+        If y3d is compressed, whether y3d is hermitian-antisymmetric (in which case negative modes are added with weight -1).
+
+    exclude_zero : bool, default=0
+        Whether to exclude zero mode from the sum.
+
     Returns
     -------
     result : tuple
@@ -248,7 +254,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
     xsum = np.zeros((nx + 3, nmu + 3))
     ysum = np.zeros((nell, nx + 3, nmu + 3), dtype=y3d.dtype)  # extra dimension for multipoles
     nsum = np.zeros((nx + 3, nmu + 3), dtype='i8')
-    # If input array is Hermitian symmetric, only half of the last  axis is stored in `y3d`
+    # If input array is Hermitian symmetric, only half of the last axis is stored in `y3d`
 
     cellsize = y3d.BoxSize / y3d.Nmesh if isinstance(y3d, RealField) else 2. * np.pi / y3d.BoxSize
     mincell = np.min(cellsize)
@@ -652,7 +658,7 @@ class BasePowerSpectrumStatistics(BaseClass):
         .. code-block:: python
 
             statistic.slice(slice(0, 10, 2), slice(0, 6, 3)) # rebin by factor 2 (resp. 3) along axis 0 (resp. 1), up to index 10 (resp. 6)
-            statistic[:10:2,:6:3] # same as above, but return new instance.
+            statistic[:10:2, :6:3] # same as above, but return new instance.
 
         """
         inslices = list(slices) + [slice(None)] * (self.ndim - len(slices))
@@ -887,7 +893,7 @@ class PowerSpectrumWedges(BasePowerSpectrumStatistics):
 
     name = 'wedge'
     _coords_names = ['k', 'mu']
-    _power_names = ['P(k,mu)']
+    _power_names = ['P(k, mu)']
 
     @property
     def kavg(self):
@@ -1441,101 +1447,9 @@ def _get_los(los):
     return los_type, los
 
 
-class MeshFFTPower(BaseClass):
-    """
-    Class that computes power spectrum from input mesh(es), using global or local line-of-sight, following https://arxiv.org/abs/1704.02357.
-    In effect, this class merges nbodykit's implementation of the global line-of-sight (periodic) algorithm of:
-    https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py
-    with the local line-of-sight algorithm of:
-    https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/convpower/fkp.py
+class MeshFFTBase(BaseClass):
 
-    Attributes
-    ----------
-    poles : PowerSpectrumMultipoles
-        Estimated power spectrum multipoles.
-
-    wedges : PowerSpectrumWedges
-        Estimated power spectrum wedges (if relevant).
-    """
-
-    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None):
-        r"""
-        Initialize :class:`MeshFFTPower`, i.e. estimate power spectrum.
-
-        Warning
-        -------
-        In case line-of-sight is not local, one can provide :math:`\mu`-edges. In this case, integration over Legendre polynomials for multipoles
-        is performed between the first and last :math:`\mu`-edges.
-        For example, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, integration is performed between :math:`\mu = 0.2` and :math:`\mu = 0.8`.
-        In all other cases, integration is performed between :math:`\mu = -1.0` and :math:`\mu = 1.0`.
-
-        Parameters
-        ----------
-        mesh1 : CatalogMesh, RealField, ComplexField
-            First mesh.
-            If ``RealField``, assumed to be :math:`1 + \delta` or :math:`\bar{n} (1 + \delta)`.
-            In case of :class:`ComplexField`, assumed to be the FFT of :math:`\delta` (or :math:`1 + \delta`), i.e. unit density.
-
-        mesh2 : CatalogMesh, RealField, ComplexField, default=None
-            In case of cross-correlation, second mesh, with same size and physical extent (``boxsize`` and ``boxcenter``) that ``mesh1``.
-
-        edges : tuple, array, default=None
-            If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
-            Else, one can also provide :math:`\mu`-edges (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
-            If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
-            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
-            'step' (if not provided :func:`find_unique_edges` is used to find unique :math:`k` (norm) values between 'min' and 'max').
-            For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``edges[i] <= x < edges[i+1]``.
-            However, last :math:`\mu`-bin is inclusive on both ends: ``edges[-2] <= mu <= edges[-1]``.
-            Therefore, with e.g. :math:`\mu`-edges ``[0.2, 0.4, 1.0]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 1.0`.
-            Similarly, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 0.8`.
-
-        ells : list, tuple, default=(0, 2, 4)
-            Multipole orders.
-
-        los : string, array, default=None
-            If ``los`` is 'firstpoint' (resp. 'endpoint'), use local (varying) first point (resp. end point) line-of-sight.
-            Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
-            Else, a 3-vector.
-
-        boxcenter : float, array, default=None
-            Box center; defaults to 0.
-            Used only if provided ``mesh1`` and ``mesh2`` are not ``CatalogMesh``.
-
-        compensations : list, tuple, string, default=None
-            Compensations to apply to mesh to (optionally) correct for particle-mesh assignment scheme;
-            e.g. 'cic' (resp. 'cic-sn') for cic assignment scheme, with (resp. without) interlacing.
-            In case ``mesh2`` is not ``None`` (cross-correlation), provide a list (or tuple) of two such strings
-            (for ``mesh1`` and ``mesh2``, respectively).
-            Used only if provided ``mesh1`` or ``mesh2`` are not ``CatalogMesh``.
-
-        wnorm : float, default=None
-            Power spectrum normalization, to use instead of internal estimate obtained with :func:`normalization`.
-
-        shotnoise : float, default=None
-            Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
-            or both ``mesh1`` and ``mesh2`` are :class:`pmesh.pm.RealField`,
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise`
-            of ``mesh1`` by power spectrum normalization.
-        """
-        t0 = time.time()
-        self._set_compensations(compensations)
-        self._set_los(los)
-        self._set_ells(ells)
-        self._set_mesh(mesh1, mesh2=mesh2, boxcenter=boxcenter)
-        self._set_edges(edges)
-        self._set_normalization(wnorm, mesh1, mesh2=mesh2)
-        self._set_shotnoise(shotnoise, mesh1=mesh1, mesh2=mesh2)
-        self.attrs.update(self._get_attrs())
-        t1 = time.time()
-        if self.mpicomm.rank == 0:
-            self.log_info('Meshes prepared in elapsed time {:.2f} s.'.format(t1 - t0))
-            self.log_info('Running mesh calculation.')
-        self.run()
-        t2 = time.time()
-        if self.mpicomm.rank == 0:
-            self.log_info('Mesh calculations performed in elapsed time {:.2f} s.'.format(t2 - t1))
-            self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(t2 - t0))
+    """Class to override to implement FFT-based computations."""
 
     def _set_normalization(self, wnorm, mesh1, mesh2=None):
         # Set :attr:`wnorm`
@@ -1656,38 +1570,6 @@ class MeshFFTPower(BaseClass):
             return mesh
         return mesh.c2r()
 
-    def _set_edges(self, edges):
-        # Set :attr:`edges`
-        if edges is None or isinstance(edges, dict) or (not isinstance(edges[0], dict) and np.ndim(edges[0]) == 0):
-            edges = (edges,)
-        if len(edges) == 1:
-            kedges, muedges = edges[0], None
-        else:
-            kedges, muedges = edges
-        if kedges is None:
-            kedges = {}
-        if isinstance(kedges, dict):
-            kmin = kedges.get('min', 0.)
-            kmax = kedges.get('max', np.pi / (self.boxsize / self.nmesh).max())
-            dk = kedges.get('step', None)
-            if dk is None:
-                # Find unique edges
-                k = [k.real.astype('f8') for k in self.pm.create_coords('complex')]
-                dk = np.min(2. * np.pi / self.boxsize)
-                kedges = find_unique_edges(k, x0=dk, xmin=kmin, xmax=kmax + 1e-5 * dk, mpicomm=self.mpicomm)
-            else:
-                kedges = np.arange(kmin, kmax + 1e-5 * dk, dk)
-        if self.mpicomm.rank == 0:
-            self.log_info('Using {:d} k-bins between {:.3f} and {:.3f}.'.format(len(kedges) - 1, kedges[0], kedges[-1]))
-        if muedges is None:
-            muedges = np.linspace(-1., 1., 2, endpoint=True)  # single :math:`\mu`-wedge
-        elif self.los_type != 'global' and muedges.size > 2:
-            raise ValueError('Cannot compute wedges with local {} line-of-sight'.format(self.los_type))
-        self.edges = (np.asarray(kedges, dtype='f8'), np.asarray(muedges, dtype='f8'))
-        for name, edges in zip(['k', 'mu'], self.edges):
-            if len(edges) < 2:
-                raise ValueError('{}-edges are of size {:d} < 2'.format(name))
-
     def _set_ells(self, ells):
         # Set :attr:`ells`
         if ells is None:
@@ -1736,12 +1618,6 @@ class MeshFFTPower(BaseClass):
             for window in windows:
                 slab[...] /= window(*kc)
 
-    def run(self):
-        if self.los_type == 'global':  # global (fixed) line-of-sight
-            self._run_global_los()
-        else:  # local (varying) line-of-sight
-            self._run_local_los()
-
     def _get_attrs(self):
         # Return some attributes, to be saved in :attr:`poles` and :attr:`wedges`
         state = {}
@@ -1750,7 +1626,7 @@ class MeshFFTPower(BaseClass):
         return state
 
     def __copy__(self):
-        new = super(MeshFFTPower, self).__copy__()
+        new = super(MeshFFTBase, self).__copy__()
         new.attrs = self.attrs.copy()
         for name in ['wedges', 'poles']:
             if hasattr(new, name):
@@ -1759,7 +1635,7 @@ class MeshFFTPower(BaseClass):
 
     def deepcopy(self):
         import copy
-        new = super(MeshFFTPower, self).__copy__()
+        new = super(MeshFFTBase, self).__copy__()
         new.attrs = copy.deepcopy(self.attrs)
         for name in ['wedges', 'poles']:
             if hasattr(new, name):
@@ -1767,6 +1643,135 @@ class MeshFFTPower(BaseClass):
         if hasattr(self, 'mpicomm'):
             new.mpicomm = self.mpicomm
         return new
+
+
+class MeshFFTPower(MeshFFTBase):
+    """
+    Class that computes power spectrum from input mesh(es), using global or local line-of-sight, following https://arxiv.org/abs/1704.02357.
+    In effect, this class merges nbodykit's implementation of the global line-of-sight (periodic) algorithm of:
+    https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/fftpower.py
+    with the local line-of-sight algorithm of:
+    https://github.com/bccp/nbodykit/blob/master/nbodykit/algorithms/convpower/fkp.py
+
+    Attributes
+    ----------
+    poles : PowerSpectrumMultipoles
+        Estimated power spectrum multipoles.
+
+    wedges : PowerSpectrumWedges
+        Estimated power spectrum wedges (if relevant).
+    """
+
+    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None):
+        r"""
+        Initialize :class:`MeshFFTPower`, i.e. estimate power spectrum.
+
+        Warning
+        -------
+        In case line-of-sight is not local, one can provide :math:`\mu`-edges. In this case, integration over Legendre polynomials for multipoles
+        is performed between the first and last :math:`\mu`-edges.
+        For example, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, integration is performed between :math:`\mu = 0.2` and :math:`\mu = 0.8`.
+        In all other cases, integration is performed between :math:`\mu = -1.0` and :math:`\mu = 1.0`.
+
+        Parameters
+        ----------
+        mesh1 : CatalogMesh, RealField, ComplexField
+            First mesh.
+            If ``RealField``, assumed to be :math:`1 + \delta` or :math:`\bar{n} (1 + \delta)`.
+            In case of :class:`ComplexField`, assumed to be the FFT of :math:`\delta` (or :math:`1 + \delta`), i.e. unit density.
+
+        mesh2 : CatalogMesh, RealField, ComplexField, default=None
+            In case of cross-correlation, second mesh, with same size and physical extent (``boxsize`` and ``boxcenter``) that ``mesh1``.
+
+        edges : tuple, array, default=None
+            If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
+            Else, one can also provide :math:`\mu`-edges (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
+            If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
+            ``kedges`` may be a dictionary, with keys 'min' (minimum :math:`k`, defaults to 0), 'max' (maximum :math:`k`, defaults to ``np.pi/(boxsize/nmesh)``),
+            'step' (if not provided :func:`find_unique_edges` is used to find unique :math:`k` (norm) values between 'min' and 'max').
+            For both :math:`k` and :math:`\mu`, binning is inclusive on the low end and exclusive on the high end, i.e. ``edges[i] <= x < edges[i+1]``.
+            However, last :math:`\mu`-bin is inclusive on both ends: ``edges[-2] <= mu <= edges[-1]``.
+            Therefore, with e.g. :math:`\mu`-edges ``[0.2, 0.4, 1.0]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 1.0`.
+            Similarly, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, the last :math:`\mu`-bin includes modes at :math:`\mu = 0.8`.
+
+        ells : list, tuple, default=(0, 2, 4)
+            Multipole orders.
+
+        los : string, array, default=None
+            If ``los`` is 'firstpoint' (resp. 'endpoint'), use local (varying) first point (resp. end point) line-of-sight.
+            Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
+            Else, a 3-vector.
+
+        boxcenter : float, array, default=None
+            Box center; defaults to 0.
+            Used only if provided ``mesh1`` and ``mesh2`` are not ``CatalogMesh``.
+
+        compensations : list, tuple, string, default=None
+            Compensations to apply to mesh to (optionally) correct for particle-mesh assignment scheme;
+            e.g. 'cic' (resp. 'cic-sn') for cic assignment scheme, with (resp. without) interlacing.
+            In case ``mesh2`` is not ``None`` (cross-correlation), provide a list (or tuple) of two such strings
+            (for ``mesh1`` and ``mesh2``, respectively).
+            Used only if provided ``mesh1`` or ``mesh2`` are not ``CatalogMesh``.
+
+        wnorm : float, default=None
+            Power spectrum normalization, to use instead of internal estimate obtained with :func:`normalization`.
+
+        shotnoise : float, default=None
+            Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
+            or both ``mesh1`` and ``mesh2`` are :class:`pmesh.pm.RealField`,
+            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise`
+            of ``mesh1`` by power spectrum normalization.
+        """
+        t0 = time.time()
+        self._set_compensations(compensations)
+        self._set_los(los)
+        self._set_ells(ells)
+        self._set_mesh(mesh1, mesh2=mesh2, boxcenter=boxcenter)
+        self._set_edges(edges)
+        self._set_normalization(wnorm, mesh1, mesh2=mesh2)
+        self._set_shotnoise(shotnoise, mesh1=mesh1, mesh2=mesh2)
+        self.attrs.update(self._get_attrs())
+        t1 = time.time()
+        if self.mpicomm.rank == 0:
+            self.log_info('Meshes prepared in elapsed time {:.2f} s.'.format(t1 - t0))
+            self.log_info('Running mesh calculation.')
+        self.run()
+        t2 = time.time()
+        if self.mpicomm.rank == 0:
+            self.log_info('Mesh calculations performed in elapsed time {:.2f} s.'.format(t2 - t1))
+            self.log_info('Power spectrum computed in elapsed time {:.2f} s.'.format(t2 - t0))
+
+    def _set_edges(self, edges):
+        # Set :attr:`edges`
+        if edges is None or isinstance(edges, dict) or (not isinstance(edges[0], dict) and np.ndim(edges[0]) == 0):
+            edges = (edges,)
+        if len(edges) == 1:
+            kedges, muedges = edges[0], None
+        else:
+            kedges, muedges = edges
+        if kedges is None:
+            kedges = {}
+        if isinstance(kedges, dict):
+            kmin = kedges.get('min', 0.)
+            kmax = kedges.get('max', np.pi / (self.boxsize / self.nmesh).max())
+            dk = kedges.get('step', None)
+            if dk is None:
+                # Find unique edges
+                k = [k.real.astype('f8') for k in self.pm.create_coords('complex')]
+                dk = np.min(2. * np.pi / self.boxsize)
+                kedges = find_unique_edges(k, x0=dk, xmin=kmin, xmax=kmax + 1e-5 * dk, mpicomm=self.mpicomm)
+            else:
+                kedges = np.arange(kmin, kmax + 1e-5 * dk, dk)
+        if self.mpicomm.rank == 0:
+            self.log_info('Using {:d} k-bins between {:.3f} and {:.3f}.'.format(len(kedges) - 1, kedges[0], kedges[-1]))
+        if muedges is None:
+            muedges = np.linspace(-1., 1., 2, endpoint=True)  # single :math:`\mu`-wedge
+        elif self.los_type != 'global' and muedges.size > 2:
+            raise ValueError('Cannot compute wedges with local {} line-of-sight'.format(self.los_type))
+        self.edges = (np.asarray(kedges, dtype='f8'), np.asarray(muedges, dtype='f8'))
+        for name, edges in zip(['k', 'mu'], self.edges):
+            if len(edges) < 2:
+                raise ValueError('{}-edges are of size {:d} < 2'.format(name, len(edges)))
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -1782,6 +1787,12 @@ class MeshFFTPower(BaseClass):
         for name in ['wedges', 'poles']:
             if name in state:
                 setattr(self, name, get_power_statistic(statistic=state[name].pop('name')).from_state(state[name]))
+
+    def run(self):
+        if self.los_type == 'global':  # global (fixed) line-of-sight
+            self._run_global_los()
+        else:  # local (varying) line-of-sight
+            self._run_local_los()
 
     def _run_global_los(self):
 
@@ -1870,7 +1881,7 @@ class MeshFFTPower(BaseClass):
         if 0 in self.ells:
 
             for islab in range(A0.shape[0]):
-                Aell[islab, ...] = Aell[islab] * A0[islab].conj()
+                Aell[islab, ...] = Aell[islab].conj() * A0[islab]
 
             # the 1D monopole
             # from nbodykit.algorithms.fftpower import project_to_basis

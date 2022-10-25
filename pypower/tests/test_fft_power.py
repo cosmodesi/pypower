@@ -306,13 +306,13 @@ def test_ylm():
 def test_find_edges():
     x = np.meshgrid(np.arange(10.), np.arange(10.), indexing='ij')
     x0 = np.ones(len(x), dtype='f8')
-    find_unique_edges(x, x0=1., xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD)
+    find_unique_edges(x, x0=x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD)
 
 
 def test_project():
 
     z = 1.
-    bias, nbar, nmesh, boxsize, boxcenter = 2.0, 1e-3, 64, 1000., 500.
+    bias, nmesh, boxsize, boxcenter = 2.0, 64, 1000., 500.
     power = DESI().get_fourier().pk_interpolator().to_1d(z=z)
     mock = LagrangianLinearMock(power, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=42, unitary_amplitude=False)
     # This is Lagrangian bias, Eulerian bias - 1
@@ -828,6 +828,16 @@ def test_catalog_power():
     for ell in ells:
         assert np.allclose(power_shifted.poles(ell=ell) * power_shifted.wnorm / f_power.wnorm, f_power.poles(ell=ell))
 
+    def get_cross_power(data, randoms, edges=kedges, los=los, **kwargs):
+        return CatalogFFTPower(data_positions1=data['Position'], data_positions2=data['Position'] + 2.,
+                               boxsize=600., boxcenter=boxcenter, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=(0,), los=los, edges=edges,
+                               position_type='pos', dtype='c16', wrap=True, **kwargs)
+
+    power_global = get_cross_power(data, randoms, los='x').poles
+    for los in ['firstpoint', 'endpoint']:
+        power_local = get_cross_power(data, randoms, los=los).poles
+        assert np.allclose(power_global.power_nonorm, power_local.power_nonorm)
+
 
 def test_mpi():
 
@@ -932,8 +942,9 @@ if __name__ == '__main__':
     # test_interlacing()
     # test_fft()
     # test_memory()
-    test_mesh_power()
+    test_catalog_power()
     exit()
+    test_mesh_power()
     test_power_statistic()
     test_find_edges()
     test_ylm()
