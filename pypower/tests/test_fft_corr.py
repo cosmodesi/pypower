@@ -206,7 +206,6 @@ def test_global():
     result = CatalogFFTCorr(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], ells=ells, los=los,
                             edges={'step': 5.}, boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm)
     plot_correlation_function(result.poles, theory=kaiser(power=power, bias=bias, f=f))
-
     result.wedges.plot(show=True)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -244,9 +243,89 @@ def test_local():
         result.poles.save_txt(fn, complex=False)
 
 
+def test_cutsky():
+
+    z = 1.
+    bias, f, boxsize, nmesh, boxcenter, nbar, los, ells, seed = 1., 0.8, 500., 256, (0., 0., 0.), 1e-3, 'x', (0, 2, 4), 42
+    power = DESI().get_fourier().pk_interpolator().to_1d(z=z)
+
+    mock = EulerianLinearMock(power, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
+    mock.set_real_delta_field(bias=bias)
+    mock.set_rsd(f=f, los=los if los in 'xyz' else None)
+    mock.set_analytic_selection_function(nbar=nbar)
+
+    # result = MeshFFTCorr(mock.mesh_delta_r + 1., los=los, ells=ells, edges={'step': 5.}, boxcenter=boxcenter)
+    # plot_correlation_function(result.poles, theory=kaiser(power=power, bias=bias, f=f))
+
+    data = RandomBoxCatalog(nbar=nbar, boxsize=boxsize, boxcenter=boxcenter, seed=44)
+    randoms = RandomBoxCatalog(nbar=4. * nbar, boxsize=boxsize, boxcenter=boxcenter, seed=45)
+    data['Weight'] = mock.readout(data['Position'], field='delta', resampler='cic', compensate=True) + 1.
+
+    from pycorr import TwoPointCorrelationFunction
+    edges = (np.linspace(0., 100., 26), np.linspace(-1., 1., 101))
+    pc = TwoPointCorrelationFunction('smu', edges=edges, data_positions1=data['Position'], data_weights1=data['Weight'], los=los,
+                                     position_type='pos', boxsize=boxsize, mpicomm=data.mpicomm)
+    fft = CatalogFFTCorr(data_positions1=data['Position'], data_weights1=data['Weight'], ells=ells, los=los,
+                         edges=edges[0], boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos',
+                         mpicomm=data.mpicomm).poles
+
+    ax = plt.gca()
+    mask = fft.s > 20
+    for ill, ell in enumerate(fft.ells):
+        ax.plot(fft.s[mask], fft.s[mask]**2 * fft(ell=ell)[mask], label=r'$\ell = {:d}$'.format(ell), color='C{:d}'.format(ill), linestyle='-')
+        s, xi = pc(ell=ell, return_sep=True)
+        ax.plot(s[mask], s[mask]**2 * xi[mask], label=r'$\ell = {:d}$'.format(ell), color='C{:d}'.format(ill), linestyle='--')
+    plt.show()
+
+
+def test_cutsky():
+
+    z = 1.
+    bias, f, boxsize, nmesh, boxcenter, nbar, los, ells, seed = 1., 0.8, 500., 256, (10000., 0., 0.), 1e-3, 'x', (0,), 42
+    power = DESI().get_fourier().pk_interpolator().to_1d(z=z)
+
+    mock = EulerianLinearMock(power, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=True)
+    mock.set_real_delta_field(bias=bias)
+    mock.set_rsd(f=f, los=los if los in 'xyz' else None)
+    mock.set_analytic_selection_function(nbar=nbar)
+
+    # result = MeshFFTCorr(mock.mesh_delta_r + 1., los=los, ells=ells, edges={'step': 5.}, boxcenter=boxcenter)
+    # plot_correlation_function(result.poles, theory=kaiser(power=power, bias=bias, f=f))
+
+    data = RandomBoxCatalog(nbar=nbar, boxsize=boxsize, boxcenter=boxcenter, seed=44)
+    randoms = RandomBoxCatalog(nbar=4. * nbar, boxsize=boxsize, boxcenter=boxcenter, seed=45)
+    data['Weight'] = mock.readout(data['Position'], field='delta', resampler='cic', compensate=True) + 1.
+
+    from pycorr import TwoPointCorrelationFunction
+    edges = (np.linspace(0., 100., 26), np.linspace(-1., 1., 101))
+    pc = TwoPointCorrelationFunction('smu', edges=edges, data_positions1=data['Position'], data_weights1=data['Weight'],
+                                     randoms_positions1=randoms['Position'], los=los, position_type='pos', boxsize=boxsize,
+                                     mpicomm=data.mpicomm)
+    boxsize2 = boxsize
+    fft = CatalogFFTCorr(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], ells=ells, los=los,
+                         edges=edges[0], boxsize=boxsize2, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos',
+                         mpicomm=data.mpicomm).poles
+    fftr = CatalogFFTCorr(data_positions1=randoms['Position'], ells=ells, los=los,
+                          edges=edges[0], boxsize=boxsize2, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos',
+                          mpicomm=data.mpicomm).poles
+    fftr.wnorm = fft.wnorm * (randoms.csize / data.csize) ** 2
+    rr = fftr(ell=0, null_zero_mode=False)
+
+    ax = plt.gca()
+    mask = fft.s > 20
+    print(rr[mask])
+    for ill, ell in enumerate(fft.ells):
+        ax.plot(fft.s[mask], fft.s[mask]**2 * fft(ell=ell)[mask], label=r'$\ell = {:d}$'.format(ell), color='C{:d}'.format(ill), linestyle=':')
+        ax.plot(fft.s[mask], fft.s[mask]**2 * fft(ell=ell)[mask] / rr[mask], label=r'$\ell = {:d}$'.format(ell), color='C{:d}'.format(ill), linestyle='-')
+        s, xi = pc(ell=ell, return_sep=True)
+        ax.plot(s[mask], s[mask]**2 * xi[mask], label=r'$\ell = {:d}$'.format(ell), color='C{:d}'.format(ill), linestyle='--')
+    plt.show()
+
+
 if __name__ == '__main__':
 
     setup_logging()
     test_corr_statistic()
     test_global()
     test_local()
+    # test_cutsky()

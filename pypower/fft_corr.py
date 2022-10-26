@@ -26,7 +26,7 @@ class BaseCorrelationFunctionStatistics(BaseClass):
     name = 'base'
     _attrs = ['name', 'edges', 'modes', 'corr_nonorm', 'corr_zero_nonorm', 'corr_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm', 'attrs']
     _tosum = ['nmodes']
-    _toaverage = ['modes', 'corr_nonorm', 'corr_direct_nonorm']
+    _toaverage = ['modes', 'corr_nonorm', 'corr_zero_nonorm', 'corr_direct_nonorm']
     _coords_names = ['s']
     _corr_names = ['xi(s)']
 
@@ -75,7 +75,7 @@ class BaseCorrelationFunctionStatistics(BaseClass):
         self.corr_nonorm = np.asarray(corr_nonorm)
         self.corr_zero_nonorm = corr_zero_nonorm
         if corr_zero_nonorm is None:
-            self.corr_zero_nonorm = np.zeros(self.corr_nonorm.shape[:self.corr_nonorm.ndim - self.ndim], dtype=self.corr_nonorm.dtype)
+            self.corr_zero_nonorm = np.zeros_like(self.corr_nonorm)
         else:
             self.corr_zero_nonorm = np.asarray(corr_zero_nonorm)
         self.corr_direct_nonorm = corr_direct_nonorm
@@ -124,7 +124,7 @@ class BaseCorrelationFunctionStatistics(BaseClass):
                 with np.errstate(divide='ignore', invalid='ignore'):
                     toret[(Ellipsis,) * (toret.ndim - self.ndim) + dig_zero] -= self.shotnoise_nonorm / self.nmodes[dig_zero]
         if null_zero_mode:
-            toret -= self.corr_zero_nonorm[(Ellipsis,) * (toret.ndim - self.ndim) + (None,) * self.ndim]
+            toret -= self.corr_zero_nonorm
         if divide_wnorm:
             toret /= self.wnorm
         if not complex and np.iscomplexobj(toret):
@@ -313,8 +313,8 @@ class BaseCorrelationFunctionStatistics(BaseClass):
 
     def __setstate__(self, state):
         super(BaseCorrelationFunctionStatistics, self).__setstate__(state)
-        if not hasattr(self, 'corr_zero_nonorm'):  # for backward-compatibility; to be removed soon!
-            self.corr_zero_nonorm = np.zeros(self.corr_nonorm.shape[:self.corr_nonorm.ndim - self.ndim], dtype=self.corr_nonorm.dtype)
+        if self.corr_zero_nonorm.ndim < self.corr_nonorm.ndim:  # for backward-compatibility; to be removed soon!
+            self.corr_zero_nonorm = np.zeros_like(self.corr_nonorm)
 
     def __copy__(self):
         new = super(BaseCorrelationFunctionStatistics, self).__copy__()
@@ -699,15 +699,13 @@ class CorrelationFunctionMultipoles(BaseCorrelationFunctionStatistics):
         dmu = np.diff(muedges)
         edges = (self.sedges.copy(), muedges)
         modes = (np.repeat(self.modes[0][:, None], len(dmu), axis=-1), np.repeat(mu[None, :], len(self.s), axis=0))
-        corr_nonorm, corr_direct_nonorm = 0, 0
+        corr_nonorm, corr_zero_nonorm, corr_direct_nonorm = 0, 0, 0
         for ell in ells:
             poly = np.diff(special.legendre(ell).integ()(muedges)) / dmu
-            corr_nonorm += self.corr_nonorm[self.ells.index(ell), ..., None] * poly
-            corr_direct_nonorm += self.corr_direct_nonorm[self.ells.index(ell), ..., None] * poly
-        if 0 in self.ells:
-            corr_zero_nonorm = self.corr_zero_nonorm[self.ells.index(0)]
-        else:
-            corr_zero_nonorm = np.array(0., dtype=self.corr_zero_nonorm.dtype)
+            ill = self.ells.index(ell)
+            corr_nonorm += self.corr_nonorm[ill, ..., None] * poly
+            corr_zero_nonorm += self.corr_zero_nonorm[ill, ..., None] * poly
+            corr_direct_nonorm += self.corr_direct_nonorm[ill, ..., None] * poly
         nmodes = self.nmodes[:, None] / dmu
         return CorrelationFunctionWedges(edges, modes, corr_nonorm, nmodes, wnorm=self.wnorm, shotnoise_nonorm=self.shotnoise_nonorm,
                                          corr_zero_nonorm=corr_zero_nonorm, corr_direct_nonorm=corr_direct_nonorm,
@@ -1025,22 +1023,26 @@ class MeshFFTCorr(MeshFFTBase):
         if not self.autocorr:
             cfield2 = self._to_complex(self.mesh2, copy=False)
         del self.mesh2
-
-        # We remove the zero-lag, else we'll have issue with hexadecapole
-        corr_zero = 0.
         # cfield1.conj() * cfield2
-        for i, c1, c2 in zip(cfield1.slabs.i, cfield1.slabs, cfield2.slabs):
+        for c1, c2 in zip(cfield1.slabs, cfield2.slabs):
             c1[...] = c1.conj() * c2
-            mask_zero = True
-            for ii in i: mask_zero = mask_zero & (ii == 0)
-            # if mask_zero.any(): corr_zero = c1[mask_zero].item().real / self.nmesh.prod(dtype='f8')
-            c1[mask_zero] = 0.
 
-        result, result_poles = project_to_basis(cfield1.c2r(), self.edges, ells=self.ells, los=self.los, exclude_zero=False)
+        # for i, c1 in zip(cfield1.slabs.i, cfield1.slabs):
+        #     mask_zero = True
+        #     for ii in i: mask_zero = mask_zero & (ii == 0)
+        #     # if mask_zero.any(): corr_zero = c1[mask_zero].item().real / self.nmesh.prod(dtype='f8')
+        #     c1[mask_zero] = 0.
+
+        rfield = cfield1.c2r()
+        del cfield1, cfield2
+        result, result_poles = project_to_basis(rfield, self.edges, ells=self.ells, los=self.los, exclude_zero=False)
+        rfield[...] = rfield.cmean()
+        result_zero, result_zero_poles = project_to_basis(rfield, self.edges, ells=self.ells, los=self.los, exclude_zero=False)
 
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': self.shotnoise * self.wnorm * self.nmesh.prod(dtype='f8') / self.boxsize.prod(dtype='f8'),
                   'attrs': self.attrs, 'mpicomm': self.mpicomm}
         s, mu, corr, nmodes = result[:4]
+        corr_zero = result_zero[2]
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
         corr, corr_zero = (self.nmesh.prod(dtype='f8')**2 / self.boxsize.prod(dtype='f8') * tmp for tmp in (corr, corr_zero))
         # Format the corr results into :class:`CorrelationFunctionWedges` instance
@@ -1049,9 +1051,9 @@ class MeshFFTCorr(MeshFFTBase):
         if result_poles:
             # Format the corr results into :class:`CorrelationFunctionMultipoles` instance
             s, corr, nmodes = result_poles[:3]
+            corr_zero = result_zero_poles[1]
             # pmesh convention is F(s) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-            corr = corr * self.nmesh.prod(dtype='f8')**2 / self.boxsize.prod(dtype='f8')
-            corr_zero = [corr_zero if ell == 0 else 0. for ell in self.ells]
+            corr, corr_zero = (self.nmesh.prod(dtype='f8')**2 / self.boxsize.prod(dtype='f8') * tmp for tmp in (corr, corr_zero))
             self.poles = CorrelationFunctionMultipoles(modes=s, edges=self.edges[0], corr_nonorm=corr, corr_zero_nonorm=corr_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def _run_local_los(self):
@@ -1069,17 +1071,16 @@ class MeshFFTCorr(MeshFFTBase):
 
         # FFT 1st density field and apply the resampler transfer kernel
         A0 = self._to_complex(self.mesh2, copy=True)  # pmesh r2c convention is 1/N^3 e^{-ikr}
-        corr_zero = 0.
         # Set mean value or real field to 0
-        for i, c in zip(A0.slabs.i, A0.slabs):
-            mask_zero = True
-            for ii in i: mask_zero = mask_zero & (ii == 0)
-            c[mask_zero] = 0.
+        # for i, c in zip(A0.slabs.i, A0.slabs):
+        #     mask_zero = True
+        #     for ii in i: mask_zero = mask_zero & (ii == 0)
+        #     c[mask_zero] = 0.
 
         # We will apply all compensation transfer functions to A0_1 (faster than applying to each Aell)
         compensations = [self.compensations[0]] * 2 if self.autocorr else self.compensations
 
-        result = []
+        result, result_zero = [], []
         # Loop over the higher order multipoles (ell > 0)
 
         if self.autocorr:
@@ -1107,8 +1108,11 @@ class MeshFFTCorr(MeshFFTBase):
 
             # the 1D monopole
             # from nbodykit.algorithms.fftcorr import project_to_basis
-            proj_result = project_to_basis(Aell.c2r(), self.edges, exclude_zero=False)[0]
+            rfield = Aell.c2r()
+            del Aell
+            proj_result = project_to_basis(rfield, self.edges, exclude_zero=False)[0]
             result.append(np.squeeze(proj_result[2]))
+            result_zero.append(np.ones_like(result[-1]) * rfield.cmean())
             s, nmodes = proj_result[0], proj_result[3]
 
             if rank == 0:
@@ -1121,6 +1125,7 @@ class MeshFFTCorr(MeshFFTBase):
             rfield = RealField(self.pm)
             cfield = ComplexField(self.pm)
             Aell = RealField(self.pm)
+            Aell_zero = RealField(self.pm)
 
             # Spherical harmonic kernels (for ell > 0)
             Ylms = [[get_real_Ylm(ell, m) for m in range(-ell, ell + 1)] for ell in nonzeroells]
@@ -1160,7 +1165,7 @@ class MeshFFTCorr(MeshFFTBase):
 
         for ill, ell in enumerate(nonzeroells):
 
-            Aell[:] = 0.
+            Aell_zero[:] = Aell[:] = 0.
             # Iterate from m=-ell to m=ell and apply Ylm
             t0 = time.time()
             for Ylm in Ylms[ill]:
@@ -1175,18 +1180,22 @@ class MeshFFTCorr(MeshFFTBase):
                 rfield.r2c(out=cfield)
 
                 for islab in range(A0.shape[0]):
-                    if swap:
-                        cfield[islab, ...] = cfield[islab].conj() * A0[islab]
-                    else:
-                        cfield[islab, ...] = cfield[islab] * A0[islab].conj()
+                    tmp = cfield[islab] * A0[islab].conj()
+                    if swap: tmp = tmp.conj()
+                    cfield[islab, ...] = tmp
 
                 cfield.c2r(out=rfield)
+                zero = rfield.cmean()
 
                 # Apply the separation-space Ylm
                 for islab, slab in enumerate(rfield.slabs):
                     slab[:] *= Ylm(shat[0][islab], shat[1][islab], shat[2][islab])
-
                 Aell[:] += rfield[:]
+
+                # Apply the separation-space Ylm
+                for islab, slab in enumerate(rfield.slabs):
+                    slab[:] = zero * Ylm(shat[0][islab], shat[1][islab], shat[2][islab])
+                Aell_zero[:] += rfield[:]
 
                 # And this contribution to the total sum
                 t1 = time.time()
@@ -1196,15 +1205,16 @@ class MeshFFTCorr(MeshFFTBase):
             if rank == 0:
                 self.log_info('ell = {:d} done; {:d} r2c completed'.format(ell, len(Ylms[ill])))
 
-            # Project on to 1d s-basis (averaging over mu=[-1,1])
+            # Project on to 1d s-basis (averaging over mu=[-1, 1])
             proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
             result.append(4 * np.pi * np.squeeze(proj_result[2]))
+            proj_result = project_to_basis(Aell_zero, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
+            result_zero.append(4 * np.pi * np.squeeze(proj_result[2]))
             s, nmodes = proj_result[0], proj_result[3]
 
         # pmesh convention is F(s) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
-        corr = np.array([result[ells.index(ell)] for ell in self.ells])
+        corr, corr_zero = (np.array([r[ells.index(ell)] for ell in self.ells]) for r in (result, result_zero))
         corr, corr_zero = (self.nmesh.prod(dtype='f8')**2 / self.boxsize.prod(dtype='f8') * tmp for tmp in (corr, corr_zero))
-        corr_zero = [corr_zero if ell == 0 else 0. for ell in self.ells]
         # Format the corr results into :class:`CorrelationFunctionMultipoles` instance
         s, nmodes = np.squeeze(s), np.squeeze(nmodes)
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': self.shotnoise * self.wnorm * self.nmesh.prod(dtype='f8') / self.boxsize.prod(dtype='f8'),
