@@ -233,9 +233,14 @@ def test_local():
     randoms = RandomBoxCatalog(nbar=4. * nbar, boxsize=boxsize, boxcenter=boxcenter, seed=45)
     data['Weight'] = mock.readout(data['Position'], field='delta', resampler='cic', compensate=True) + 1.
 
-    result = CatalogFFTCorr(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], ells=ells, los=los,
-                            edges={'step': 6.}, boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm)
-    plot_correlation_function(result.poles, theory=kaiser(power=power, bias=bias, f=f))
+    for mpiroot in [None, 0]:
+        data_positions, data_weights, randoms_positions = data['Position'], data['Weight'], randoms['Position']
+        # if data.mpicomm.rank == 2: data_weights[:10] = np.nan
+        if mpiroot is not None:
+            data_positions, data_weights, randoms_positions = data_positions.gather(mpiroot=mpiroot), data_weights.gather(mpiroot=mpiroot), randoms_positions.gather(mpiroot=mpiroot)
+        result = CatalogFFTCorr(data_positions1=data_positions, data_weights1=data_weights, shifted_positions1=randoms_positions, ells=ells, los=los,
+                                edges={'step': 6.}, boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm, mpiroot=mpiroot)
+        plot_correlation_function(result.poles, theory=kaiser(power=power, bias=bias, f=f))
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_dir = '_tests'
@@ -297,16 +302,17 @@ def test_cutsky():
     data['Weight'] = mock.readout(data['Position'], field='delta', resampler='cic', compensate=True) + 1.
 
     from pycorr import TwoPointCorrelationFunction
-    edges = (np.linspace(0., 100., 26), np.linspace(-1., 1., 101))
+    edges = (np.linspace(0., 180., 31), np.linspace(-1., 1., 101))
     pc = TwoPointCorrelationFunction('smu', edges=edges, data_positions1=data['Position'], data_weights1=data['Weight'],
-                                     randoms_positions1=randoms['Position'], los=los, position_type='pos', boxsize=boxsize,
+                                     randoms_positions1=randoms['Position'], los=los, position_type='pos',
                                      mpicomm=data.mpicomm)
-    boxsize2 = boxsize
+    boxsize2 = boxsize * 2.2
+    nmesh2 = nmesh * 2
     fft = CatalogFFTCorr(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], ells=ells, los=los,
-                         edges=edges[0], boxsize=boxsize2, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos',
+                         edges=edges[0], boxsize=boxsize2, nmesh=nmesh2, resampler='tsc', interlacing=2, position_type='pos',
                          mpicomm=data.mpicomm).poles
     fftr = CatalogFFTCorr(data_positions1=randoms['Position'], ells=ells, los=los,
-                          edges=edges[0], boxsize=boxsize2, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos',
+                          edges=edges[0], boxsize=boxsize2, nmesh=nmesh2, resampler='tsc', interlacing=2, position_type='pos',
                           mpicomm=data.mpicomm).poles
     fftr.wnorm = fft.wnorm * (randoms.csize / data.csize) ** 2
     rr = fftr(ell=0, null_zero_mode=False)
@@ -315,17 +321,18 @@ def test_cutsky():
     mask = fft.s > 20
     print(rr[mask])
     for ill, ell in enumerate(fft.ells):
-        ax.plot(fft.s[mask], fft.s[mask]**2 * fft(ell=ell)[mask], label=r'$\ell = {:d}$'.format(ell), color='C{:d}'.format(ill), linestyle=':')
-        ax.plot(fft.s[mask], fft.s[mask]**2 * fft(ell=ell)[mask] / rr[mask], label=r'$\ell = {:d}$'.format(ell), color='C{:d}'.format(ill), linestyle='-')
+        ax.plot(fft.s[mask], fft.s[mask]**2 * fft(ell=ell)[mask], color='C{:d}'.format(ill), linestyle=':', label='FFT, no 1/RR')
+        ax.plot(fft.s[mask], fft.s[mask]**2 * fft(ell=ell)[mask] / rr[mask], color='C{:d}'.format(ill), linestyle='-', label='FFT, with 1/RR')
         s, xi = pc(ell=ell, return_sep=True)
-        ax.plot(s[mask], s[mask]**2 * xi[mask], label=r'$\ell = {:d}$'.format(ell), color='C{:d}'.format(ill), linestyle='--')
+        ax.plot(s[mask], s[mask]**2 * xi[mask], color='C{:d}'.format(ill), linestyle='--', label='pair counts, Landy-Szalay')
+    ax.legend()
     plt.show()
 
 
 if __name__ == '__main__':
 
     setup_logging()
-    test_corr_statistic()
-    test_global()
+    # test_corr_statistic()
+    # test_global()
     test_local()
     # test_cutsky()

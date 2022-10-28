@@ -305,8 +305,7 @@ def test_ylm():
 
 def test_find_edges():
     x = np.meshgrid(np.arange(10.), np.arange(10.), indexing='ij')
-    x0 = np.ones(len(x), dtype='f8')
-    find_unique_edges(x, x0=x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD)
+    find_unique_edges(x, x0=1., xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD)
 
 
 def test_project():
@@ -942,8 +941,6 @@ if __name__ == '__main__':
     # test_interlacing()
     # test_fft()
     # test_memory()
-    test_catalog_power()
-    exit()
     test_mesh_power()
     test_power_statistic()
     test_find_edges()

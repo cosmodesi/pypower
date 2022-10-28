@@ -205,8 +205,7 @@ def _get_box(*positions):
     """Return minimal box containing input positions."""
     pos_min, pos_max = _make_array(np.inf, 3, dtype='f8'), _make_array(-np.inf, 3, dtype='f8')
     for position in positions:
-        for pos in positions:
-            if pos.shape[0] > 0: pos_min, pos_max = np.min([pos_min, pos.min(axis=0)], axis=0), np.max([pos_max, pos.max(axis=0)], axis=0)
+        if position.shape[0] > 0: pos_min, pos_max = np.min([pos_min, position.min(axis=0)], axis=0), np.max([pos_max, position.max(axis=0)], axis=0)
     return pos_min, pos_max
 
 

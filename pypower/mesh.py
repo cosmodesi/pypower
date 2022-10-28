@@ -532,6 +532,11 @@ class CatalogMesh(BaseClass):
             positions = positions - offset
             factor = bool(self.interlacing) + 0.5
             scalar_weights = weights is None
+            if any(self.mpicomm.allgather(np.isnan(positions).any())):
+                raise ValueError('Positions contain NaN')
+            if not scalar_weights and any(self.mpicomm.allgather(np.isnan(weights).any())):
+                import warnings
+                warnings.warn('Weights contain NaN')
 
             if scaling is not None:
                 if scalar_weights: weights = scaling
