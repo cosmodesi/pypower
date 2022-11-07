@@ -132,8 +132,8 @@ def test_fft_window():
                                         boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', wnorm=power.poles.wnorm / alpha**2, dtype=dtype)
         assert np.allclose(window_noref.poles.value, window.poles.value)
 
-        positions = randoms['Position'] = mpi.gather_array(randoms['Position'], root=0, mpicomm=catalog.mpicomm)
-        weights = randoms['Weight'] = mpi.gather_array(randoms['Weight'], root=0, mpicomm=catalog.mpicomm)
+        positions = mpi.gather(randoms['Position'], mpiroot=0, mpicomm=catalog.mpicomm)
+        weights = mpi.gather(randoms['Weight'], mpiroot=0, mpicomm=catalog.mpicomm)
         window_root = CatalogFFTWindow(randoms_positions1=positions, randoms_weights1=weights, edgesin=edgesin, power_ref=power, position_type='pos', dtype=dtype, mpiroot=0)
         assert np.allclose(window_root.poles.value, window.poles.value)
 

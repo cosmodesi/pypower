@@ -261,8 +261,8 @@ def test_fft_window():
 
         assert np.allclose(window_noref.power, window.power)
 
-        positions = mpi.gather_array(randoms['Position'], root=0, mpicomm=catalog.mpicomm)
-        weights = mpi.gather_array(randoms['Weight'], root=0, mpicomm=catalog.mpicomm)
+        positions = mpi.gather(randoms['Position'], mpiroot=0, mpicomm=catalog.mpicomm)
+        weights = mpi.gather(randoms['Weight'], mpiroot=0, mpicomm=catalog.mpicomm)
         window_root = CatalogSmoothWindow(randoms_positions1=positions, randoms_weights1=weights, power_ref=poles, edges=edges, position_type='pos', mpiroot=0).poles
         assert np.allclose(window_root.power, window.power)
 

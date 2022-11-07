@@ -115,7 +115,7 @@ def _format_positions(positions, position_type='xyz', dtype=None, copy=True, mpi
     if errors:
         raise ValueError(errors[0])
     if mpiroot is not None and mpicomm.bcast(positions is not None if mpicomm.rank == mpiroot else None, root=mpiroot):
-        positions = mpi.scatter_array(positions, mpicomm=mpicomm, root=mpiroot)
+        positions = mpi.scatter(positions, mpicomm=mpicomm, mpiroot=mpiroot)
     return positions
 
 
@@ -157,7 +157,7 @@ def _format_weights(weights, weight_type='auto', size=None, dtype=None, copy=Tru
     else:
         n = mpicomm.bcast(len(weights) if mpicomm.rank == mpiroot else None, root=mpiroot)
         if mpicomm.rank != mpiroot: weights = [None] * n
-        weights = [mpi.scatter_array(weight, mpicomm=mpicomm, root=mpiroot) for weight in weights]
+        weights = [mpi.scatter(weight, mpicomm=mpicomm, mpiroot=mpiroot) for weight in weights]
         n_bitwise_weights = mpicomm.bcast(n_bitwise_weights, root=mpiroot)
 
     if size is not None:

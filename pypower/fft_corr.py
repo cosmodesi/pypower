@@ -1244,11 +1244,6 @@ class CatalogFFTCorr(MeshFFTCorr):
         For example, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, integration is performed between :math:`\mu = 0.2` and :math:`\mu = 0.8`.
         In all other cases, integration is performed between :math:`\mu = -1.0` and :math:`\mu = 1.0`.
 
-        Note
-        ----
-        When running with MPI, input positions and weights are assumed to be scatted on all MPI ranks of ``mpicomm``.
-        If this is not the case, use :func:`mpi.scatter_array`.
-
         Parameters
         ----------
         data_positions1 : list, array
@@ -1388,7 +1383,7 @@ class CatalogFFTCorr(MeshFFTCorr):
             If ``None``, input positions and weights are assumed to be scattered across all ranks.
             Else the MPI rank where input positions and weights are gathered.
 
-        mpicomm : MPI communicator, default=MPI.COMM_WORLD
+        mpicomm : MPI communicator, default=mpi.COMM_WORLD
             The MPI communicator.
         """
         rdtype = _get_real_dtype(dtype)

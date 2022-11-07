@@ -870,11 +870,18 @@ def test_mpi():
                                dtype=dtype, mpiroot=mpiroot, mpicomm=mpicomm).poles
 
     ref_power = run(mpiroot=None)
-    for catalog in [data, randoms]:
+
+    def unbalance(catalog):
+        toret = Catalog()
         for name in ['Position', 'Weight']:
             zero = catalog[name][:0]
-            catalog[name] = mpi.gather_array(catalog[name], root=0, mpicomm=mpicomm)
-            if mpicomm.rank > 0: catalog[name] = zero
+            tmp = mpi.gather(catalog[name], mpiroot=0, mpicomm=mpicomm)
+            if mpicomm.rank > 0: tmp = zero
+            toret[name] = tmp
+        return toret
+
+    data = unbalance(data)
+    randoms = unbalance(randoms)
 
     def test(mpiroot=0, **kwargs):
 

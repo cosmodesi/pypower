@@ -1,7 +1,6 @@
 """Implementation of methods to paint a catalog on mesh; workhorse is :class:`CatalogMesh`."""
 
 import numpy as np
-from mpi4py import MPI
 
 from pmesh.pm import ParticleMesh
 from pmesh.window import FindResampler, ResampleWindow
@@ -143,7 +142,7 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
     check : bool, default=True
         If ``True``, and input ``positions`` (if provided) are not contained in the box, raise a :class:`ValueError`.
 
-    mpicomm : MPI communicator, default=MPI.COMM_WORLD
+    mpicomm : MPI communicator, default=mpi.COMM_WORLD
         The MPI communicator.
 
     Returns
@@ -192,7 +191,7 @@ def _get_mesh_attrs(nmesh=None, boxsize=None, boxcenter=None, cellsize=None, pos
     return nmesh, boxsize, boxcenter
 
 
-def ArrayMesh(array, boxsize, type='real', nmesh=None, mpiroot=0, mpicomm=MPI.COMM_WORLD):
+def ArrayMesh(array, boxsize, type='real', nmesh=None, mpiroot=0, mpicomm=mpi.COMM_WORLD):
     """
     Turn numpy array into :class:`pmesh.pm.Field`.
 
@@ -214,7 +213,7 @@ def ArrayMesh(array, boxsize, type='real', nmesh=None, mpiroot=0, mpicomm=MPI.CO
         MPI rank where input array is gathered.
         If input array is scattered accross all ranks in C ordering, pass ``mpiroot = None`` and specify ``nmesh``.
 
-    mpicomm : MPI communicator, default=MPI.COMM_WORLD
+    mpicomm : MPI communicator, default=mpi.COMM_WORLD
         The MPI communicator.
 
     Returns
@@ -269,14 +268,9 @@ class CatalogMesh(BaseClass):
     def __init__(self, data_positions, data_weights=None, randoms_positions=None, randoms_weights=None,
                  shifted_positions=None, shifted_weights=None,
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
-                 resampler='tsc', interlacing=2, position_type='xyz', copy=False, mpiroot=None, mpicomm=MPI.COMM_WORLD):
+                 resampler='tsc', interlacing=2, position_type='xyz', copy=False, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         """
         Initialize :class:`CatalogMesh`.
-
-        Note
-        ----
-        When running with MPI, input positions and weights are assumed to be scatted on all MPI ranks of ``mpicomm``.
-        If this is not the case, use :func:`mpi.scatter_array`.
 
         Parameters
         ----------
@@ -348,7 +342,7 @@ class CatalogMesh(BaseClass):
             If ``None``, input positions and weights are assumed to be scatted across all ranks.
             Else the MPI rank where input positions and weights are gathered.
 
-        mpicomm : MPI communicator, default=MPI.COMM_WORLD
+        mpicomm : MPI communicator, default=mpi.COMM_WORLD
             The MPI communicator.
         """
         self.mpicomm = mpicomm
@@ -532,11 +526,10 @@ class CatalogMesh(BaseClass):
             positions = positions - offset
             factor = bool(self.interlacing) + 0.5
             scalar_weights = weights is None
-            if any(self.mpicomm.allgather(np.isnan(positions).any())):
-                raise ValueError('Positions contain NaN')
-            if not scalar_weights and any(self.mpicomm.allgather(np.isnan(weights).any())):
-                import warnings
-                warnings.warn('Weights contain NaN')
+            if not all(self.mpicomm.allgather(np.isfinite(positions).all())):
+                raise ValueError('Some positions are NaN/inf')
+            if not scalar_weights and not all(self.mpicomm.allgather(np.isfinite(weights).all())):
+                raise ValueError('Some weights are NaN/inf')
 
             if scaling is not None:
                 if scalar_weights: weights = scaling

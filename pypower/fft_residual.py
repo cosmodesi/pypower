@@ -49,7 +49,7 @@ class CatalogFFTResidual(CatalogFFTPower):
             If ``None``, input positions and weights are assumed to be scattered across all ranks.
             Else the MPI rank where input positions and weights are gathered.
 
-        mpicomm : MPI communicator, default=MPI.COMM_WORLD
+        mpicomm : MPI communicator, default=mpi.COMM_WORLD
             The MPI communicator.
 
         kwargs : dict

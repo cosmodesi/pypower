@@ -393,7 +393,7 @@ def find_unique_edges(x, x0, xmin=0., xmax=np.inf, mpicomm=mpi.COMM_WORLD):
     xmax : float, default=np.inf
         Maximum separation.
 
-    mpicomm : MPI communicator, default=MPI.COMM_WORLD
+    mpicomm : MPI communicator, default=mpi.COMM_WORLD
         The current MPI communicator.
 
     Returns
@@ -427,6 +427,7 @@ def _transform_rslab(rslab, boxsize):
     toret = []
     for ii, rr in enumerate(rslab):
         mask = rr < 0.
+        rr = rr.copy()
         rr[mask] += boxsize[ii]
         toret.append(rr)
     return toret
@@ -1296,7 +1297,7 @@ def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.C
     data_weights : array of shape (N,), default=None
         Data weights, to normalize randoms ``weights`` by ``alpha = sum(data_weights)/sum(weights)``.
 
-    mpicomm : MPI communicator, default=MPI.COMM_WORLD
+    mpicomm : MPI communicator, default=mpi.COMM_WORLD
         The MPI communicator.
 
     Returns
@@ -2031,11 +2032,6 @@ class CatalogFFTPower(MeshFFTPower):
         For example, with :math:`\mu`-edges ``[0.2, 0.4, 0.8]``, integration is performed between :math:`\mu = 0.2` and :math:`\mu = 0.8`.
         In all other cases, integration is performed between :math:`\mu = -1.0` and :math:`\mu = 1.0`.
 
-        Note
-        ----
-        When running with MPI, input positions and weights are assumed to be scatted on all MPI ranks of ``mpicomm``.
-        If this is not the case, use :func:`mpi.scatter_array`.
-
         Parameters
         ----------
         data_positions1 : list, array
@@ -2208,7 +2204,7 @@ class CatalogFFTPower(MeshFFTPower):
             If ``None``, input positions and weights are assumed to be scattered across all ranks.
             Else the MPI rank where input positions and weights are gathered.
 
-        mpicomm : MPI communicator, default=MPI.COMM_WORLD
+        mpicomm : MPI communicator, default=mpi.COMM_WORLD
             The MPI communicator.
         """
         rdtype = _get_real_dtype(dtype)

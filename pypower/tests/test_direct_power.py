@@ -294,8 +294,8 @@ def test_direct_power():
             setdefaultnone(weight_attrs, 'default_value', 0)
             data1_ref, data2_ref = data1.copy(), data2.copy()
             mpicomm = mpi.COMM_WORLD
-            # data1_ref = [mpi.gather_array(d, root=None, mpicomm=mpicomm) for d in data1_ref]
-            # data2_ref = [mpi.gather_array(d, root=None, mpicomm=mpicomm) for d in data2_ref]
+            # data1_ref = [mpi.gather(d, mpiroot=None, mpicomm=mpicomm) for d in data1_ref]
+            # data2_ref = [mpi.gather(d, mpiroot=None, mpicomm=mpicomm) for d in data2_ref]
 
             def dataiip(data):
                 kwargs = {name: weight_attrs[name] for name in ['nrealizations', 'noffset', 'default_value']}
@@ -374,8 +374,8 @@ def test_direct_power():
                                    weights1=None if pass_none else weights1, weights2=None if pass_none or autocorr else weights2, position_type=position_type,
                                    limits=limits, limit_type=limit_type, engine=engine, nthreads=nthreads, **kwargs, **options)
 
-            data1 = [mpi.scatter_array(d, root=0, mpicomm=mpicomm) for d in data1]
-            data2 = [mpi.scatter_array(d, root=0, mpicomm=mpicomm) for d in data2]
+            data1 = [mpi.scatter(d, mpiroot=0, mpicomm=mpicomm) for d in data1]
+            data2 = [mpi.scatter(d, mpiroot=0, mpicomm=mpicomm) for d in data2]
             test = run(mpiroot=None)
             assert np.allclose(test.power_nonorm, ref, **tol)
             test_zero = run(mpiroot=None, pass_none=False, pass_zero=True)
@@ -392,8 +392,8 @@ def test_direct_power():
 
             mpiroot = 0
             data1_ref, data2_ref = data1, data2
-            data1 = [mpi.gather_array(d, root=mpiroot, mpicomm=mpicomm) for d in data1]
-            data2 = [mpi.gather_array(d, root=mpiroot, mpicomm=mpicomm) for d in data2]
+            data1 = [mpi.gather(d, mpiroot=mpiroot, mpicomm=mpicomm) for d in data1]
+            data2 = [mpi.gather(d, mpiroot=mpiroot, mpicomm=mpicomm) for d in data2]
             test_mpi = run(mpiroot=mpiroot)
             assert np.allclose(test_mpi.power_nonorm, test.power_nonorm, **tol)
             test_mpi = run(mpiroot=mpiroot, pass_none=mpicomm.rank > 0)
