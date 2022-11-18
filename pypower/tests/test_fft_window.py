@@ -81,9 +81,9 @@ def test_fft_window():
         window_mesh = MeshFFTWindow(mesh1, edgesin=edgesin, power_ref=power)
         assert np.allclose(window_mesh.poles.value, window.poles.value)
         assert np.allclose(window_mesh.poles.weight, power.poles.wnorm)
-        bak = window_mesh.value.copy()
-        window_mesh2 = window_mesh + window_mesh
-        assert np.allclose(window_mesh2.value, window_mesh.value)
+        bak = window_mesh.poles.value.copy()
+        window_mesh2 = window_mesh.poles + window_mesh.poles
+        assert np.allclose(window_mesh2.value, window_mesh.poles.value)
         assert np.allclose(window_mesh2.value, bak)
 
         mesh1 = CatalogMesh(data_positions=randoms['Position'], data_weights=randoms['Weight'], nmesh=power.attrs['nmesh'], boxsize=power.attrs['boxsize'], boxcenter=power.attrs['boxcenter'],

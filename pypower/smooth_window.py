@@ -345,7 +345,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         """Set this class state dictionary."""
         super(PowerSpectrumSmoothWindow, self).__setstate__(state)
         if not hasattr(self, 'wnorm_ref'):
-            self.wnorm_ref = self.wnorm.copy()
+            self.wnorm_ref = self.wnorm.copy()  # backward-compatibility
         self.projs = [Projection.from_state(state) for state in self.projs]
 
     @classmethod

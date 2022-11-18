@@ -197,6 +197,8 @@ class BaseMatrix(BaseClass):
     def __setstate__(self, state):
         """Set this class state dictionary."""
         super(BaseMatrix, self).__setstate__(state)
+        if not hasattr(self, 'weight'):
+            self.weight = np.array(1.)  # backward-compatibility
         for key in ['projsin', 'projsout']:
             setattr(self, key, [Projection.from_state(state) for state in getattr(self, key)])
 
