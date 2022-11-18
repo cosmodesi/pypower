@@ -8,7 +8,7 @@ import numpy as np
 from scipy import special
 from pmesh.pm import ParticleMesh, RealField, ComplexField
 
-from . import mpi
+from . import mpi, utils
 from .fftlog import PowerToCorrelation
 from .utils import _make_array
 from .fft_power import MeshFFTPower, get_real_Ylm, _transform_rslab, _get_real_dtype, _format_positions, _format_all_weights, project_to_basis, PowerSpectrumMultipoles, PowerSpectrumWedges, normalization
@@ -129,7 +129,7 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
 
     """Window matrix, relating "theory" input to "observed" output."""
 
-    def __init__(self, matrix, xin, xout, projsin, projsout, nmodes, wnorm=1., attrs=None, mpicomm=None):
+    def __init__(self, matrix, xin, xout, projsin, projsout, nmodes, wnorm=1., wnorm_ref=None, attrs=None, mpicomm=None):
         """
         Initialize :class:`PowerSpectrumFFTWindowMatrix`.
 
@@ -164,7 +164,8 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
         mpicomm : MPI communicator, default=None
             The MPI communicator, only used when saving (:meth:`save`) matrix.
         """
-        super(PowerSpectrumFFTWindowMatrix, self).__init__(matrix, xin, xout, projsin, projsout, weightsout=nmodes, attrs=attrs)
+        weight = wnorm_ref if wnorm_ref is not None else wnorm
+        super(PowerSpectrumFFTWindowMatrix, self).__init__(matrix, xin, xout, projsin, projsout, weightsout=nmodes, weight=weight, attrs=attrs)
         self.cvalue = self.value  # let us just keep the original value somewhere
         value = []
         nout = 0
@@ -175,7 +176,8 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
             value.append(tmp)
             nout = slout.stop
         self.value = np.concatenate(value, axis=-1)
-        self.wnorm = wnorm
+        self.wnorm = float(wnorm)
+        self.wnorm_ref = float(weight)
         self.mpicomm = mpicomm
 
     @property
@@ -220,7 +222,7 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
     def __getstate__(self):
         """Return this class state dictionary."""
         state = super(PowerSpectrumFFTWindowMatrix, self).__getstate__()
-        for name in ['cvalue', 'wnorm']:
+        for name in ['cvalue', 'wnorm', 'wnorm_ref']:
             state[name] = getattr(self, name)
         return state
 
@@ -372,6 +374,9 @@ class MeshFFTWindow(MeshFFTPower):
         self._set_edges(edges)
         self._set_xin(edgesin, edgesin_type=edgesin_type)
 
+        self.wnorm_ref = 1.
+        if power_ref is not None:
+            self.wnorm_ref = _get_attr_in_inst(power_ref, 'wnorm', insts=(None, 'wedges', 'poles'))
         self.wnorm = wnorm
         if wnorm is None:
             if self.periodic:
@@ -379,7 +384,7 @@ class MeshFFTWindow(MeshFFTPower):
             else:
                 if power_ref is not None:
                     ialpha2 = np.prod([self.attrs[name] / power_ref.attrs[name] for name in ['sum_data_weights1', 'sum_data_weights2']])
-                    self.wnorm = ialpha2 * _get_attr_in_inst(power_ref, 'wnorm', insts=(None, 'wedges', 'poles'))
+                    self.wnorm = ialpha2 * self.wnorm_ref
                 else:
                     self.wnorm = normalization(mesh1, mesh2)
         self.shotnoise = shotnoise
@@ -713,9 +718,9 @@ class MeshFFTWindow(MeshFFTPower):
             for iin, xin in enumerate(self.xin[projin]):
                 run_projin(projin, self.deriv[projin][iin])
                 if self.ells:
-                    poles_x.append(PowerSpectrumFFTWindowMatrix.from_power(self.poles, xin, projin, mpicomm=self.mpicomm))
+                    poles_x.append(PowerSpectrumFFTWindowMatrix.from_power(self.poles, xin, projin, wnorm_ref=self.wnorm_ref, mpicomm=self.mpicomm))
                 if self.los_type == 'global':
-                    wedges_x.append(PowerSpectrumFFTWindowMatrix.from_power(self.wedges, xin, projin, mpicomm=self.mpicomm))
+                    wedges_x.append(PowerSpectrumFFTWindowMatrix.from_power(self.wedges, xin, projin, wnorm_ref=self.wnorm_ref, mpicomm=self.mpicomm))
             if poles_x:
                 poles.append(PowerSpectrumFFTWindowMatrix.concatenate_x(*poles_x, axis='in'))
             if wedges_x:
@@ -730,6 +735,8 @@ class MeshFFTWindow(MeshFFTPower):
 
     @classmethod
     def concatenate_proj(cls, *others):
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
         new = others[0].copy()
         for name in ['poles', 'wedges']:
             if hasattr(others[0], name):
@@ -738,6 +745,8 @@ class MeshFFTWindow(MeshFFTPower):
 
     @classmethod
     def concatenate_x(cls, *others):
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
         new = others[0].copy()
         for name in ['poles', 'wedges']:
             if hasattr(others[0], name):

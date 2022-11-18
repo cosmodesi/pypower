@@ -58,7 +58,7 @@ class CatalogFFTResidual(CatalogFFTPower):
         def is_none(array):
             if mpicomm is None or mpiroot is None:
                 return array is None
-            return mpicomm.allgather(array is None)[mpiroot]
+            return mpicomm.bcast(array is None, root=mpiroot)
 
         self.residual_autocorr = is_none(randoms_positions2)
         if self.residual_autocorr:

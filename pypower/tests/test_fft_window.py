@@ -67,7 +67,7 @@ def test_fft_window():
 
         edgesin = np.linspace(0.1, 0.11, 3)
         window = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], edgesin=edgesin, power_ref=power, position_type='pos', dtype=dtype)
-
+        assert np.allclose(window.poles.weight, power.poles.wnorm)
         with tempfile.TemporaryDirectory() as tmp_dir:
             fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
             window.save(fn)
@@ -80,6 +80,11 @@ def test_fft_window():
                             resampler=power.attrs['resampler1'], interlacing=power.attrs['interlacing1'], position_type='pos', dtype=dtype)
         window_mesh = MeshFFTWindow(mesh1, edgesin=edgesin, power_ref=power)
         assert np.allclose(window_mesh.poles.value, window.poles.value)
+        assert np.allclose(window_mesh.poles.weight, power.poles.wnorm)
+        bak = window_mesh.value.copy()
+        window_mesh2 = window_mesh + window_mesh
+        assert np.allclose(window_mesh2.value, window_mesh.value)
+        assert np.allclose(window_mesh2.value, bak)
 
         mesh1 = CatalogMesh(data_positions=randoms['Position'], data_weights=randoms['Weight'], nmesh=power.attrs['nmesh'], boxsize=power.attrs['boxsize'], boxcenter=power.attrs['boxcenter'],
                             resampler=power.attrs['resampler1'], interlacing=power.attrs['interlacing1'], position_type='pos', dtype=dtype).to_mesh()

@@ -105,7 +105,7 @@ class BaseMatrix(BaseClass):
 
     Attributes
     ----------
-    matrix : array
+    value : array
         2D array representing linear transform.
         First axis is input, second is output.
 
@@ -124,7 +124,7 @@ class BaseMatrix(BaseClass):
     weightsin = None
     weightsout = None
 
-    def __init__(self, value, xin, xout, projsin, projsout, weightsin=None, weightsout=None, attrs=None):
+    def __init__(self, value, xin, xout, projsin, projsout, weightsin=None, weightsout=None, weight=1., attrs=None):
         """
         Initialize :class:`BaseMatrix`.
 
@@ -153,6 +153,9 @@ class BaseMatrix(BaseClass):
         weightsout : array, list, default=None
             Optionally, list of weights to apply when rebinning output "observed" coordinates.
 
+        weight : float, default=1.
+            Optionally, weight to apply when summing two matrices.
+
         attrs : dict, default=None
             Dictionary of other attributes.
         """
@@ -161,10 +164,10 @@ class BaseMatrix(BaseClass):
             raise ValueError('Input matrix must be 2D, not {}D.'.format(self.value.ndim))
         self.projsin = [Projection(proj) for proj in projsin]
         self.projsout = [Projection(proj) for proj in projsout]
-        self._set_xw(shape=self.value.shape, xin=xin, xout=xout, weightsin=weightsin, weightsout=weightsout)
+        self._set_xw(shape=self.value.shape, xin=xin, xout=xout, weightsin=weightsin, weightsout=weightsout, weight=weight)
         self.attrs = attrs or {}
 
-    def _set_xw(self, shape=None, **kwargs):
+    def _set_xw(self, shape=None, weight=1., **kwargs):
         for iaxis, axis in enumerate(['in', 'out']):
             projsname = 'projs{}'.format(axis)
             projs = getattr(self, projsname)
@@ -180,11 +183,12 @@ class BaseMatrix(BaseClass):
                     size = sum(len(array) for array in arrays)
                     if shape is not None and size != shape[iaxis]:
                         raise ValueError('Given input {} and {}, input matrix should be of size {:d} along axis {:d}'.format(name, projsname, size, iaxis))
+        self.weight = np.asarray(weight).real
 
     def __getstate__(self):
         """Return this class state dictionary."""
         state = {}
-        for key in ['value', 'xin', 'xout', 'weightsin', 'weightsout', 'attrs']:
+        for key in ['value', 'xin', 'xout', 'weightsin', 'weightsout', 'weight', 'attrs']:
             if hasattr(self, key): state[key] = getattr(self, key)
         for key in ['projsin', 'projsout']:
             state[key] = [proj.__getstate__() for proj in getattr(self, key)]
@@ -565,6 +569,8 @@ class BaseMatrix(BaseClass):
         matrix : BaseMatrix
             New matrix, of same type as ``others[0]``.
         """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
         new = others[0].copy()
         axis = axis.lower()
         iaxis = ['in', 'out'].index(axis)
@@ -596,6 +602,8 @@ class BaseMatrix(BaseClass):
         matrix : BaseMatrix
             New matrix, of same type as ``others[0]``.
         """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
         new = others[0].copy()
         axis = axis.lower()
         iaxis = ['in', 'out'].index(axis)
@@ -622,6 +630,8 @@ class BaseMatrix(BaseClass):
         Join input matrices, i.e. dot them,
         optionally selecting input and output projections such that they match.
         """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
         new = BaseMatrix.copy(others[-1])
         for first, second in zip(others[-2::-1], others[::-1]):
             first = first.copy()
@@ -645,6 +655,7 @@ class BaseMatrix(BaseClass):
                 tmp = getattr(new, name)
                 if tmp is not None: tmp = tmp.copy()
                 setattr(new, name, tmp)
+        new.weight = float(self.weight)
         return new
 
     def deepcopy(self):
@@ -708,6 +719,40 @@ class BaseMatrix(BaseClass):
             if tmp is not None and len(tmp) != len(projs):
                 tmp = [tmp[0].copy() for _ in projs]
             setattr(self, name, tmp)
+
+    @classmethod
+    def average(cls, *others, weights=None):
+        """
+        Average input matrices, weighted by ``weights`` or their :attr:`weight`.
+
+        Warning
+        -------
+        Input matrices have same projsin / projsout / xin / xout to make sense
+        (no checks performed).
+        """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
+        new = others[0].deepcopy()
+        if weights is None:
+            weights = [other.weight for other in others]
+        new.value = np.average([other.value for other in others], weights=weights, axis=0)
+        new.weight = sum(other.weight for other in others)
+        return new
+
+    @classmethod
+    def sum(cls, *others):
+        return cls.average(*others)
+
+    def __add__(self, other):
+        return self.sum(self, other)
+
+    def __radd__(self, other):
+        if other == 0: return self.deepcopy()
+        return self.__add__(other)
+
+    def __iadd__(self, other):
+        if other == 0: return self.deepcopy()
+        return self.__add__(other)
 
 
 def odd_wide_angle_coefficients(ell, wa_order=1, los='firstpoint'):

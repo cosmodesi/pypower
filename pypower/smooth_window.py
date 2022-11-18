@@ -29,10 +29,10 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
     """Power spectrum window function multipoles."""
 
     name = 'window'
-    _attrs = BasePowerSpectrumStatistics._attrs + ['volume', 'projs']
+    _attrs = BasePowerSpectrumStatistics._attrs + ['volume', 'projs', 'wnorm_ref']
     _tosum = ['nmodes', 'volume']
 
-    def __init__(self, edges, modes, power_nonorm, nmodes, projs, **kwargs):
+    def __init__(self, edges, modes, power_nonorm, nmodes, projs, wnorm_ref=None, **kwargs):
         r"""
         Initialize :class:`PowerSpectrumSmoothWindow`.
 
@@ -53,6 +53,9 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         projs : list
             List of :class:`Projection` instances or (multipole, wide-angle order) tuples.
 
+        wnorm_ref : float, array, default=None
+            Normalization of the reference data power spectrum; defaults to ``wnorm``.
+
         kwargs : dict
             Other arguments for :attr:`BasePowerSpectrumStatistics`.
         """
@@ -64,6 +67,10 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             for iproj, proj in enumerate(self.projs):
                 if proj.ell == 0: self.shotnoise_nonorm[iproj] = shotnoise_nonorm
         self.wnorm = _make_array(self.wnorm, len(self.power_nonorm), dtype=self.power_nonorm.dtype)
+        if wnorm_ref is None:
+            self.wnorm_ref = self.wnorm.copy()
+        else:
+            self.wnorm_ref = _make_array(wnorm_ref, len(self.power_nonorm), dtype=self.power_nonorm.dtype)
         self.volume = None
         if 'boxsize' in self.attrs:
             self.volume = (2. * np.pi)**3 / np.prod(self.attrs['boxsize']) * self.nmodes
@@ -242,6 +249,8 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         -------
         new : PowerSpectrumSmoothWindow
         """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
         new = others[0].deepcopy()
         names = ['power_nonorm', 'power_direct_nonorm', 'nmodes', 'volume']
 
@@ -300,10 +309,12 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         -------
         new : PowerSpectrumSmoothWindow
         """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
         new = others[0].deepcopy()
         new.projs = []
         for other in others: new.projs += other.projs
-        names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'wnorm', 'shotnoise_nonorm']
+        names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'wnorm', 'wnorm_ref', 'shotnoise_nonorm']
         for name in names:
             array = [getattr(other, name) for other in others]
             setattr(new, name, np.concatenate(array, axis=0))
@@ -333,16 +344,38 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
     def __setstate__(self, state):
         """Set this class state dictionary."""
         super(PowerSpectrumSmoothWindow, self).__setstate__(state)
+        if not hasattr(self, 'wnorm_ref'):
+            self.wnorm_ref = self.wnorm.copy()
         self.projs = [Projection.from_state(state) for state in self.projs]
+
+    @classmethod
+    def average(cls, *others, weights=None):
+        """
+        Average input window functions.
+
+        Warning
+        -------
+        Input power spectra have same edges / number of modes for this operation to make sense
+        (no checks performed).
+        """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
+        if weights is None:
+            wnorm_ref = [other.wnorm_ref for other in others]
+            wnorm = [other.wnorm for other in others]
+            weights = [wd / sum(wnorm_ref) / (w / sum(wnorm)) for wd, w in zip(wnorm_ref, wnorm)]
+        new = super(PowerSpectrumSmoothWindow, cls).average(*others, weights=weights)
+        new.wnorm_ref = sum(other.wnorm_ref for other in others)
+        return new
 
 
 class CorrelationFunctionSmoothWindow(BaseClass):
 
     """Correlation window function multipoles."""
 
-    _attrs = ['sep', 'corr']
+    _attrs = ['sep', 'corr', 'wnorm_ref']
 
-    def __init__(self, sep, corr, projs):
+    def __init__(self, sep, corr, projs, wnorm_ref=None):
         r"""
         Initialize :class:`CorrelationFunctionSmoothWindow`.
 
@@ -360,6 +393,7 @@ class CorrelationFunctionSmoothWindow(BaseClass):
         self.sep = np.asarray(sep)
         self.projs = [Projection(proj) for proj in projs]
         self.corr = np.asarray(corr)
+        self.wnorm_ref = wnorm_ref
 
     def __call__(self, proj=None, sep=None, return_sep=False, default_zero=False):
         r"""
@@ -510,7 +544,7 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
             block[sl] = prefactor * np.sum(volume[:, None] * integrand, axis=0)
         window.append(block)
 
-    return CorrelationFunctionSmoothWindow(sep, window, fourier_window.projs.copy())
+    return CorrelationFunctionSmoothWindow(sep, window, fourier_window.projs.copy(), wnorm_ref=fourier_window.wnorm_ref)
 
 
 class CatalogSmoothWindow(MeshFFTPower):
@@ -721,11 +755,15 @@ class CatalogSmoothWindow(MeshFFTPower):
                 if position is not None:
                     positions[name] = _wrap_positions(position, boxsize, boxcenter - boxsize / 2.)
 
-        if wnorm is None and power_ref is not None:
-            wsum = [mpicomm.allreduce(sum(weights['R1']) if weights['R1'] is not None else len(positions['R1']))] * 2
-            if not autocorr: wsum[1] = mpicomm.allreduce(sum(weights['R2']) if weights['R2'] is not None else len(positions['R2']))
-            ialpha2 = np.prod([wsum[ii] / power_ref.attrs[name] for ii, name in enumerate(['sum_data_weights1', 'sum_data_weights2'])])
-            wnorm = ialpha2 * power_ref.wnorm
+        ialpha2 = 1.
+        wnorm_ref = None
+        if power_ref is not None:
+            wnorm_ref = power_ref.wnorm
+            if wnorm is None:
+                wsum = [mpicomm.allreduce(sum(weights['R1']) if weights['R1'] is not None else len(positions['R1']))] * 2
+                if not autocorr: wsum[1] = mpicomm.allreduce(sum(weights['R2']) if weights['R2'] is not None else len(positions['R2']))
+                ialpha2 = np.prod([wsum[ii] / power_ref.attrs[name] for ii, name in enumerate(['sum_data_weights1', 'sum_data_weights2'])])
+                wnorm = ialpha2 * wnorm_ref
 
         def get_mesh(data_positions, data_weights=None, **kwargs):
             return CatalogMesh(data_positions, data_weights=data_weights,
@@ -758,7 +796,7 @@ class CatalogSmoothWindow(MeshFFTPower):
             if autocorr and shotnoise is None and wa_order != 0:  # when providing 2 meshes, shot noise estimate is 0; correct this here
                 weights2 = mesh1_wa.data_weights * mesh2_wa.data_weights if mesh2_wa.data_weights is not None else mesh1_wa.data_weights
                 self.poles.shotnoise_nonorm = mesh1_wa.mpicomm.allreduce(sum(weights2))
-            poles.append(PowerSpectrumSmoothWindow.from_power(self.poles, wa_order=wa_order, mpicomm=self.mpicomm))
+            poles.append(PowerSpectrumSmoothWindow.from_power(self.poles, wa_order=wa_order, wnorm_ref=wnorm_ref, mpicomm=self.mpicomm))
 
         self.poles = PowerSpectrumSmoothWindow.concatenate_proj(*poles)
         del self.ells
@@ -769,6 +807,8 @@ class CatalogSmoothWindow(MeshFFTPower):
         Concatenate :attr:`poles`.
         Same argument as :meth:`PowerSpectrumSmoothWindow.concatenate_x`.
         """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
         new = others[0].copy()
         for name in ['poles']:
             if hasattr(others[0], name):
@@ -828,7 +868,7 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
         else:
             self.projsout = [Projection(proj, default_wa_order=None if self.sum_wa else 0) for proj in projsout]
 
-        self._set_xw(xin=sep, xout=sep)
+        self._set_xw(xin=sep, xout=sep, weight=getattr(window, 'wnorm_ref', [1.])[0])
         self.run()
 
     def run(self):
@@ -999,7 +1039,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
         else:
             self.projsout = [Projection(proj, default_wa_order=None if self.sum_wa else 0) for proj in projsout]
 
-        self._set_xw(xin=self.k, xout=kout, weightsout=weightsout)
+        self._set_xw(xin=self.k, xout=kout, weightsout=weightsout, weight=getattr(window, 'wnorm_ref', [1.])[0])
         self.run()
 
     def run(self):

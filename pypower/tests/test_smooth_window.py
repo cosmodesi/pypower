@@ -220,6 +220,12 @@ def test_fft_window():
         windowc = PowerSpectrumSmoothWindow.concatenate_proj(windowp1, windowp2)
         assert np.allclose(windowc.power, window1.power)
 
+        assert not np.allclose(windowp1.wnorm_ref, windowp1.wnorm)
+        bak = windowc.power_nonorm.copy()
+        windowc += windowc
+        assert np.allclose(windowc.power, window1.power)
+        assert np.allclose(windowc.power_nonorm, 2 * bak)
+
         window1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges={'step': 0.0005}, position_type='pos').poles
         window2 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges={'step': 0.0005}, position_type='pos', boxsize=1000., dtype=dtype).poles
         windowc = PowerSpectrumSmoothWindow.concatenate_x(window1, window2)
@@ -249,6 +255,26 @@ def test_fft_window():
         for name in ['power', 'k', 'nmodes']:
             assert np.allclose(getattr(windowc, name)[..., windowc.kedges[1:] <= frac_nyq * knyq1], getattr(window1, name)[..., window1.kedges[1:] <= frac_nyq * knyq1], equal_nan=True)
             assert np.allclose(getattr(windowc, name)[..., windowc.kedges[1:] > frac_nyq * knyq1], getattr(window2, name)[..., (window2.kedges[1:] > frac_nyq * knyq1)], equal_nan=True)
+
+        if window1.mpicomm.rank == 0:
+            # Let us compute the wide-angle and window function matrix
+            kout = poles.k  # output k-bins
+            ellsout = poles.ells  # output multipoles
+            ellsin = poles.ells  # input (theory) multipoles
+            wa_orders = 1  # wide-angle order
+            sep = np.geomspace(1e-4, 4e3, 1024)  # configuration space separation for FFTlog
+            kin_rebin = 4  # rebin input theory to save memory
+            kin_lim = (0, 2e1)  # pre-cut input (theory) ks to save some memory
+            # Input projections for window function matrix:
+            # theory multipoles at wa_order = 0, and wide-angle terms at wa_order = 1
+            projsin = list(ellsin) + PowerSpectrumOddWideAngleMatrix.propose_out(ellsin, wa_orders=wa_orders)
+            # Window matrix
+            wm = PowerSpectrumSmoothWindowMatrix(kout, projsin=projsin, projsout=ellsout, window=window, sep=sep, kin_rebin=kin_rebin, kin_lim=kin_lim, default_zero=True)
+            assert np.allclose(wm.weight, poles.wnorm)
+            bak = wm.value.copy()
+            wm2 = wm + wm
+            assert np.allclose(wm2.value, wm.value)
+            assert np.allclose(wm2.value, bak)
 
         randoms['Position'][0] -= boxsize
         projsin = [(ell, 0) for ell in range(0, 2 * max(ells) + 1, 2)]

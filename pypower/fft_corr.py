@@ -330,21 +330,48 @@ class BaseCorrelationFunctionStatistics(BaseClass):
         return new
 
     @classmethod
-    def sum(cls, *others):
+    def average(cls, *others, weights=None):
         """
-        Sum input corr spectra, weighted by their :attr:`wnorm`.
+        Average input correlation functions.
 
         Warning
         -------
-        Input corr spectra have same edges / number of modes for this operation to make sense
+        Input orrelation function have same edges / number of modes for this operation to make sense
         (no checks performed).
         """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
         new = others[0].deepcopy()
+        if weights is None:
+            weights = [other.wnorm for other in others]
+        if len(weights) != len(others):
+            raise ValueError('Provide as many weights as instances to average')
+        weights = [np.array(weight) for weight in weights]
         for name in cls._attrs:
             if name.endswith('nonorm') and hasattr(new, name):
-                setattr(new, name, sum(getattr(other, name) for other in others))
-        new.wnorm = sum(other.wnorm for other in others)
+                value = 0.
+                for other, weight in zip(others, weights):
+                    tmp = getattr(other, name)
+                    tmp = np.asarray(tmp)
+                    weight = weight[(Ellipsis,) * weight.ndim + (None,) * (tmp.ndim - weight.ndim)]
+                    value += tmp * weight
+                setattr(new, name, value)
+            if 'wnorm' in name and hasattr(new, name):
+                value = sum(getattr(other, 'wnorm') * weight for other, weight in zip(others, weights))
+                setattr(new, name, value)
         return new
+
+    @classmethod
+    def sum(cls, *others):
+        """
+        Sum input correlation function, weighted by their :attr:`wnorm`.
+
+        Warning
+        -------
+        Input orrelation function have same edges / number of modes for this operation to make sense
+        (no checks performed).
+        """
+        return cls.average(others)
 
     def __add__(self, other):
         return self.sum(self, other)
