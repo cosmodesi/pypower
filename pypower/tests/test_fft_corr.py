@@ -248,7 +248,7 @@ def test_local():
         result.poles.save_txt(fn, complex=False)
 
 
-def test_cutsky():
+def test_pycorr():
 
     z = 1.
     bias, f, boxsize, nmesh, boxcenter, nbar, los, ells, seed = 1., 0.8, 500., 256, (0., 0., 0.), 1e-3, 'x', (0, 2, 4), 42
@@ -263,11 +263,11 @@ def test_cutsky():
     # plot_correlation_function(result.poles, theory=kaiser(power=power, bias=bias, f=f))
 
     data = RandomBoxCatalog(nbar=nbar, boxsize=boxsize, boxcenter=boxcenter, seed=44)
-    randoms = RandomBoxCatalog(nbar=4. * nbar, boxsize=boxsize, boxcenter=boxcenter, seed=45)
+    #randoms = RandomBoxCatalog(nbar=4. * nbar, boxsize=boxsize, boxcenter=boxcenter, seed=45)
     data['Weight'] = mock.readout(data['Position'], field='delta', resampler='cic', compensate=True) + 1.
 
     from pycorr import TwoPointCorrelationFunction
-    edges = (np.linspace(0., 100., 26), np.linspace(-1., 1., 101))
+    edges = (np.linspace(0., 200., 41), np.linspace(-1., 1., 101))
     pc = TwoPointCorrelationFunction('smu', edges=edges, data_positions1=data['Position'], data_weights1=data['Weight'], los=los,
                                      position_type='pos', boxsize=boxsize, mpicomm=data.mpicomm)
     fft = CatalogFFTCorr(data_positions1=data['Position'], data_weights1=data['Weight'], ells=ells, los=los,
@@ -334,5 +334,6 @@ if __name__ == '__main__':
     setup_logging()
     # test_corr_statistic()
     # test_global()
-    test_local()
+    # test_local()
+    test_pycorr()
     # test_cutsky()

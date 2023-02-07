@@ -37,7 +37,7 @@ class BaseCorrelationFunctionStatistics(BaseClass):
         Parameters
         ----------
         edges : tuple of ndim arrays
-            Edges used to bin corr spectrum measurement.
+            Edges used to bin correlation function measurement.
 
         modes : array
             Mean "wavevector" (e.g. :math:`(s, \mu)`) in each bin.
@@ -1348,7 +1348,7 @@ class CatalogFFTCorr(MeshFFTCorr):
             When ``boxsize`` is determined from input positions, take ``boxpad`` times the smallest box enclosing positions as ``boxsize``.
 
         wrap : bool, default=False
-            Whether to wrap input positions in [0, boxsize]?
+            Whether to wrap input positions in [0, boxsize[?
             If ``False`` and input positions do not fit in the the box size, raise a :class:`ValueError`.
 
         dtype : string, dtype, default='f8'

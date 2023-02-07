@@ -208,7 +208,7 @@ class BaseMatrix(BaseClass):
         If ``unpack`` is ``True``, return "unpacked" array,
         i.e. a list of arrays corresponding to ``projsout``.
         """
-        array = np.dot(np.asarray(array).flat, self.value)
+        array = np.dot(np.ravel(array), self.value)
         if unpack:
             toret = []
             nout = 0

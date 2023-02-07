@@ -307,7 +307,7 @@ class CatalogMesh(BaseClass):
             If ``nmesh`` is ``None``, it is set as (the nearest integer(s) to) ``boxsize / cellsize``.
 
         wrap : bool, default=False
-            Whether to wrap input positions?
+            Whether to wrap input positions in [0, boxsize[?
             If ``False`` and input positions do not fit in the the box size, raise a :class:`ValueError`.
 
         boxpad : float, default=2.
