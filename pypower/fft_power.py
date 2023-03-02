@@ -761,7 +761,7 @@ class BasePowerSpectrumStatistics(BaseClass):
             others = others[0]
         new = others[0].deepcopy()
         if weights is None:
-            weights = [other.wnorm for other in others]
+            weights = [1. for other in others]
         if len(weights) != len(others):
             raise ValueError('Provide as many weights as instances to average')
         weights = [np.array(weight) for weight in weights]
