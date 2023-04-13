@@ -6,12 +6,11 @@ import time
 
 import numpy as np
 from scipy import special
-from pmesh.pm import ParticleMesh, RealField, ComplexField
 
 from . import mpi, utils
 from .fftlog import PowerToCorrelation
 from .utils import _make_array
-from .fft_power import MeshFFTPower, get_real_Ylm, _transform_rslab, _get_real_dtype, _format_positions, _format_all_weights, project_to_basis, PowerSpectrumMultipoles, PowerSpectrumWedges, normalization
+from .fft_power import MeshFFTPower, get_real_Ylm, _transform_rslab, _get_real_dtype, _format_positions, _format_all_weights, project_to_basis, PowerSpectrumMultipoles, PowerSpectrumWedges, normalization, unnormalized_shotnoise
 from .wide_angle import BaseMatrix, Projection, PowerSpectrumOddWideAngleMatrix
 from .mesh import CatalogMesh, _get_mesh_attrs, _wrap_positions
 
@@ -236,6 +235,7 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
         # The theory wide-angle expansion uses first point line-of-sight
         matrix = PowerSpectrumOddWideAngleMatrix(self.xin[0], projsin=projsin, projsout=self.projsin, los='firstpoint', **kwargs)
         self.__dict__.update(self.join(matrix, self).__dict__)
+        return self
 
 
 class MeshFFTWindow(MeshFFTPower):
@@ -251,7 +251,7 @@ class MeshFFTWindow(MeshFFTPower):
         Window matrix.
     """
     def __init__(self, mesh1=None, mesh2=None, edgesin=None, projsin=None, power_ref=None, edges=None, ells=None, los=None, periodic=False, boxcenter=None,
-                 compensations=None, wnorm=None, shotnoise=None, edgesin_type='smooth', **kwargs):
+                 compensations=None, wnorm=None, shotnoise=None, shotnoise_nonorm=None, edgesin_type='smooth', **kwargs):
         r"""
         Initialize :class:`MeshFFTWindow`.
 
@@ -330,7 +330,7 @@ class MeshFFTWindow(MeshFFTPower):
         shotnoise : float, default=None
             Window function shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
             or both ``mesh1`` and ``mesh2`` are :class:`pmesh.pm.RealField`,
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise`
+            and in case of auto-correlation is obtained by dividing :func:`unnormalized_shotnoise`
             of ``mesh1`` by window function normalization.
 
         edgesin_type : str, default='smooth'
@@ -367,6 +367,7 @@ class MeshFFTWindow(MeshFFTPower):
             attrs_pm.update(kwargs)
             translate = {'boxsize': 'BoxSize', 'nmesh': 'Nmesh', 'mpicomm': 'comm'}
             attrs_pm = {translate.get(key, key): value for key, value in attrs_pm.items()}
+            from pmesh.pm import ParticleMesh
             mesh1 = ParticleMesh(**attrs_pm)
         self._set_compensations(compensations)
         self._set_mesh(mesh1, mesh2=mesh2, boxcenter=boxcenter)
@@ -386,13 +387,8 @@ class MeshFFTWindow(MeshFFTPower):
                     ialpha2 = np.prod([self.attrs[name] / power_ref.attrs[name] for name in ['sum_data_weights1', 'sum_data_weights2']])
                     self.wnorm = ialpha2 * self.wnorm_ref
                 else:
-                    self.wnorm = normalization(mesh1, mesh2)
-        self.shotnoise = shotnoise
-        if shotnoise is None:
-            self.shotnoise = 0.
-            # Shot noise is non zero only if we can estimate it
-            if self.autocorr and isinstance(mesh1, CatalogMesh):
-                self.shotnoise = mesh1.unnormalized_shotnoise() / self.wnorm
+                    self._set_normalization(self.wnorm, mesh1, mesh2)
+        self._set_shotnoise(shotnoise, shotnoise_nonorm=shotnoise_nonorm, mesh1=mesh1, mesh2=mesh2)
         self.attrs.update(self._get_attrs())
         t1 = time.time()
         if self.mpicomm.rank == 0:
@@ -410,6 +406,7 @@ class MeshFFTWindow(MeshFFTPower):
             raise ValueError('Cannot set "periodic" if line-of-sight is local.')
 
     def _set_mesh(self, mesh1, mesh2=None, boxcenter=None):
+        from pmesh.pm import ParticleMesh
         if self.periodic:
             self.attrs = {}
             self.autocorr = True
@@ -469,6 +466,8 @@ class MeshFFTWindow(MeshFFTPower):
         # Called for local (varying) line-of-sight only
         # This corresponds to Q defined in https://fr.overleaf.com/read/hpgbwqzmtcxn
         # ellout is \ell, mout is m, projin = (\ell^\prime, m^\prime)
+        from pmesh.pm import RealField, ComplexField
+
         Ylmout = get_real_Ylm(ellout, mout)
         Ylmins = [get_real_Ylm(projin.ell, m) for m in range(-projin.ell, projin.ell + 1)]
 
@@ -525,7 +524,8 @@ class MeshFFTWindow(MeshFFTPower):
 
     def _run_global_los(self, projin, deriv):
         # projin is \ell^\prime
-        # deriv is \xi^{\ell^{\prime},\beta \ell^\prime}(s^w)
+        # deriv is \xi^{\ell^{\prime}, \beta \ell^\prime}(s^w)
+        from pmesh.pm import ParticleMesh, ComplexField
 
         legendre = special.legendre(projin.ell)
 
@@ -578,6 +578,7 @@ class MeshFFTWindow(MeshFFTPower):
         # We we perform the sum of Q defined in https://fr.overleaf.com/read/hpgbwqzmtcxn
         # projin is \ell^\prime, n
         # deriv is \xi^{(n)}_{\ell^{\prime},\beta \ell^\prime}(s^w)
+        from pmesh.pm import RealField, ComplexField
 
         result = []
         ells = sorted(set(self.ells))
@@ -618,6 +619,8 @@ class MeshFFTWindow(MeshFFTPower):
         self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
 
     def run(self):
+
+        from pmesh.pm import RealField, ComplexField
 
         def _wrap_rslab(rslab):
             # We do not use the same conventions as pmesh:
@@ -770,9 +773,15 @@ class CatalogFFTWindow(MeshFFTWindow):
                  edgesin=None, projsin=None, edges=None, ells=None, power_ref=None,
                  los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype=None,
                  resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
-                 wnorm=None, shotnoise=None, edgesin_type='smooth', mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, edgesin_type='smooth', mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTWindow`, i.e. estimate power spectrum window matrix.
+
+        Note
+        ----
+        To compute the cross-window of samples 1 and 2, provide ``randoms_positions2``.
+        To compute (with the correct shot noise estimate) the auto-window of randoms 1, but with 2 weights, provide ``randoms_positions1``,
+        ``randoms_weights1`` and ``randoms_weights2``.
 
         Parameters
         ----------
@@ -902,7 +911,7 @@ class CatalogFFTWindow(MeshFFTWindow):
 
         shotnoise : float, default=None
             Window function shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise` by window function normalization.
+            and in case of auto-correlation is obtained by dividing :func:`unnormalized_shotnoise` by window function normalization.
 
         edgesin_type : str, default='smooth'
             Technique to transpose ``edgesin`` to Fourier space.
@@ -950,6 +959,9 @@ class CatalogFFTWindow(MeshFFTWindow):
         weights = {name: loc[name] for name in ['randoms_weights1', 'randoms_weights2']}
         weights, bweights, n_bitwise_weights, weight_attrs = _format_all_weights(dtype=rdtype, weight_type=weight_type, weight_attrs=weight_attrs, mpicomm=mpicomm, mpiroot=mpiroot, **weights)
 
+        self.same_shotnoise = autocorr and (weights['R2'] is not None)
+        autocorr &= not self.same_shotnoise
+
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_mesh_attrs(**mesh_attrs, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
         if resampler is None: resampler = 'tsc'
@@ -979,7 +991,11 @@ class CatalogFFTWindow(MeshFFTWindow):
         mesh1 = get_mesh(positions['R1'], data_weights=weights['R1'], resampler=resampler[0], interlacing=interlacing[0])
         mesh2 = None
         if not autocorr:
+            if self.same_shotnoise:
+                for name in ['R']:
+                    positions[name + '2'] = positions[name + '1']
+                    if weights[name + '2'] is None: weights[name + '2'] = weights[name + '1']
             mesh2 = get_mesh(positions['R2'], data_weights=weights['R2'], resampler=resampler[1], interlacing=interlacing[1])
 
-        # Now, run power spectrum estimation
-        super(CatalogFFTWindow, self).__init__(mesh1=mesh1, mesh2=mesh2, edgesin=edgesin, projsin=projsin, power_ref=power_ref, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, edgesin_type=edgesin_type)
+        # Now, run window function estimation
+        super(CatalogFFTWindow, self).__init__(mesh1=mesh1, mesh2=mesh2, edgesin=edgesin, projsin=projsin, power_ref=power_ref, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm, edgesin_type=edgesin_type)

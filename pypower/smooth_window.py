@@ -14,7 +14,7 @@ from scipy import special
 from .utils import BaseClass, _make_array
 from .fftlog import CorrelationToPower
 from .fft_power import (BasePowerSpectrumStatistics, MeshFFTPower, CatalogMesh,
-                        _get_real_dtype, _format_positions, _format_all_weights, _get_mesh_attrs, _wrap_positions)
+                        _get_real_dtype, _format_positions, _format_all_weights, _get_mesh_attrs, _wrap_positions, unnormalized_shotnoise)
 from .wide_angle import Projection, BaseMatrix, CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix
 from . import mpi, utils
 
@@ -295,6 +295,27 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
 
         return new
 
+    def select(self, *xlims, projs=None):
+        """
+        Restrict statistic to provided coordinate limits and projections ``projs`` in place.
+
+        For example:
+
+        .. code-block:: python
+
+            statistic.select((0, 0.3))  # restrict first axis to (0, 0.3)
+            statistic.select((0, 0.2), projs=[(0, 0), (2, 0)])  # restrict first axis to (0, 0.2), and select monopole and quadrupole
+
+        """
+        if projs is not None:
+            indices = [self.projs.index(proj) for proj in projs]
+            self.projs = [self.projs[index] for index in indices]
+            names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'wnorm', 'wnorm_ref', 'shotnoise_nonorm']
+            for name in names:
+                setattr(self, name, getattr(self, name)[indices])
+        super(PowerSpectrumSmoothWindow, self).select(*xlims)
+        return self
+
     @classmethod
     def concatenate_proj(cls, *others):
         """
@@ -313,10 +334,13 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             others = others[0]
         new = others[0].deepcopy()
         new.projs = []
-        for other in others: new.projs += other.projs
-        names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'wnorm', 'wnorm_ref', 'shotnoise_nonorm']
-        for name in names:
-            array = [getattr(other, name) for other in others]
+        arrays = {name: [] for name in ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'wnorm', 'wnorm_ref', 'shotnoise_nonorm']}
+        for other in others:
+            indices = [iproj for iproj, proj in enumerate(other.projs) if proj not in new.projs]
+            new.projs += [other.projs[index] for index in indices]
+            for name, array in arrays.items():
+                arrays[name].append(getattr(other, name)[indices])
+        for name, array in arrays.items():
             setattr(new, name, np.concatenate(array, axis=0))
         return new
 
@@ -556,9 +580,15 @@ class CatalogSmoothWindow(MeshFFTPower):
                  edges=None, projs=None, power_ref=None,
                  los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype=None,
                  resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
-                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogSmoothWindow`, i.e. estimate power spectrum window.
+
+        Note
+        ----
+        To compute the cross-window of samples 1 and 2, provide ``randoms_positions2``.
+        To compute (with the correct shot noise estimate) the auto-window of randoms 1, but with 2 weights, provide ``randoms_positions1``,
+        ``randoms_weights1`` and ``randoms_weights2``.
 
         Parameters
         ----------
@@ -683,7 +713,7 @@ class CatalogSmoothWindow(MeshFFTPower):
 
         shotnoise : float, default=None
             Window function shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise` by window function normalization.
+            and in case of auto-correlation is obtained by dividing :func:`unnormalized_shotnoise` by window function normalization.
 
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scatted across all ranks.
@@ -728,7 +758,6 @@ class CatalogSmoothWindow(MeshFFTPower):
             if nmesh is None: mesh_attrs.pop('nmesh')
             elif boxsize is None: mesh_attrs.pop('boxsize')
 
-        loc = locals()
         bpositions, positions = [], {}
         for name in ['randoms_positions1', 'randoms_positions2']:
             tmp = _format_positions(loc[name], position_type=position_type, dtype=rdtype, mpicomm=mpicomm, mpiroot=mpiroot)
@@ -740,6 +769,9 @@ class CatalogSmoothWindow(MeshFFTPower):
 
         weights = {name: loc[name] for name in ['randoms_weights1', 'randoms_weights2']}
         weights, bweights, n_bitwise_weights, weight_attrs = _format_all_weights(dtype=rdtype, weight_type=weight_type, weight_attrs=weight_attrs, mpicomm=mpicomm, mpiroot=mpiroot, **weights)
+
+        same_shotnoise = autocorr and (weights['R2'] is not None)
+        autocorr &= not same_shotnoise
 
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_mesh_attrs(**mesh_attrs, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
@@ -772,9 +804,15 @@ class CatalogSmoothWindow(MeshFFTPower):
 
         # Get catalog meshes
         mesh1 = get_mesh(positions['R1'], data_weights=weights['R1'], resampler=resampler[0], interlacing=interlacing[0])
-        if autocorr:
-            mesh2 = None
-        else:
+        if same_shotnoise and mesh1.mpicomm.rank == 0:
+            mesh1.log_info('Assuming same shot-noise')
+        mesh2 = None
+
+        if not autocorr:
+            if same_shotnoise:
+                for name in ['R']:
+                    positions[name + '2'] = positions[name + '1']
+                    if weights[name + '2'] is None: weights[name + '2'] = weights[name + '1']
             mesh2 = get_mesh(positions['R2'], data_weights=weights['R2'], resampler=resampler[1], interlacing=interlacing[1])
 
         poles = []
@@ -791,11 +829,9 @@ class CatalogSmoothWindow(MeshFFTPower):
                     mesh2_wa = mesh1
                 else:
                     mesh2_wa = mesh2
+            self.same_shotnoise = autocorr or same_shotnoise  # when providing 2 meshes, shot noise estimate is 0; correct this here
             # Now, run power spectrum estimation
-            super(CatalogSmoothWindow, self).__init__(mesh1=mesh1_wa, mesh2=mesh2_wa, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
-            if autocorr and shotnoise is None and wa_order != 0:  # when providing 2 meshes, shot noise estimate is 0; correct this here
-                weights2 = mesh1_wa.data_weights * mesh2_wa.data_weights if mesh2_wa.data_weights is not None else mesh1_wa.data_weights
-                self.poles.shotnoise_nonorm = mesh1_wa.mpicomm.allreduce(sum(weights2))
+            super(CatalogSmoothWindow, self).__init__(mesh1=mesh1_wa, mesh2=mesh2_wa, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm)
             poles.append(PowerSpectrumSmoothWindow.from_power(self.poles, wa_order=wa_order, wnorm_ref=wnorm_ref, mpicomm=self.mpicomm))
 
         self.poles = PowerSpectrumSmoothWindow.concatenate_proj(*poles)
@@ -940,6 +976,7 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
         if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
         matrix = CorrelationFunctionOddWideAngleMatrix([0.], projsin, projsout=self.projsin, **kwargs).value
         self.prod_proj(matrix, axes=('in', -1), projs=projsin)
+        return self
 
 
 class PowerSpectrumSmoothWindowMatrix(BaseMatrix):

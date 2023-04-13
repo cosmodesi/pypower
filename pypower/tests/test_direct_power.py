@@ -253,6 +253,7 @@ def test_direct_power():
     for engine in list_engine:
         for options in list_options:
             options = options.copy()
+            print(options)
             nthreads = options.pop('nthreads', None)
             weights_one = options.pop('weights_one', [])
             n_individual_weights = options.pop('n_individual_weights', 0)
@@ -377,6 +378,7 @@ def test_direct_power():
             data1 = [mpi.scatter(d, mpiroot=0, mpicomm=mpicomm) for d in data1]
             data2 = [mpi.scatter(d, mpiroot=0, mpicomm=mpicomm) for d in data2]
             test = run(mpiroot=None)
+
             assert np.allclose(test.power_nonorm, ref, **tol)
             test_zero = run(mpiroot=None, pass_none=False, pass_zero=True)
             assert np.allclose(test_zero.power_nonorm, 0.)
@@ -419,6 +421,10 @@ def test_catalog_power():
     limits = (0., 1.)
     limit_type = 'theta'
 
+    from collections import namedtuple
+    TwoPointWeight = namedtuple('TwoPointWeight', ['sep', 'weight'])
+    twopoint_weights = TwoPointWeight(np.logspace(-4, 0, 40), np.linspace(4., 1., 40))
+
     power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
                             direct_limits=limits, direct_limit_type=limit_type)
@@ -433,10 +439,6 @@ def test_catalog_power():
     direct = DirectPower(power.poles.k, positions1=data1[:3], positions2=data2[:3], weights1=data1[3:], weights2=data2[3:], position_type='xyz',
                          ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual')
     assert np.allclose(power.poles.power_direct_nonorm, direct.power_nonorm)
-
-    from collections import namedtuple
-    TwoPointWeight = namedtuple('TwoPointWeight', ['sep', 'weight'])
-    twopoint_weights = TwoPointWeight(np.logspace(-4, 0, 40), np.linspace(4., 1., 40))
 
     power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
@@ -454,6 +456,29 @@ def test_catalog_power():
     power2 = power + power
     assert np.allclose(power2.power, power.power, equal_nan=True)
     assert np.allclose(power2.wnorm, 2. * power.wnorm, equal_nan=True)
+
+    power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], data_weights2=data2[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
+                            nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
+                            direct_limits=limits, direct_limit_type=limit_type, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
+
+    direct_D1D2 = DirectPower(power.poles.k, positions1=data1[:3], weights1=data1[3:], weights2=data2[3:], position_type='xyz',
+                              ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+    direct_D1R2 = DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms1[:3], weights1=data1[3:], weights2=randoms1[3:], position_type='xyz',
+                              ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+    direct_R1D2 = DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data1[:3], weights1=randoms1[3:], weights2=data2[3:], position_type='xyz',
+                              ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+    assert np.allclose(power.poles.power_direct_nonorm, direct_D1D2.power_nonorm - direct_D1R2.power_nonorm - direct_R1D2.power_nonorm)
+    assert direct_D1D2.same_shotnoise
+    assert power.poles.shotnoise != 0.
+
+    power2 = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
+                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=4, edges=kedges, position_type='xyz',
+                             direct_limits=limits, direct_limit_type=limit_type, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
+
+    poles = power.poles.concatenate_proj(power.poles, power2.poles)
+    assert poles.ells == (0, 2, 4)
+    assert np.allclose(poles.power[:2], power.poles.power)
+    assert np.allclose(poles.power[2:], power2.poles.power)
 
 
 if __name__ == '__main__':

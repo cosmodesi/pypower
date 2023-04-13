@@ -164,6 +164,8 @@ class BaseMatrix(BaseClass):
             raise ValueError('Input matrix must be 2D, not {}D.'.format(self.value.ndim))
         self.projsin = [Projection(proj) for proj in projsin]
         self.projsout = [Projection(proj) for proj in projsout]
+        self.xin, self.xout = ([np.arange(s)] for s in self.value.shape)
+        self.weightsin = self.weightsout = None
         self._set_xw(shape=self.value.shape, xin=xin, xout=xout, weightsin=weightsin, weightsout=weightsout, weight=weight)
         self.attrs = attrs or {}
 
@@ -331,6 +333,7 @@ class BaseMatrix(BaseClass):
                 line.append(tmp)
             value.append(line)
         self.value = np.bmat(value).A
+        return self
 
     def __getitem__(self, slices):
         """Call :meth:`slice_x`."""
@@ -409,6 +412,7 @@ class BaseMatrix(BaseClass):
         self.value = np.bmat(value).A
         if not all(f == 1 for f in factors.values()):
             self.rebin_x(factorin=factors['in'], factorout=factors['out'], projsin=inprojs['in'], projsout=inprojs['out'])
+        return self
 
     def select_x(self, xinlim=None, xoutlim=None, projsin=None, projsout=None):
         """
@@ -473,6 +477,7 @@ class BaseMatrix(BaseClass):
                 value[selfiin][selfiout] = value[selfiin][selfiout][np.ix_(masks['in'][iin], masks['out'][iout])]
 
         self.value = np.bmat(value).A
+        return self
 
     def rebin_x(self, factorin=1, factorout=1, projsin=None, projsout=None, statistic=None):
         """
@@ -551,6 +556,7 @@ class BaseMatrix(BaseClass):
                         new_2dweights = new_2dweights * np.expand_dims(utils.rebin(oweights, len(nweights), statistic=statistic), axis=1 - iaxis)
                 value[selfiin][selfiout] = utils.rebin(value[selfiin][selfiout] * old_2dweights, new_shape, statistic=statistic) / new_2dweights
         self.value = np.bmat(value).A
+        return self
 
     @classmethod
     def concatenate_proj(cls, *others, axis='in'):
@@ -576,13 +582,20 @@ class BaseMatrix(BaseClass):
         new = others[0].copy()
         axis = axis.lower()
         iaxis = ['in', 'out'].index(axis)
-        for name in ['projs', 'x', 'weights']:
-            name = '{}{}'.format(name, axis)
-            if getattr(others[0], name) is not None:
-                arrays = []
-                for other in others: arrays += getattr(other, name)
-                setattr(new, name, arrays)
-        new.value = np.concatenate([other.value for other in others], axis=iaxis)
+        projsname = 'projs{}'.format(axis)
+        xname = 'x{}'.format(axis)
+        arrays = {'{}{}'.format(name, axis): [] for name in ['projs', 'x', 'weights']}
+        arrays = {name: array for name, array in arrays.items() if getattr(others[0], name, None) is not None}
+        value = []
+        for other in others:
+            indices = [iproj for iproj, proj in enumerate(getattr(other, projsname)) if proj not in arrays[projsname]]
+            for name in arrays:
+                arrays[name] += [getattr(other, name)[index] for index in indices]
+            indices = np.flatnonzero(np.concatenate([(i in indices) * np.ones(len(x), dtype='?') for i, x in enumerate(getattr(other, xname))]))
+            value.append(np.take(other.value, indices, axis=iaxis))
+        for name, array in arrays.items():
+            setattr(new, name, array)
+        new.value = np.concatenate(value, axis=iaxis)
         return new
 
     @classmethod
@@ -721,6 +734,7 @@ class BaseMatrix(BaseClass):
             if tmp is not None and len(tmp) != len(projs):
                 tmp = [tmp[0].copy() for _ in projs]
             setattr(self, name, tmp)
+        return self
 
     @classmethod
     def average(cls, *others, weights=None):

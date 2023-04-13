@@ -129,6 +129,10 @@ def test_fft_window():
         windowc = window1.concatenate_proj(window1, window2)
         assert np.allclose(windowc.poles.value, window.poles.value)
 
+        window2 = CatalogFFTWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], randoms_weights2=0.5 * randoms['Weight'], edgesin=edgesin, projsin=window.poles.projsin[:1], power_ref=power.poles, wrap=True, position_type='pos', dtype=dtype)
+        assert np.allclose(window2.poles.wnorm, 0.5 * window1.poles.wnorm)
+        assert np.allclose(window2.poles.value, window1.poles.value)
+
         randoms['Position'][0] -= boxsize
         projsin = [(ell, 0) for ell in ells]
         if los in ['firstpoint', 'endpoint']: projsin += [(ell, 1) for ell in range(1, max(ells) + 2, 2)]

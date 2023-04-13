@@ -1,13 +1,14 @@
 import numpy as np
 
-from mpi4py import MPI
-from pmesh.domain import GridND
-
 from .utils import _get_box
 
-
-COMM_WORLD = MPI.COMM_WORLD
-COMM_SELF = MPI.COMM_SELF
+try:
+    from mpi4py import MPI
+except ImportError:
+    COMM_WORLD = COMM_SELF = None
+else:
+    COMM_WORLD = MPI.COMM_WORLD
+    COMM_SELF = MPI.COMM_SELF
 
 
 def gather(data, mpiroot=0, mpicomm=COMM_WORLD):
@@ -352,6 +353,7 @@ def domain_decompose(mpicomm, smoothing, positions1, weights1=None, positions2=N
 
     # domain decomposition
     grid = [np.linspace(pmin, pmax, grid + 1, endpoint=True) for pmin, pmax, grid in zip(posmin, posmax, ngrid)]
+    from pmesh.domain import GridND
     domain = GridND(grid, comm=mpicomm, periodic=periodic)  # raises VisibleDeprecationWarning: Creating an ndarray from ragged nested sequences
 
     if not periodic:

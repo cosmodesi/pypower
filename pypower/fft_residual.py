@@ -1,7 +1,7 @@
 import numpy as np
 
 from . import mpi
-from .fft_power import CatalogFFTPower, normalization
+from .fft_power import CatalogFFTPower, normalization, unnormalized_shotnoise
 
 
 class CatalogFFTResidual(CatalogFFTPower):
@@ -60,11 +60,12 @@ class CatalogFFTResidual(CatalogFFTPower):
                 return array is None
             return mpicomm.bcast(array is None, root=mpiroot)
 
-        self.residual_autocorr = is_none(randoms_positions2)
-        if self.residual_autocorr:
+        self.same_shotnoise_residual = is_none(randoms_positions2)
+        if self.same_shotnoise_residual:
             randoms_positions2 = randoms_positions1
-            randoms_weights2 = randoms_weights1
-            self.residual_autocorr = is_none(shifted_positions1)
+            if is_none(randoms_weights2):
+                randoms_weights2 = randoms_weights1
+            self.same_shotnoise_residual = is_none(shifted_positions1)
         if is_none(randoms_positions1) or is_none(randoms_positions2):
             raise ValueError('A random catalog must be provided')
 
@@ -72,12 +73,16 @@ class CatalogFFTResidual(CatalogFFTPower):
                                                  data_weights1=data_weights1, randoms_weights1=randoms_weights1, data_weights2=randoms_weights2, shifted_weights1=shifted_weights1,
                                                  D1R2_twopoint_weights=D1R2_twopoint_weights, mpiroot=mpiroot, mpicomm=mpicomm, **kwargs)
 
-    def _set_shotnoise(self, shotnoise, mesh1=None, mesh2=None):
+    def _set_shotnoise(self, shotnoise, shotnoise_nonorm=None, mesh1=None, mesh2=None):
         self.shotnoise = shotnoise
         if shotnoise is None:
-            self.shotnoise = 0.
-            if self.residual_autocorr:
-                self.shotnoise = - mesh1.sum_data_weights / mesh1.sum_randoms_weights * mesh2.unnormalized_shotnoise() / self.wnorm
+            if shotnoise_nonorm is None:
+                if self.same_shotnoise_residual:
+                    mesh1c = mesh1.clone(data_positions=mesh1.randoms_positions, data_weights=mesh1.randoms_weights, position_type='pos')
+                    shotnoise_nonorm = - mesh1.sum_data_weights / mesh1.sum_randoms_weights * unnormalized_shotnoise(mesh1c, mesh2)
+                else:
+                    shotnoise_nonorm = 0.
+            self.shotnoise = shotnoise_nonorm / self.wnorm
 
     def _set_normalization(self, wnorm, mesh1, mesh2=None):
         # Set :attr:`wnorm`

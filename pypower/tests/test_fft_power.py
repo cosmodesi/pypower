@@ -8,8 +8,8 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import LagrangianLinearMock, Catalog
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, ArrayMesh, PowerSpectrumStatistics, mpi, utils, setup_logging
-from pypower.fft_power import normalization, normalization_from_nbar, find_unique_edges, get_real_Ylm, project_to_basis
+from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, ArrayMesh, PowerSpectrumStatistics, PowerSpectrumMultipoles, mpi, utils, setup_logging
+from pypower.fft_power import normalization, normalization_from_nbar, unnormalized_shotnoise, find_unique_edges, get_real_Ylm, project_to_basis
 
 
 base_dir = 'catalog'
@@ -109,7 +109,7 @@ def test_fft():
     rfield[...] = np.random.uniform(0., 1., size=shape)
     assert np.allclose((rfield - rfield).value, 0.)
     cfield = rfield.r2c().value
-    # print(cfield[0,0,0])
+    # print(cfield[0, 0, 0])
     from numpy import fft
     ref = fft.fftn(rfield.value) / np.prod(shape)
     assert np.allclose(cfield, ref)
@@ -177,6 +177,11 @@ def test_power_statistic():
         power2 = power_ref + power_ref
         assert np.allclose(power2.power, power_ref.power, equal_nan=True)
         assert np.allclose(power2.wnorm, 2. * power_ref.wnorm, equal_nan=True)
+
+        power2 = PowerSpectrumMultipoles.concatenate_proj(power_ref, power_ref)
+        assert np.allclose(power2.power[:len(power_ref.power)], power_ref.power, equal_nan=True)
+        power2.select(ells=(0, 2))
+        assert power2.ells == (0, 2)
 
         power = power_ref.copy()
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -692,7 +697,7 @@ def test_catalog_power():
         mesh = CatalogMesh(data_positions=data['Position'], data_weights=data['Weight'], randoms_positions=randoms['Position'], randoms_weights=randoms['Weight'],
                            boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, position_type='pos', dtype=dtype)
         wnorm = np.real(normalization(mesh))
-        shotnoise = mesh.unnormalized_shotnoise() / wnorm
+        shotnoise = unnormalized_shotnoise(mesh, mesh) / wnorm
         field = mesh.to_mesh()
         if as_complex: field = field.r2c()
         field2 = None
@@ -771,6 +776,7 @@ def test_catalog_power():
 
     power_mesh = get_mesh_power(data, randoms, as_complex=False)
     for ell in ells:
+        # print(ell, power_mesh.poles.shotnoise, f_power.poles.shotnoise, power_mesh.poles.wnorm, f_power.poles.wnorm)
         assert np.allclose(power_mesh.poles(ell=ell), f_power.poles(ell=ell))
 
     power_mesh = get_mesh_power(data, randoms, as_complex=True, as_cross=True)
@@ -836,6 +842,17 @@ def test_catalog_power():
     for los in ['firstpoint', 'endpoint']:
         power_local = get_cross_power(data, randoms, los=los).poles
         assert np.allclose(power_global.power_nonorm, power_local.power_nonorm)
+
+    poles_0 = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], data_weights2=0.5 * data['Weight'], ells=0, los=los,
+                              edges=kedges, boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm).poles
+    poles_2 = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], ells=(0, 2), los=los,
+                              edges=kedges, boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm).poles
+
+    assert np.allclose(poles_0.power_nonorm, 0.5 * poles_2.power_nonorm[:1])
+    assert np.allclose(poles_0.power, poles_2.power[:1])
+    poles = PowerSpectrumMultipoles.concatenate_proj(poles_0, poles_2)
+    assert np.allclose(poles(ell=0), poles_0(ell=0))
+    assert np.allclose(poles(ell=2), poles_2(ell=2))
 
 
 def test_mpi():

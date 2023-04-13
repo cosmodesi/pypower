@@ -107,6 +107,10 @@ def test_window():
     window = PowerSpectrumSmoothWindow.concatenate_x(window, window2)
     assert np.allclose(window.power_nonorm[0], y[0] / 2.)
 
+    window2 = PowerSpectrumSmoothWindow.concatenate_proj(window, window)
+    window2.select(projs=projs[:2])
+    assert window2.projs == projs[:2]
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         fn = os.path.join(tmp_dir, 'tmp.npy')
         window.save(fn)
@@ -225,6 +229,10 @@ def test_fft_window():
         windowc += windowc
         assert np.allclose(windowc.power, window1.power)
         assert np.allclose(windowc.power_nonorm, 2 * bak)
+
+        window2 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], randoms_weights2=0.5 * randoms['Weight'], power_ref=poles, wrap=True, edges=edges, projs=window.projs[:2], position_type='pos', dtype=dtype).poles
+        assert np.allclose(window2.power_nonorm, 0.5 * windowp1.power_nonorm)
+        assert np.allclose(window2.power, windowp1.power)
 
         window1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges={'step': 0.0005}, position_type='pos').poles
         window2 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, wrap=True, edges={'step': 0.0005}, position_type='pos', boxsize=1000., dtype=dtype).poles

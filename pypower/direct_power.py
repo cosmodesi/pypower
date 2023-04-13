@@ -440,6 +440,13 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
                 if nrealizations is None: nrealizations = get_default_nrealizations(weights)
                 return nrealizations
 
+            self.weights2, n_bitwise_weights2 = _format_weights(weights2, weight_type=weight_type, size=len(self.positions1 if self.autocorr else self.positions2), dtype=self.dtype, copy=False, mpicomm=self.mpicomm, mpiroot=mpiroot)
+            self.same_shotnoise = self.autocorr and bool(self.weights2)
+
+            if self.same_shotnoise:
+                self.positions2 = self.positions1
+                self.autocorr = False
+
             if self.autocorr:
 
                 self.weights2 = self.weights1
@@ -447,8 +454,6 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
                 self.n_bitwise_weights = n_bitwise_weights1
 
             else:
-                self.weights2, n_bitwise_weights2 = _format_weights(weights2, weight_type=weight_type, size=len(self.positions2), dtype=self.dtype, copy=False, mpicomm=self.mpicomm, mpiroot=mpiroot)
-
                 if n_bitwise_weights2 == n_bitwise_weights1:
 
                     self.weight_attrs['nrealizations'] = get_nrealizations(self.weights1[:n_bitwise_weights1])
@@ -543,9 +548,9 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
 
     def _sum_auto_weights(self):
         """Return auto-counts, that are pairs of same objects."""
-        if not self.autocorr:
+        if not self.autocorr and not self.same_shotnoise:
             return 0.
-        weights = self._twopoint_weights(self.weights1, self.weights1)
+        weights = self._twopoint_weights(self.weights1, self.weights2)
         if weights.ndim == 0:
             return self.size1 * weights
         weights = np.sum(weights)

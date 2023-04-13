@@ -2,11 +2,14 @@
 
 import numpy as np
 
-from pmesh.pm import ParticleMesh
-from pmesh.window import FindResampler, ResampleWindow
 from .utils import BaseClass, _make_array, _get_box
 from .direct_power import _format_positions, _format_weights
 from . import mpi
+
+try:
+    from pmesh.pm import ParticleMesh
+except ImportError:
+    pass
 
 
 def _get_real_dtype(dtype):
@@ -16,12 +19,14 @@ def _get_real_dtype(dtype):
 
 def _get_resampler(resampler):
     # Return :class:`ResampleWindow` from string or :class:`ResampleWindow` instance
+    from pmesh.window import ResampleWindow
     if isinstance(resampler, ResampleWindow):
         return resampler
     conversions = {'ngp': 'nnb', 'cic': 'cic', 'tsc': 'tsc', 'pcs': 'pcs'}
     if resampler not in conversions:
         raise ValueError('Unknown resampler {}, choices are {}'.format(resampler, list(conversions.keys())))
     resampler = conversions[resampler]
+    from pmesh.window import FindResampler
     return FindResampler(resampler)
 
 
@@ -631,27 +636,3 @@ class CatalogMesh(BaseClass):
         for k, slab in zip(cfield.slabs.x, cfield.slabs):
             kc = tuple(ki * ci for ki, ci in zip(k, cellsize))
             slab[...] /= window(*kc)
-
-    def unnormalized_shotnoise(self):
-        r"""
-        Return unnormalized shotnoise, as:
-
-        .. math::
-
-            \sum_{i=1}^{N_{g}} w_{i,g}^{2} + \alpha^{2} \sum_{i=1}^{N_{r}} w_{i,r}^{2}
-
-        Where the sum runs over data (and optionally) shifted/randoms weights.
-        """
-        def sum_weights2(positions, weights=None):
-            if weights is None:
-                return self.mpicomm.allreduce(len(positions))
-            return self.mpicomm.allreduce(sum(weights**2))
-
-        shotnoise = sum_weights2(self.data_positions, self.data_weights)
-        if self.with_shifted:
-            alpha = self.sum_data_weights / self.sum_shifted_weights
-            shotnoise += alpha**2 * sum_weights2(self.shifted_positions, self.shifted_weights)
-        elif self.with_randoms:
-            alpha = self.sum_data_weights / self.sum_randoms_weights
-            shotnoise += alpha**2 * sum_weights2(self.randoms_positions, self.randoms_weights)
-        return shotnoise

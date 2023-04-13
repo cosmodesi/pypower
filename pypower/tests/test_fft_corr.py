@@ -8,7 +8,7 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import EulerianLinearMock
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import MeshFFTCorr, CatalogFFTCorr, CorrelationFunctionStatistics, setup_logging
+from pypower import MeshFFTCorr, CatalogFFTCorr, CorrelationFunctionStatistics, CorrelationFunctionMultipoles, setup_logging
 
 
 def kaiser(power, bias=1., f=1.):
@@ -74,6 +74,11 @@ def test_corr_statistic():
         corr2 = corr_ref + corr_ref
         assert np.allclose(corr2.corr, corr_ref.corr, equal_nan=True)
         assert np.allclose(corr2.wnorm, 2. * corr_ref.wnorm, equal_nan=True)
+
+        corr2 = CorrelationFunctionMultipoles.concatenate_proj(corr_ref, corr_ref)
+        assert np.allclose(corr2.corr[:len(corr_ref.corr)], corr_ref.corr, equal_nan=True)
+        corr2.select(ells=(0, 2))
+        assert corr2.ells == (0, 2)
 
         corr = corr_ref.copy()
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -247,6 +252,17 @@ def test_local():
         fn = os.path.join(tmp_dir, 'tmp_poles.txt')
         result.poles.save_txt(fn, complex=False)
 
+    poles_0 = CatalogFFTCorr(data_positions1=data_positions, data_weights1=data_weights, data_weights2=0.5 * data_weights, ells=0, los=los,
+                             edges={'step': 6.}, boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm, mpiroot=mpiroot).poles
+    poles_2 = CatalogFFTCorr(data_positions1=data_positions, data_weights1=data_weights, ells=(0, 2), los=los,
+                             edges={'step': 6.}, boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm, mpiroot=mpiroot).poles
+
+    assert np.allclose(poles_0.corr_nonorm, 0.5 * poles_2.corr_nonorm[:1])
+    assert np.allclose(poles_0.corr, poles_2.corr[:1])
+    poles = CorrelationFunctionMultipoles.concatenate_proj(poles_0, poles_2)
+    assert np.allclose(poles(ell=0), poles_0(ell=0))
+    assert np.allclose(poles(ell=2), poles_2(ell=2))
+
 
 def test_pycorr():
 
@@ -332,8 +348,8 @@ def test_cutsky():
 if __name__ == '__main__':
 
     setup_logging()
-    # test_corr_statistic()
-    # test_global()
-    # test_local()
-    test_pycorr()
+    test_corr_statistic()
+    test_global()
+    test_local()
+    # test_pycorr()
     # test_cutsky()

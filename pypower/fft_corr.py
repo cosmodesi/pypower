@@ -7,12 +7,11 @@ import time
 import numpy as np
 from scipy.interpolate import UnivariateSpline, RectBivariateSpline
 from scipy import special
-from pmesh.pm import RealField, ComplexField
 
 from .utils import BaseClass
 from . import mpi, utils
 from .mesh import CatalogMesh, _get_real_dtype, _get_mesh_attrs, _wrap_positions
-from .fft_power import MeshFFTBase, get_real_Ylm, _transform_rslab, _format_positions, _format_all_weights, project_to_basis, _nan_to_zero, find_unique_edges
+from .fft_power import MeshFFTBase, get_real_Ylm, _transform_rslab, _format_positions, _format_all_weights, project_to_basis, _nan_to_zero, find_unique_edges, unnormalized_shotnoise
 
 
 class BaseCorrelationFunctionStatistics(BaseClass):
@@ -891,6 +890,56 @@ class CorrelationFunctionMultipoles(BaseCorrelationFunctionStatistics):
                 plt.show()
         return ax
 
+    def select(self, *xlims, ells=None):
+        """
+        Restrict statistic to provided coordinate limits and multipoles ``ells`` in place.
+
+        For example:
+
+        .. code-block:: python
+
+            statistic.select((0, 30))  # restrict first axis to (0, 30)
+            statistic.select((0, 20), ells=(0, 2))  # restrict first axis to (0, 20), and select monopole and quadrupole
+
+        """
+        if ells is not None:
+            indices = [self.ells.index(ell) for ell in ells]
+            self.ells = tuple(self.ells[index] for index in indices)
+            names = ['corr_nonorm', 'corr_zero_nonorm', 'corr_direct_nonorm']
+            for name in names:
+                setattr(self, name, getattr(self, name)[indices])
+        super(CorrelationFunctionMultipoles, self).select(*xlims)
+        return self
+
+    @classmethod
+    def concatenate_proj(cls, *others):
+        """
+        Concatenate input correlation functions, along poles.
+
+        Parameters
+        ----------
+        others : list of CorrelationFunctionMultipoles
+            List of correlation function multipoles to be concatenated.
+
+        Returns
+        -------
+        new : CorrelationFunctionMultipoles
+        """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
+        new = others[0].deepcopy()
+        new.ells = []
+        arrays = {name: [] for name in ['corr_nonorm', 'corr_zero_nonorm', 'corr_direct_nonorm']}
+        for other in others:
+            indices = [ill for ill, ell in enumerate(other.ells) if ell not in new.ells]
+            new.ells += [other.ells[index] for index in indices]
+            for name, array in arrays.items():
+                arrays[name].append(getattr(other, name)[indices] * new.wnorm / other.wnorm)
+        new.ells = tuple(new.ells)
+        for name, array in arrays.items():
+            setattr(new, name, np.concatenate(array, axis=0))
+        return new
+
 
 class MeshFFTCorr(MeshFFTBase):
     """
@@ -905,7 +954,7 @@ class MeshFFTCorr(MeshFFTBase):
         Estimated correlation function wedges (if relevant).
     """
 
-    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None):
+    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None, shotnoise_nonorm=None):
         r"""
         Initialize :class:`MeshFFTCorr`, i.e. estimate correlation function.
 
@@ -962,7 +1011,7 @@ class MeshFFTCorr(MeshFFTBase):
         shotnoise : float, default=None
             Correlation function shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
             or both ``mesh1`` and ``mesh2`` are :class:`pmesh.pm.RealField`,
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise`
+            and in case of auto-correlation is obtained by dividing :meth:`unnormalized_shotnoise`
             of ``mesh1`` by correlation function normalization.
         """
         t0 = time.time()
@@ -971,8 +1020,8 @@ class MeshFFTCorr(MeshFFTBase):
         self._set_ells(ells)
         self._set_mesh(mesh1, mesh2=mesh2, boxcenter=boxcenter)
         self._set_edges(edges)
-        self._set_normalization(wnorm, mesh1, mesh2=mesh2)
-        self._set_shotnoise(shotnoise, mesh1=mesh1, mesh2=mesh2)
+        self._set_normalization(wnorm, mesh1=mesh1, mesh2=mesh2)
+        self._set_shotnoise(shotnoise, shotnoise_nonorm=shotnoise_nonorm, mesh1=mesh1, mesh2=mesh2)
         self.attrs.update(self._get_attrs())
         t1 = time.time()
         if self.mpicomm.rank == 0:
@@ -1149,6 +1198,7 @@ class MeshFFTCorr(MeshFFTBase):
             # Initialize the memory holding the Aell terms for
             # higher multipoles (this holds sum of m for fixed ell)
             # NOTE: this will hold FFTs of density field #1
+            from pmesh.pm import RealField, ComplexField
             rfield = RealField(self.pm)
             cfield = ComplexField(self.pm)
             Aell = RealField(self.pm)
@@ -1260,9 +1310,17 @@ class CatalogFFTCorr(MeshFFTCorr):
                  edges=None, ells=(0, 2, 4), los=None,
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
                  resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
-                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTCorr`, i.e. estimate correlation function.
+
+        Note
+        ----
+        To compute the cross-correlation of samples 1 and 2, provide ``data_positions2``
+        (and optionally ``randoms_positions2``, ``shifted_positions2`` for the selection function / shifted random catalogs of population 2).
+        To compute (with the correct shot noise estimate) the auto-correlation of sample 1, but with 2 weights, provide ``data_positions1``
+        (but no ``data_positions2``, nor ``randoms_positions2`` and ``shifted_positions2``), ``data_weights1`` and ``data_weights2``;
+        ``randoms_weights2`` and ``shited_weights2`` default to ``randoms_weights1`` and ``shited_weights1``, resp.
 
         Warning
         -------
@@ -1404,7 +1462,7 @@ class CatalogFFTCorr(MeshFFTCorr):
 
         shotnoise : float, default=None
             Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise` by correlation function normalization.
+            and in case of auto-correlation is obtained by dividing :meth:`unnormalized_shotnoise` by correlation function normalization.
 
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scattered across all ranks.
@@ -1431,6 +1489,9 @@ class CatalogFFTCorr(MeshFFTCorr):
         weights = {name: loc[name] for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']}
         weights, bweights, n_bitwise_weights, weight_attrs = _format_all_weights(dtype=rdtype, weight_type=weight_type, weight_attrs=weight_attrs, mpicomm=mpicomm, mpiroot=mpiroot, **weights)
 
+        self.same_shotnoise = autocorr and (weights['D2'] is not None)
+        autocorr &= not self.same_shotnoise
+
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_mesh_attrs(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
         if not isinstance(resampler, tuple):
@@ -1451,9 +1512,15 @@ class CatalogFFTCorr(MeshFFTCorr):
 
         mesh1 = get_mesh(positions['D1'], data_weights=weights['D1'], randoms_positions=positions['R1'], randoms_weights=weights['R1'],
                          shifted_positions=positions['S1'], shifted_weights=weights['S1'], resampler=resampler[0], interlacing=interlacing[0], wrap=wrap)
+
         mesh2 = None
         if not autocorr:
+            if self.same_shotnoise:
+                for name in ['D', 'R', 'S']:
+                    positions[name + '2'] = positions[name + '1']
+                    if weights[name + '2'] is None: weights[name + '2'] = weights[name + '1']
             mesh2 = get_mesh(positions['D2'], data_weights=weights['D2'], randoms_positions=positions['R2'], randoms_weights=weights['R2'],
                              shifted_positions=positions['S2'], shifted_weights=weights['S2'], resampler=resampler[1], interlacing=interlacing[1], wrap=wrap)
+
         # Now, run correlation function estimation
-        super(CatalogFFTCorr, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
+        super(CatalogFFTCorr, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm)

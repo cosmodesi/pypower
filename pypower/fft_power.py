@@ -14,7 +14,6 @@ import time
 import numpy as np
 from scipy.interpolate import UnivariateSpline, RectBivariateSpline
 from scipy import special
-from pmesh.pm import RealField, BaseComplexField, UntransposedComplexField, TransposedComplexField, ComplexField
 
 from .utils import BaseClass, _make_array
 from . import mpi, utils
@@ -256,6 +255,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
     nsum = np.zeros((nx + 3, nmu + 3), dtype='i8')
     # If input array is Hermitian symmetric, only half of the last axis is stored in `y3d`
 
+    from pmesh.pm import RealField
     cellsize = y3d.BoxSize / y3d.Nmesh if isinstance(y3d, RealField) else 2. * np.pi / y3d.BoxSize
     mincell = np.min(cellsize)
 
@@ -632,8 +632,8 @@ class BasePowerSpectrumStatistics(BaseClass):
 
         .. code-block:: python
 
-            statistic.select((0, 0.3)) # restrict first axis to (0, 0.3)
-            statistic.select(None, (0, 0.2)) # restrict second axis to (0, 0.2)
+            statistic.select((0, 0.3))  # restrict first axis to (0, 0.3)
+            statistic.select(None, (0, 0.2))  # restrict second axis to (0, 0.2)
 
         """
         if len(xlims) > self.ndim:
@@ -650,6 +650,7 @@ class BasePowerSpectrumStatistics(BaseClass):
                 else:
                     slices.append(slice(0))
         self.slice(*slices)
+        return self
 
     def slice(self, *slices):
         """
@@ -684,6 +685,7 @@ class BasePowerSpectrumStatistics(BaseClass):
         self.edges = [edges[eslice] for edges, eslice in zip(self.edges, eslices)]
         if not all(f == 1 for f in factor):
             self.rebin(factor=factor)
+        return self
 
     def rebin(self, factor=1):
         """
@@ -720,6 +722,7 @@ class BasePowerSpectrumStatistics(BaseClass):
                     array.shape = (-1,) * extradim + new_shape
             setattr(self, name, array)
         self.edges = [edges[::f] for edges, f in zip(self.edges, factor)]
+        return self
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -1305,6 +1308,56 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
                 plt.show()
         return ax
 
+    def select(self, *xlims, ells=None):
+        """
+        Restrict statistic to provided coordinate limits and multipoles ``ells`` in place.
+
+        For example:
+
+        .. code-block:: python
+
+            statistic.select((0, 0.3))  # restrict first axis to (0, 0.3)
+            statistic.select((0, 0.2), ells=(0, 2))  # restrict first axis to (0, 0.2), and select monopole and quadrupole
+
+        """
+        if ells is not None:
+            indices = [self.ells.index(ell) for ell in ells]
+            self.ells = tuple(self.ells[index] for index in indices)
+            names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm']
+            for name in names:
+                setattr(self, name, getattr(self, name)[indices])
+        super(PowerSpectrumMultipoles, self).select(*xlims)
+        return self
+
+    @classmethod
+    def concatenate_proj(cls, *others):
+        """
+        Concatenate input power spectra, along poles.
+
+        Parameters
+        ----------
+        others : list of PowerSpectrumMultipoles
+            List of power spectrum multipoles to be concatenated.
+
+        Returns
+        -------
+        new : PowerSpectrumMultipoles
+        """
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
+        new = others[0].deepcopy()
+        new.ells = []
+        arrays = {name: [] for name in ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm']}
+        for other in others:
+            indices = [ill for ill, ell in enumerate(other.ells) if ell not in new.ells]
+            new.ells += [other.ells[index] for index in indices]
+            for name, array in arrays.items():
+                arrays[name].append(getattr(other, name)[indices] * new.wnorm / other.wnorm)
+        new.ells = tuple(new.ells)
+        for name, array in arrays.items():
+            setattr(new, name, np.concatenate(array, axis=0))
+        return new
+
 
 def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.COMM_WORLD):
     r"""
@@ -1344,7 +1397,7 @@ def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.C
     return toret
 
 
-def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10., fields=None):
+def normalization(*meshs, uniform=False, resampler='cic', cellsize=10., fields=None):
     r"""
     Return DESI-like normalization, summing over mesh cells:
 
@@ -1361,27 +1414,30 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
 
     Parameters
     ----------
-    mesh1 : CatalogMesh, RealField, ComplexField
-        First mesh. If :class:`RealField`, density is assumed to be uniform, ``mesh1.csum()/np.prod(mesh1.pm.BoxSize)``.
+    meshs : list of CatalogMesh, RealField, ComplexField
+        Meshes. If :class:`RealField`, density is assumed to be uniform, ``mesh.csum()/np.prod(mesh.pm.BoxSize)``.
         If :class:`ComplexField`, assumed to be the FFT of :math:`\delta` (or :math:`1 + \delta`), i.e. unit density.
-
-    mesh2 : CatalogMesh, RealField, ComplexField, default=None
-        Second mesh, for cross-correlations.
+        In case of autocorrelation, provide the two same meshes (or the mesh, and ``None``).
 
     uniform : bool, default=False
-        Whether to assume uniform selection function (only revelant when both ``mesh1`` and ``mesh2`` are :class:`CatalogMesh`).
+        Whether to assume uniform selection function (only revelant when meshes are :class:`CatalogMesh`).
 
     resampler : string, ResampleWindow, default='cic'
         Particle-mesh assignment scheme. Choices are ['ngp', 'cic', 'tsc', 'pcs'].
 
     cellsize : array, float
-        Physical size of mesh cells used to paint ``mesh1`` and ``mesh2`` (if instance of :class:`CatalogMesh`).
+        Physical size of mesh cells used to paint meshes (if instance of :class:`CatalogMesh`).
 
     Returns
     -------
     norm : float
         Normalization.
     """
+    mesh2 = None
+    if len(meshs) == 1:
+        mesh1 = meshs[0]
+    else:
+        mesh1, mesh2 = meshs
     if mesh2 is None: mesh2 = mesh1
     autocorr = mesh2 is mesh1
 
@@ -1426,6 +1482,7 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
         return toret
 
     # One of input meshes does not come from a catalog; assume uniform density (and same volume)
+    from pmesh.pm import BaseComplexField
     if isinstance(mesh1, CatalogMesh):
         s1 = mesh1.sum_data_weights
         boxsize = mesh1.boxsize
@@ -1446,6 +1503,36 @@ def normalization(mesh1, mesh2=None, uniform=False, resampler='cic', cellsize=10
             s2 = mesh2.csum()
 
     return (s1 * s2) / np.prod(boxsize)
+
+
+def unnormalized_shotnoise(*meshs):
+    r"""
+    Return unnormalized shotnoise, as:
+
+    .. math::
+
+        \sum_{i=1}^{N_{g}} w_{i,g,1} w_{i,g,2} + \alpha^{2} \sum_{i=1}^{N_{r}} w_{i,r,1} w_{i,r,2}
+
+    Where the sum runs over data (and optionally) shifted/randoms weights of input meshes.
+    """
+    meshs = [mesh if mesh is not None else meshs[0] for mesh in meshs]
+
+    def sum_weights(*weights, size=None):
+        if all(weight is None for weight in weights):
+            return size
+        w = 1.
+        for weight in weights:
+            if weight is not None: w *= weight
+        return meshs[0].mpicomm.allreduce(sum(w))
+
+    shotnoise = sum_weights(*(mesh.data_weights for mesh in meshs), size=meshs[0].data_size)
+    if all(mesh.with_shifted for mesh in meshs):
+        alpha2 = np.prod([mesh.sum_data_weights / mesh.sum_shifted_weights for mesh in meshs])
+        shotnoise += alpha2 * sum_weights(*(mesh.shifted_weights for mesh in meshs), size=meshs[0].shifted_size)
+    elif all(mesh.with_randoms for mesh in meshs):
+        alpha2 = np.prod([mesh.sum_data_weights / mesh.sum_randoms_weights for mesh in meshs])
+        shotnoise += alpha2 * sum_weights(*(mesh.randoms_weights for mesh in meshs), size=meshs[0].randoms_size)
+    return shotnoise
 
 
 def _get_los(los):
@@ -1485,14 +1572,19 @@ class MeshFFTBase(BaseClass):
         if wnorm is None:
             self.wnorm = np.real(normalization(mesh1, mesh2))
 
-    def _set_shotnoise(self, shotnoise, mesh1=None, mesh2=None):
+    def _set_shotnoise(self, shotnoise, shotnoise_nonorm=None, mesh1=None, mesh2=None):
         # Set :attr:`shotnoise`
         self.shotnoise = shotnoise
         if shotnoise is None:
-            self.shotnoise = 0.
-            # Shot noise is non zero only if we can estimate it
-            if self.autocorr and isinstance(mesh1, CatalogMesh):
-                self.shotnoise = mesh1.unnormalized_shotnoise() / self.wnorm
+            if shotnoise_nonorm is None:
+                shotnoise_nonorm = 0.
+                # Shot noise is non zero only if we can estimate it
+                same_shotnoise = getattr(self, 'same_shotnoise', False)
+                if same_shotnoise and self.mpicomm.rank == 0:
+                    self.log_info('Assuming same shot noise.')
+                if (self.autocorr or same_shotnoise) and isinstance(mesh1, CatalogMesh):
+                    shotnoise_nonorm = unnormalized_shotnoise(mesh1, mesh2 if same_shotnoise else mesh1)
+            self.shotnoise = shotnoise_nonorm / self.wnorm
 
     def _set_compensations(self, compensations):
         # Set :attr:`compensations`
@@ -1518,6 +1610,7 @@ class MeshFFTBase(BaseClass):
         self.compensations = [_format_compensation(compensation) for compensation in compensations]
 
     def _set_mesh(self, mesh1, mesh2=None, boxcenter=None):
+        from pmesh.pm import BaseComplexField
         self.autocorr = mesh2 is None or mesh2 is mesh1
         self.attrs = {}
 
@@ -1585,6 +1678,7 @@ class MeshFFTBase(BaseClass):
 
     @staticmethod
     def _to_complex(mesh, copy=True):
+        from pmesh.pm import TransposedComplexField, UntransposedComplexField
         if isinstance(mesh, TransposedComplexField):
             if copy: return mesh.copy()
             return mesh
@@ -1594,6 +1688,7 @@ class MeshFFTBase(BaseClass):
 
     @staticmethod
     def _to_real(mesh):
+        from pmesh.pm import RealField
         if isinstance(mesh, RealField):
             return mesh
         return mesh.c2r()
@@ -1690,7 +1785,7 @@ class MeshFFTPower(MeshFFTBase):
         Estimated power spectrum wedges (if relevant).
     """
 
-    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None):
+    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None, shotnoise_nonorm=None):
         r"""
         Initialize :class:`MeshFFTPower`, i.e. estimate power spectrum.
 
@@ -1747,7 +1842,7 @@ class MeshFFTPower(MeshFFTBase):
         shotnoise : float, default=None
             Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
             or both ``mesh1`` and ``mesh2`` are :class:`pmesh.pm.RealField`,
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise`
+            and in case of auto-correlation is obtained by dividing :func:`unnormalized_shotnoise`
             of ``mesh1`` by power spectrum normalization.
         """
         t0 = time.time()
@@ -1756,8 +1851,8 @@ class MeshFFTPower(MeshFFTBase):
         self._set_ells(ells)
         self._set_mesh(mesh1, mesh2=mesh2, boxcenter=boxcenter)
         self._set_edges(edges)
-        self._set_normalization(wnorm, mesh1, mesh2=mesh2)
-        self._set_shotnoise(shotnoise, mesh1=mesh1, mesh2=mesh2)
+        self._set_normalization(wnorm, mesh1=mesh1, mesh2=mesh2)
+        self._set_shotnoise(shotnoise, shotnoise_nonorm=shotnoise_nonorm, mesh1=mesh1, mesh2=mesh2)
         self.attrs.update(self._get_attrs())
         t1 = time.time()
         if self.mpicomm.rank == 0:
@@ -1921,6 +2016,7 @@ class MeshFFTPower(MeshFFTBase):
                 self.log_info('ell = {:d} done; {:d} r2c completed'.format(0, 1))
 
         if nonzeroells:
+            from pmesh.pm import RealField, ComplexField
             # Initialize the memory holding the Aell terms for
             # higher multipoles (this holds sum of m for fixed ell)
             # NOTE: this will hold FFTs of density field #1
@@ -2048,9 +2144,17 @@ class CatalogFFTPower(MeshFFTPower):
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
                  resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
                  direct_engine='corrfunc', direct_limits=(0., 2. / 60.), direct_limit_type='degree',
-                 wnorm=None, shotnoise=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTPower`, i.e. estimate power spectrum.
+
+        Note
+        ----
+        To compute the cross-correlation of samples 1 and 2, provide ``data_positions2``
+        (and optionally ``randoms_positions2``, ``shifted_positions2`` for the selection function / shifted random catalogs of population 2).
+        To compute (with the correct shot noise estimate) the auto-correlation of sample 1, but with 2 weights, provide ``data_positions1``
+        (but no ``data_positions2``, nor ``randoms_positions2`` and ``shifted_positions2``), ``data_weights1`` and ``data_weights2``;
+        ``randoms_weights2`` and ``shited_weights2`` default to ``randoms_weights1`` and ``shited_weights1``, resp.
 
         Warning
         -------
@@ -2225,7 +2329,7 @@ class CatalogFFTPower(MeshFFTPower):
 
         shotnoise : float, default=None
             Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
-            and in case of auto-correlation is obtained by dividing :meth:`CatalogMesh.unnormalized_shotnoise` by power spectrum normalization.
+            and in case of auto-correlation is obtained by dividing :func:`unnormalized_shotnoise` by power spectrum normalization.
 
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scattered across all ranks.
@@ -2252,6 +2356,9 @@ class CatalogFFTPower(MeshFFTPower):
         weights = {name: loc[name] for name in ['data_weights1', 'data_weights2', 'randoms_weights1', 'randoms_weights2', 'shifted_weights1', 'shifted_weights2']}
         weights, bweights, n_bitwise_weights, weight_attrs = _format_all_weights(dtype=rdtype, weight_type=weight_type, weight_attrs=weight_attrs, mpicomm=mpicomm, mpiroot=mpiroot, **weights)
 
+        self.same_shotnoise = autocorr and (weights['D2'] is not None)
+        autocorr &= not self.same_shotnoise
+
         # Get box encompassing all catalogs
         nmesh, boxsize, boxcenter = _get_mesh_attrs(boxsize=boxsize, cellsize=cellsize, nmesh=nmesh, boxcenter=boxcenter, positions=bpositions, boxpad=boxpad, check=not wrap, mpicomm=mpicomm)
         if not isinstance(resampler, tuple):
@@ -2272,12 +2379,22 @@ class CatalogFFTPower(MeshFFTPower):
 
         mesh1 = get_mesh(positions['D1'], data_weights=weights['D1'], randoms_positions=positions['R1'], randoms_weights=weights['R1'],
                          shifted_positions=positions['S1'], shifted_weights=weights['S1'], resampler=resampler[0], interlacing=interlacing[0], wrap=wrap)
+
         mesh2 = None
+
         if not autocorr:
+            if self.same_shotnoise:
+                for name in ['D', 'R', 'S']:
+                    positions[name + '2'] = positions[name + '1']
+                    if weights[name + '2'] is None: weights[name + '2'] = weights[name + '1']
+                    if not bweights[name + '2']:
+                        bweights[name + '2'] = bweights[name + '1']
+                        n_bitwise_weights[name + '2'] = n_bitwise_weights[name + '1']
             mesh2 = get_mesh(positions['D2'], data_weights=weights['D2'], randoms_positions=positions['R2'], randoms_weights=weights['R2'],
                              shifted_positions=positions['S2'], shifted_weights=weights['S2'], resampler=resampler[1], interlacing=interlacing[1], wrap=wrap)
+
         # Now, run power spectrum estimation
-        super(CatalogFFTPower, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise)
+        super(CatalogFFTPower, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm)
 
         if self.ells:
 
@@ -2306,8 +2423,9 @@ class CatalogFFTPower(MeshFFTPower):
                     else:
                         # label12 is D1R2, but we only have R1, so switch label2 to R1; same for D1S2
                         label2 = label2.replace('2', '1')
-                        # In case of autocorrelation, los = firstpoint or endpoint, R1D2 = R1D1 should get the same angular weight as D1R2 = D2R1
-                        if twopoint_weights_12 is None: twopoint_weights_12 = twopoint_weights[label21]
+                # In case of autocorrelation, los = firstpoint or endpoint, R1D2 = R1D1 should get the same angular weight as D1R2 = D2R1
+                if (autocorr and label2 is not None) or (self.same_shotnoise and label2[:-1] != label1[:-1]):
+                    if twopoint_weights_12 is None: twopoint_weights_12 = twopoint_weights[label21]
 
                 with_bitwise = n_bitwise_weights[label1] and (label2 is None or n_bitwise_weights[label2])
                 if with_bitwise or twopoint_weights_12:
@@ -2317,7 +2435,10 @@ class CatalogFFTPower(MeshFFTPower):
                         self.log_info('Computing direct estimation {}.'.format(label12))
                         for label in [label1] + ([label2] if label2 is not None else []):
                             if positions[label] is None: raise ValueError('{} must be provided'.format(label))
-                    powers[label12] = (coeff, DirectPowerEngine(self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions[label2] if label2 is not None else None, weights2=bweights[label2] if label2 is not None else None,
+                    positions2 = positions[label2] if label2 is not None else None
+                    if self.same_shotnoise and label2[:-1] == label1[:-1]:  # D2 = D1, R2 = R1 positions, but different weights; this is to remove the correct amount of auto-pairs at s = 0
+                        positions2 = None
+                    powers[label12] = (coeff, DirectPowerEngine(self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions2, weights2=bweights[label2] if label2 is not None else None,
                                                                 ells=ells, limits=direct_limits, limit_type=direct_limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights_12,
                                                                 weight_attrs=weight_attrs, los=self.los_type, position_type='pos', mpicomm=self.mpicomm))
             for coeff, power in powers.values():

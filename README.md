@@ -28,7 +28,7 @@ Only strict requirements are:
 
   - numpy
   - scipy
-  - pmesh
+  - pmesh (can be ignored if data types only are required, to e.g. load precomputed power spectra / window functions)
 
 To enable faster spherical harmonics computation:
 
