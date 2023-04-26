@@ -84,8 +84,8 @@ def _format_positions(positions, position_type='xyz', dtype=None, copy=True, mpi
         # Array of shape (3, N)
         positions = list(positions)
         for ip, p in enumerate(positions):
-            # Cast to the input dtype if exists (may be set by previous weights)
-            positions[ip] = np.asarray(p, dtype=dtype)
+            # Cast to the input dtype if exists (may be set by previous positions)
+            positions[ip] = np.array(p, dtype=dtype, copy=copy)
         size = len(positions[0])
         dt = positions[0].dtype
         if not np.issubdtype(dt, np.floating):
@@ -243,7 +243,7 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
 
     name = 'base'
 
-    def __init__(self, modes, positions1, positions2=None, weights1=None, weights2=None, ells=(0, 2, 4), limits=(0., 2. / 60.), limit_type='degree',
+    def __init__(self, modes, positions1, positions2=None, weights1=None, weights2=None, ells=(0, 2, 4), selection_attrs=None,
                  position_type='xyz', weight_type='auto', weight_attrs=None, twopoint_weights=None, los='firstpoint', boxsize=None,
                  dtype='f8', mpiroot=None, mpicomm=mpi.COMM_WORLD, **kwargs):
         r"""
@@ -269,12 +269,6 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
 
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
-
-        limits : tuple, default=(0., 2./60.)
-            Limits of particle pair separations.
-
-        limit_type : string, default='degree'
-            Type of ``limits``; i.e. are those angular limits ("degree", "radian"), or 3D limits ("s")?
 
         position_type : string, default='xyz'
             Type of input positions, one of:
@@ -321,6 +315,12 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
             or as keys (i.e. ``twopoint_weights['sep']``, ``twopoint_weights['weight']``)
             or as element (i.e. ``sep, weight = twopoint_weights``).
 
+        selection_attrs : dict, default={'theta': (0., 2 / 60.)}
+            To select pairs to be counted, provide mapping between the quantity (string)
+            and the interval (tuple of floats),
+            e.g. ``{'rp': (0., 20.)}`` to select pairs with 'rp' between 0 and 20.
+            ``{'theta': (0., 1.)}`` to select pairs with 'theta' between 0 and 1 degree.
+
         los : string, array, default=None
             If ``los`` is 'firstpoint' (resp. 'endpoint', 'midpoint'), use local (varying) first-point (resp. end-point, mid-point) line-of-sight.
             Else, may be 'x', 'y' or 'z', for one of the Cartesian axes.
@@ -341,9 +341,9 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
         self._set_modes(modes)
         self._set_los(los)
         self._set_ells(ells)
-        self._set_limits(limits, limit_type=limit_type)
         self._set_positions(positions1, positions2=positions2, position_type=position_type, mpiroot=mpiroot)
         self._set_weights(weights1, weights2=weights2, weight_type=weight_type, twopoint_weights=twopoint_weights, weight_attrs=weight_attrs, mpiroot=mpiroot)
+        self._set_selection(selection_attrs)
         self.is_reversible = self.autocorr or (self.los_type not in ['firstpoint', 'endpoint'])
         self.attrs = kwargs
         t0 = time.time()
@@ -386,20 +386,6 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
 
     def _set_modes(self, modes):
         self.modes = np.asarray(modes)
-
-    def _set_limits(self, limits, limit_type='degree'):
-        limit_type = limit_type.lower()
-        allowed_limit_types = ['degree', 'radian', 'theta', 's']
-        if limit_type not in allowed_limit_types:
-            raise ValueError('Limit should be in {}.'.format(allowed_limit_types))
-        if limit_type == 'radian':
-            limits = np.rad2deg(limits)
-        self.limit_type = limit_type
-        if limit_type in ['radian', 'degree']:
-            self.limit_type = 'theta'
-        if self.limit_type == 'theta':
-            limits = 2 * np.sin(0.5 * np.deg2rad(limits))
-        self.limits = tuple(limits)
 
     def _set_positions(self, positions1, positions2=None, position_type='xyz', mpiroot=None):
         if position_type is not None: position_type = position_type.lower()
@@ -505,24 +491,40 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
         return get_inverse_probability_weight(*weights, noffset=self.weight_attrs['noffset'], nrealizations=self.weight_attrs['nrealizations'],
                                               default_value=self.weight_attrs['default_value'], dtype=self.dtype)
 
+    def _set_selection(self, selection_attrs=None):
+        self.selection_attrs = {str(name): tuple(float(v) for v in value) for name, value in (selection_attrs or {'theta': (0., 2. / 60.)}).items()}
+        allowed_selections = ['theta', 'rp']
+        for name in self.selection_attrs:
+            if name not in allowed_selections:
+                raise ValueError('selections should be one of {}.'.format(allowed_selections))
+        self.rlimits = [0., np.inf]
+        if 'theta' in self.selection_attrs:
+            self.rlimits = 2 * np.sin(0.5 * np.deg2rad(self.selection_attrs['theta']))
+        if 'rp' in self.selection_attrs:
+            rmin = min(self.mpicomm.allgather(min([np.min(utils.distance(positions.T)) if positions is not None and positions.size else np.inf for positions in [self.positions1, self.positions2]])))
+            rmax = max(self.mpicomm.allgather(max([np.max(utils.distance(positions.T)) if positions is not None and positions.size else -np.inf for positions in [self.positions1, self.positions2]])))
+            limits = np.array(self.selection_attrs['rp'], dtype='f8') / np.array([rmax, rmin])
+            self.rlimits = [min(limits[0], self.rlimits[0]), max(limits[1], self.rlimits[1])]
+        self.rlimits = (max(self.rlimits[0], 0.), min(self.rlimits[1], 2.))
+
     def _mpi_decompose(self):
         positions1, positions2 = self.positions1, self.positions2
         weights1, weights2 = self.weights1, self.weights2
-        if self.limit_type == 'theta':  # we decompose on the unit sphere: normalize positions, and put original positions in weights for decomposition
-            positions1 = self.positions1 / utils.distance(self.positions1.T)[:, None]
-            weights1 = [self.positions1] + weights1
-            if not self.autocorr:
-                positions2 = self.positions2 / utils.distance(self.positions2.T)[:, None]
-                weights2 = [self.positions2] + weights2
+        # We decompose on the unit sphere: normalize positions, and put original positions in weights for decomposition
+        positions1 = self.positions1 / utils.distance(self.positions1.T)[:, None]
+        weights1 = [self.positions1] + weights1
+        if not self.autocorr:
+            positions2 = self.positions2 / utils.distance(self.positions2.T)[:, None]
+            weights2 = [self.positions2] + weights2
         if self.with_mpi:
-            (positions1, weights1), (positions2, weights2) = mpi.domain_decompose(self.mpicomm, self.limits[1], positions1, weights1=weights1,
+            (positions1, weights1), (positions2, weights2) = mpi.domain_decompose(self.mpicomm, self.rlimits[1], positions1, weights1=weights1,
                                                                                   positions2=positions2, weights2=weights2)
         limit_positions1, positions1, weights1 = positions1, positions1, weights1
         limit_positions2, positions2, weights2 = positions2, positions2, weights2
-        if self.limit_type == 'theta':  # we remove original positions from the list of weights
-            limit_positions1, positions1, weights1 = positions1, weights1[0], weights1[1:]
-            if positions2 is not None:
-                limit_positions2, positions2, weights2 = positions2, weights2[0], weights2[1:]
+        # We remove original positions from the list of weights
+        limit_positions1, positions1, weights1 = positions1, weights1[0], weights1[1:]
+        if positions2 is not None:
+            limit_positions2, positions2, weights2 = positions2, weights2[0], weights2[1:]
         return (limit_positions1, positions1, weights1), (limit_positions2, positions2, weights2)
 
     def _twopoint_weights(self, weights1, weights2=None, positions1=None, positions2=None):
@@ -568,11 +570,19 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
 
     def __getstate__(self):
         state = {}
-        for name in ['name', 'autocorr', 'is_reversible', 'modes', 'ells', 'power_nonorm', 'size1', 'size2', 'limits', 'limit_type',
-                     'los', 'los_type', 'weight_attrs', 'attrs']:
+        for name in ['name', 'autocorr', 'is_reversible', 'modes', 'ells', 'power_nonorm', 'size1', 'size2', 'rlimits',
+                     'los', 'los_type', 'weight_attrs', 'selection_attrs', 'attrs']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
+
+    def __setstate__(self, state):
+        super(BaseDirectPowerEngine, self).__setstate__(state)
+        # Backward-compatibility
+        if not hasattr(self, 'selection_attrs'):
+            self.selection_attrs = {}
+        if not hasattr(self, 'rlimits'):
+            self.rlimits = self.limits
 
     def reversed(self):
         if not self.is_reversible:
@@ -620,7 +630,7 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                 dpositions = np.concatenate([d[0][rng.choice(size, size_downsample, replace=False)] for d, size, size_downsample
                                              in zip([d1, d2], [size1, size2], [size1_downsample, size2_downsample])])
                 tree = spatial.cKDTree(dpositions, **kwargs, boxsize=None)
-                npairs = len(tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray'))
+                npairs = len(tree.query_pairs(self.rlimits[1], p=2.0, eps=0, output_type='ndarray'))
             npairs_downsample = 1 + 3 / max(npairs, 1)**0.5  # 3 sigma margin
             npairs_downsample *= size1 / max(size1_downsample, 1) * size2 / max(size2_downsample, 1)  # scale to size of d1 & d2
             nslabs = min(int(npairs_downsample / self._slab_npairs_max + 1.), len(d2[0]))
@@ -649,11 +659,11 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
 
             start_i = time.time()
             tree = spatial.cKDTree(dlimit_positions, **kwargs, boxsize=None)
-            pairs = tree.query_pairs(self.limits[1], p=2.0, eps=0, output_type='ndarray')
+            pairs = tree.query_pairs(self.rlimits[1], p=2.0, eps=0, output_type='ndarray')
             delta_tree += time.time() - start_i
             start_i = time.time()
             distance = utils.distance((dlimit_positions[pairs[:, 0]] - dlimit_positions[pairs[:, 1]]).T)
-            pairs = pairs[(distance >= self.limits[0]) & (distance < self.limits[1])]
+            pairs = pairs[(distance >= self.rlimits[0]) & (distance < self.rlimits[1])]
 
             # if not autocorr: # Let us remove restrict to the pairs 1 <-> 2 (removing 1 <-> 1 and 2 <-> 2)
             pairs = pairs[(pairs[:, 0] < dlimit_positions1.shape[0]) & (pairs[:, 1] >= dlimit_positions1.shape[0])]
@@ -688,6 +698,10 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                     mu = np.sum(diff * _normalize(dpositions1 + dpositions2), axis=-1) / distances
             del diff
             distances[mask_zero] = 0.
+            if 'rp' in self.selection_attrs:
+                rp2 = (1. - mu**2) * distances**2
+                mask = (rp2 >= self.selection_attrs['rp'][0]**2) & (rp2 < self.selection_attrs['rp'][1]**2)
+                distances, mu, weights = distances[mask], mu[mask], weights[mask]
 
             # To avoid memory issues when performing distance*modes product, work by slabs
             nslabs_pairs = len(ells) * len(self.modes)
@@ -711,7 +725,7 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             self.log_info('Sum over pairs took {:.2f} s.'.format(delta_sum))
 
         self.power_nonorm = self.mpicomm.allreduce(result)
-        if self.autocorr and self.limits[0] <= 0.:  # remove auto-pairs
+        if self.autocorr and self.rlimits[0] <= 0.:  # remove auto-pairs
             power_slab(self.power_nonorm, 0., 0., -self._sum_auto_weights(), ells)
 
         self.power_nonorm = self.power_nonorm.astype('c16')
@@ -804,6 +818,9 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
                   'attrs_pair_weights': weight_attrs, 'verbose': False,
                   'isa': self.attrs.get('isa', 'fastest')}
 
+        if 'rp' in self.selection_attrs:
+            kwargs['attrs_selection'] = {'rp': self.selection_attrs['rp']}
+
         limit_positions1, positions1 = dlimit_positions1.T, dpositions1.T
         if autocorr:
             limit_positions2, positions2 = [None] * 3, [None] * 3
@@ -821,13 +838,13 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
         result = call_corrfunc(mocks.DDbessel_mocks, autocorr, nthreads=self.nthreads,
                                X1=limit_positions1[0], Y1=limit_positions1[1], Z1=limit_positions1[2], XP1=positions1[0], YP1=positions1[1], ZP1=positions1[2],
                                X2=limit_positions2[0], Y2=limit_positions2[1], Z2=limit_positions2[2], XP2=positions2[0], YP2=positions2[1], ZP2=positions2[2],
-                               binfile=self.modes, ells=ells, rmin=self.limits[0], rmax=self.limits[1], mumax=1., los_type=los_type, **kwargs)
+                               binfile=self.modes, ells=ells, rmin=self.rlimits[0], rmax=self.rlimits[1], mumax=1., los_type=los_type, **kwargs)
 
         self.power_nonorm = self.mpicomm.allreduce(result['poles']) * prefactor
         self.power_nonorm.shape = (len(self.modes), len(ells))
 
         self.power_nonorm = self.power_nonorm.T.astype('c16')
-        if self.autocorr and self.limits[0] <= 0.:  # remove auto-pairs
+        if self.autocorr and self.rlimits[0] <= 0.:  # remove auto-pairs
             weights = self._sum_auto_weights()
             for ill, ell in enumerate(ells):
                 self.power_nonorm[ill] -= weights * (2 * ell + 1) * special.legendre(ell)(0.) * special.spherical_jn(ell, 0., derivative=False)

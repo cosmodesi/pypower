@@ -137,61 +137,37 @@ def get_weight(xyz1, xyz2, weights1, weights2, n_bitwise_weights=0, twopoint_wei
     return weight
 
 
-def ref_theta(modes, limits, data1, data2=None, boxsize=None, los='midpoint', ells=(0, 2, 4), autocorr=False, **kwargs):
+def ref_theta(modes, data1, data2=None, boxsize=None, los='midpoint', ells=(0, 2, 4), autocorr=False, selection_attrs=None, **kwargs):
     if data2 is None: data2 = data1
     toret = [np.zeros_like(modes, dtype='c16') for ell in ells]
     legendre = [special.legendre(ell) for ell in ells]
+    selection_attrs = dict(selection_attrs or {})
+    theta_limits = selection_attrs.get('theta', None)
+    rp_limits = selection_attrs.get('rp', None)
     npairs = 0
     for i1, xyzw1 in enumerate(zip(*data1)):
         for i2, xyzw2 in enumerate(zip(*data2)):
             if autocorr and i2 == i1: continue
             xyz1, xyz2 = xyzw1[:3], xyzw2[:3]
-            dist = np.rad2deg(np.arccos(min(dotproduct_normalized(xyz1, xyz2), 1)))  # min to avoid rounding errors
-            if limits[0] <= dist < limits[-1]:
-                dxyz = diff(xyz1, xyz2)
-                dist = norm(dxyz)
-                npairs += 1
-                if dist > 0:
-                    if los == 'midpoint': mu = dotproduct_normalized(dxyz, midpoint(xyz1, xyz2))
-                    elif los == 'endpoint': mu = dotproduct_normalized(dxyz, xyz2)
-                    elif los == 'firstpoint': mu = dotproduct_normalized(dxyz, xyz1)
-                else:
-                    mu = 0.
-                weights1, weights2 = xyzw1[3:], xyzw2[3:]
-                weight = get_weight(xyz1, xyz2, weights1, weights2, **kwargs)
-                for ill, ell in enumerate(ells):
-                    toret[ill] += (-1j)**ell * weight * (2 * ell + 1) * legendre[ill](mu) * special.spherical_jn(ell, modes * dist)
-    return np.asarray(toret)
-
-
-def ref_s(modes, limits, data1, data2=None, boxsize=None, los='midpoint', ells=(0, 2, 4), autocorr=False, **kwargs):
-    if data2 is None: data2 = data1
-    if los not in ['firstpoint', 'endpoint', 'midpoint']:
-        los = [1 if i == 'xyz'.index(los) else 0 for i in range(3)]
-    toret = [np.zeros_like(modes, dtype='c16') for ell in ells]
-    legendre = [special.legendre(ell) for ell in ells]
-    for i1, xyzw1 in enumerate(zip(*data1)):
-        for i2, xyzw2 in enumerate(zip(*data2)):
-            if autocorr and i2 == i1: continue
-            xyz1, xyz2 = xyzw1[:3], xyzw2[:3]
-            dxyz = diff(xyz2, xyz1)
-            if boxsize is not None:
-                for idim, b in enumerate(boxsize):
-                    if dxyz[idim] > 0.5 * b: dxyz[idim] -= b
-                    if dxyz[idim] < -0.5 * b: dxyz[idim] += b
+            if theta_limits is not None:
+                theta = np.rad2deg(np.arccos(min(dotproduct_normalized(xyz1, xyz2), 1)))  # min to avoid rounding errors
+                if theta < theta_limits[0] or theta >= theta_limits[1]: continue
+            dxyz = diff(xyz1, xyz2)
             dist = norm(dxyz)
-            if limits[0] <= dist < limits[-1]:
-                if dist > 0:
-                    if los == 'midpoint': mu = dotproduct_normalized(dxyz, midpoint(xyz1, xyz2))
-                    elif los == 'endpoint': mu = dotproduct_normalized(dxyz, xyz2)
-                    elif los == 'firstpoint': mu = dotproduct_normalized(dxyz, xyz1)
-                    else: mu = dotproduct_normalized(dxyz, los)
-                else:
-                    mu = 0.
-                weights1, weights2 = xyzw1[3:], xyzw2[3:]
-                weight = get_weight(xyz1, xyz2, weights1, weights2, **kwargs)
-                for ill, ell in enumerate(ells):
-                    toret[ill] += (-1j)**ell * weight * (2 * ell + 1) * legendre[ill](mu) * special.spherical_jn(ell, modes * dist)
+            npairs += 1
+            if dist > 0:
+                if los == 'midpoint': mu = dotproduct_normalized(dxyz, midpoint(xyz1, xyz2))
+                elif los == 'endpoint': mu = dotproduct_normalized(dxyz, xyz2)
+                elif los == 'firstpoint': mu = dotproduct_normalized(dxyz, xyz1)
+            else:
+                mu = 0.
+            if rp_limits is not None:
+                rp2 = (1. - mu**2) * dist**2
+                if rp2 < rp_limits[0]**2 or rp2 >= rp_limits[1]**2: continue
+            weights1, weights2 = xyzw1[3:], xyzw2[3:]
+            weight = get_weight(xyz1, xyz2, weights1, weights2, **kwargs)
+            for ill, ell in enumerate(ells):
+                toret[ill] += (-1j)**ell * weight * (2 * ell + 1) * legendre[ill](mu) * special.spherical_jn(ell, modes * dist)
     return np.asarray(toret)
 
 
@@ -209,8 +185,7 @@ def test_bitwise_weight():
 
 
 def test_direct_power():
-    ref_funcs = {'theta': ref_theta, 's': ref_s}
-    list_engine = ['kdtree', 'corrfunc']
+    list_engine = ['kdtree', 'corrfunc'][1:]
     modes = np.linspace(0.01, 0.1, 11)
     size = 100
     boxsize = (100,) * 3
@@ -236,12 +211,12 @@ def test_direct_power():
             list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'iip': 2})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'weight_attrs': {'nrealizations': 42, 'noffset': 3}})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 2, 'weight_attrs': {'noffset': 0, 'default_value': 0.8}})
-        # limits
-        list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'limit_type': 's'})
         # los
-        list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'los': 'midpoint'})
-        list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'los': 'firstpoint'})
-        list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'los': 'endpoint'})
+        for los in ['midpoint', 'firstpoint', 'endpoint']:
+            list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'los': los})
+        # selection
+        for los in ['midpoint', 'firstpoint', 'endpoint']:
+            list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'los': los, 'selection_attrs': {'rp': (0., 10.)}})
         # twopoint_weights
         from collections import namedtuple
         TwoPointWeight = namedtuple('TwoPointWeight', ['sep', 'weight'])
@@ -253,18 +228,14 @@ def test_direct_power():
     for engine in list_engine:
         for options in list_options:
             options = options.copy()
-            print(options)
+            print(engine, options)
             nthreads = options.pop('nthreads', None)
             weights_one = options.pop('weights_one', [])
             n_individual_weights = options.pop('n_individual_weights', 0)
             n_bitwise_weights = options.pop('n_bitwise_weights', 0)
             data1, data2 = generate_catalogs(size, boxsize=boxsize, n_individual_weights=n_individual_weights, n_bitwise_weights=n_bitwise_weights, seed=42)
             data1 = [np.concatenate([d, d]) for d in data1]  # that will get us some pairs at sep = 0
-            limit_type = options.pop('limit_type', 'theta')
-            if limit_type == 'theta':
-                limits = (0., 1.)
-            else:
-                limits = (0., 50.)
+            selection_attrs = options.pop('selection_attrs', {'theta': (0., 1.)})
             autocorr = options.pop('autocorr', False)
             options.setdefault('boxsize', None)
             options.setdefault('los', 'x' if options['boxsize'] is not None else 'firstpoint')
@@ -280,8 +251,8 @@ def test_direct_power():
             else:
                 KDTreeDirectPowerEngine._slab_npairs_max = _slab_npairs_max
 
-            refoptions = options.copy()
-            weight_attrs = refoptions.pop('weight_attrs', {}).copy()
+            ref_options = options.copy()
+            weight_attrs = ref_options.pop('weight_attrs', {}).copy()
 
             def setdefaultnone(di, key, value):
                 if di.get(key, None) is None:
@@ -322,10 +293,10 @@ def test_direct_power():
                         data1_ref[ii] = np.asarray(data1_ref[ii], dtype=dtype)
                         data2_ref[ii] = np.asarray(data2_ref[ii], dtype=dtype)
 
-            twopoint_weights = refoptions.pop('twopoint_weights', None)
+            twopoint_weights = ref_options.pop('twopoint_weights', None)
             if twopoint_weights is not None:
                 twopoint_weights = TwoPointWeight(np.cos(np.radians(twopoint_weights.sep[::-1], dtype=dtype)), np.asarray(twopoint_weights.weight[::-1], dtype=dtype))
-            ref = ref_funcs[limit_type](modes, limits, data1_ref, data2=data2_ref if not autocorr else None, autocorr=autocorr, n_bitwise_weights=n_bitwise_weights, twopoint_weights=twopoint_weights, **refoptions, **weight_attrs)
+            ref = ref_theta(modes, data1_ref, data2=data2_ref if not autocorr else None, autocorr=autocorr, n_bitwise_weights=n_bitwise_weights, twopoint_weights=twopoint_weights, selection_attrs=selection_attrs, **ref_options, **weight_attrs)
 
             if bitwise_type is not None and n_bitwise_weights > 0:
 
@@ -373,7 +344,7 @@ def test_direct_power():
 
                 return DirectPower(modes, positions1=None if pass_none else positions1, positions2=None if pass_none or autocorr else positions2,
                                    weights1=None if pass_none else weights1, weights2=None if pass_none or autocorr else weights2, position_type=position_type,
-                                   limits=limits, limit_type=limit_type, engine=engine, nthreads=nthreads, **kwargs, **options)
+                                   selection_attrs=selection_attrs, engine=engine, nthreads=nthreads, **kwargs, **options)
 
             data1 = [mpi.scatter(d, mpiroot=0, mpicomm=mpicomm) for d in data1]
             data2 = [mpi.scatter(d, mpiroot=0, mpicomm=mpicomm) for d in data2]
@@ -418,8 +389,7 @@ def test_catalog_power():
     interlacing = 2
     data1, data2 = generate_catalogs(size=10000, boxsize=(1000.,) * 3, n_individual_weights=1, n_bitwise_weights=2, seed=42)
     randoms1, randoms2 = generate_catalogs(size=10000, boxsize=(1000.,) * 3, n_individual_weights=1, n_bitwise_weights=0, seed=84)
-    limits = (0., 1.)
-    limit_type = 'theta'
+    selection_attrs = {'theta': (0., 1.)}
 
     from collections import namedtuple
     TwoPointWeight = namedtuple('TwoPointWeight', ['sep', 'weight'])
@@ -427,29 +397,53 @@ def test_catalog_power():
 
     power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
-                            direct_limits=limits, direct_limit_type=limit_type)
+                            direct_selection_attrs=selection_attrs)
     direct = DirectPower(power.poles.k, positions1=data1[:3], weights1=data1[3:], position_type='xyz',
-                         ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual')
+                         ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual')
     assert np.allclose(power.poles.power_direct_nonorm, direct.power_nonorm)
 
     power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
                             data_positions2=data2[:3], data_weights2=data2[3:], randoms_positions2=randoms2[:3], randoms_weights2=randoms2[3:],
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
-                            direct_limits=limits, direct_limit_type=limit_type)
+                            direct_selection_attrs=selection_attrs)
     direct = DirectPower(power.poles.k, positions1=data1[:3], positions2=data2[:3], weights1=data1[3:], weights2=data2[3:], position_type='xyz',
-                         ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual')
+                         ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual')
     assert np.allclose(power.poles.power_direct_nonorm, direct.power_nonorm)
+
+    power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[-1:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
+                            data_positions2=data2[:3], data_weights2=data2[-1:], randoms_positions2=randoms2[:3], randoms_weights2=randoms2[3:],
+                            nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
+                            direct_selection_attrs=selection_attrs)
+    direct = DirectPower(power.poles.k, positions1=data1[:3], positions2=data2[:3], weights1=data1[-1:], weights2=data2[-1:], position_type='xyz',
+                         ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
+    direct -= DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms2[:3], weights1=data1[-1:], weights2=randoms2[3:], position_type='xyz',
+                          ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
+    direct -= DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data2[:3], weights1=randoms1[3:], weights2=data2[-1:], position_type='xyz',
+                          ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
+    direct += DirectPower(power.poles.k, positions1=randoms1[:3], positions2=randoms2[:3], weights1=randoms1[3:], weights2=randoms2[3:], position_type='xyz',
+                          ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
+    assert np.allclose(power.poles.power_direct_nonorm, -direct)
+
+    power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[-1:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
+                            data_positions2=data2[:3], data_weights2=data2[-1:], randoms_positions2=randoms2[:3], randoms_weights2=randoms2[3:],
+                            nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
+                            direct_selection_attrs={**selection_attrs, 'counts': ['D1D2', 'D1R2']})
+    direct = DirectPower(power.poles.k, positions1=data1[:3], positions2=data2[:3], weights1=data1[-1:], weights2=data2[-1:], position_type='xyz',
+                         ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
+    direct -= DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms2[:3], weights1=data1[-1:], weights2=randoms2[3:], position_type='xyz',
+                          ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
+    assert np.allclose(power.poles.power_direct_nonorm, -direct)
 
     power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
-                            direct_limits=limits, direct_limit_type=limit_type, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
+                            direct_selection_attrs=selection_attrs, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
 
     direct_D1D2 = DirectPower(power.poles.k, positions1=data1[:3], weights1=data1[3:], position_type='xyz',
-                              ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
     direct_D1R2 = DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms1[:3], weights1=data1[3:], weights2=randoms1[3:], position_type='xyz',
-                              ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
     direct_R1D2 = DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data1[:3], weights1=randoms1[3:], weights2=data1[3:], position_type='xyz',
-                              ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
     assert np.allclose(power.poles.power_direct_nonorm, direct_D1D2.power_nonorm - direct_D1R2.power_nonorm - direct_R1D2.power_nonorm)
 
     power = power.poles
@@ -459,21 +453,21 @@ def test_catalog_power():
 
     power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], data_weights2=data2[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
-                            direct_limits=limits, direct_limit_type=limit_type, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
+                            direct_selection_attrs=selection_attrs, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
 
     direct_D1D2 = DirectPower(power.poles.k, positions1=data1[:3], weights1=data1[3:], weights2=data2[3:], position_type='xyz',
-                              ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
     direct_D1R2 = DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms1[:3], weights1=data1[3:], weights2=randoms1[3:], position_type='xyz',
-                              ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
     direct_R1D2 = DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data1[:3], weights1=randoms1[3:], weights2=data2[3:], position_type='xyz',
-                              ells=ells, limits=limits, limit_type=limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
     assert np.allclose(power.poles.power_direct_nonorm, direct_D1D2.power_nonorm - direct_D1R2.power_nonorm - direct_R1D2.power_nonorm)
     assert direct_D1D2.same_shotnoise
     assert power.poles.shotnoise != 0.
 
     power2 = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
                              nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=4, edges=kedges, position_type='xyz',
-                             direct_limits=limits, direct_limit_type=limit_type, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
+                             direct_selection_attrs=selection_attrs, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
 
     poles = power.poles.concatenate_proj(power.poles, power2.poles)
     assert poles.ells == (0, 2, 4)

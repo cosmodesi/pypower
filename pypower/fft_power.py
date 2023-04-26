@@ -2139,20 +2139,20 @@ class CatalogFFTPower(MeshFFTPower):
                  shifted_positions1=None, shifted_positions2=None,
                  data_weights1=None, data_weights2=None, randoms_weights1=None, randoms_weights2=None,
                  shifted_weights1=None, shifted_weights2=None,
-                 D1D2_twopoint_weights=None, D1R2_twopoint_weights=None, R1D2_twopoint_weights=None, D1S2_twopoint_weights=None, S1D2_twopoint_weights=None,
+                 D1D2_twopoint_weights=None, D1R2_twopoint_weights=None, R1D2_twopoint_weights=None, R1R2_twopoint_weights=None,
                  edges=None, ells=(0, 2, 4), los=None,
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
                  resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
-                 direct_engine='corrfunc', direct_limits=(0., 2. / 60.), direct_limit_type='degree',
+                 direct_engine='corrfunc', direct_selection_attrs=None,
                  wnorm=None, shotnoise=None, shotnoise_nonorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTPower`, i.e. estimate power spectrum.
 
         Note
         ----
-        To compute the cross-correlation of samples 1 and 2, provide ``data_positions2``
+        To compute the cross-power of samples 1 and 2, provide ``data_positions2``
         (and optionally ``randoms_positions2``, ``shifted_positions2`` for the selection function / shifted random catalogs of population 2).
-        To compute (with the correct shot noise estimate) the auto-correlation of sample 1, but with 2 weights, provide ``data_positions1``
+        To compute (with the correct shot noise estimate) the auto-power of sample 1, but with 2 weights, provide ``data_positions1``
         (but no ``data_positions2``, nor ``randoms_positions2`` and ``shifted_positions2``), ``data_weights1`` and ``data_weights2``;
         ``randoms_weights2`` and ``shited_weights2`` default to ``randoms_weights1`` and ``shited_weights1``, resp.
 
@@ -2300,29 +2300,26 @@ class CatalogFFTPower(MeshFFTPower):
             or as element (i.e. ``sep, weight = twopoint_weights``).
 
         D1R2_twopoint_weights : WeightTwoPointEstimator, default=None
-            Weights to be applied to each pair of particles between first data catalog and second randoms catalog.
+            Weights to be applied to each pair of particles between first data catalog and second randoms (shifted if provided) catalog.
             See ``D1D2_twopoint_weights``.
 
         R1D2_twopoint_weights : WeightTwoPointEstimator, default=None
-            Weights to be applied to each pair of particles between second data catalog and first randoms catalog.
+            Weights to be applied to each pair of particles between second data catalog and first randoms (shifted if provided) catalog.
             See ``D1D2_twopoint_weights``.
 
-        D1S2_twopoint_weights : WeightTwoPointEstimator, default=None
-            Weights to be applied to each pair of particles between first data catalog and second shifted catalog.
-            See ``D1D2_twopoint_weights``.
-
-        S1D2_twopoint_weights : WeightTwoPointEstimator, default=None
-            Weights to be applied to each pair of particles between second data catalog and first shifted catalog.
+        R1R2_twopoint_weights : WeightTwoPointEstimator, default=None
+            Weights to be applied to each pair of particles between first and second randoms (shifted if provided) catalogs.
             See ``D1D2_twopoint_weights``.
 
         direct_engine : string, default='corrfunc'
             Engine for direct power spectrum computation (if input weights are bitwise weights), one of ["kdtree", "corrfunc"].
 
-        direct_limits : tuple, default=(0., 2./60.)
-            Limits of particle pair separations used in the direct power spectrum computation.
-
-        direct_limit_type : string, default='degree'
-            Type of ``direct_limits``; i.e. are those angular limits ("degree", "radian"), or 3D limits ("s")?
+        direct_selection_attrs : dict, default={'theta': (0., 2 / 60.)}
+            To select pairs to be counted in the direct power spectrum computation, provide mapping between the quantity (string)
+            and the interval (tuple of floats),
+            e.g. ``{'rp': (0., 20.)}`` to select pairs with 'rp' between 0 and 20.
+            ``{'theta': (0., 1.)}`` to select pairs with 'theta' between 0 and 1 degree.
+            One can additionally provide e.g. 'counts': ['D1D2', 'D1R2'] to specify direct counts for which the selection is to be applied.
 
         wnorm : float, default=None
             Power spectrum normalization, to use instead of internal estimate obtained with :func:`normalization`.
@@ -2398,7 +2395,18 @@ class CatalogFFTPower(MeshFFTPower):
 
         if self.ells:
 
-            twopoint_weights = {'D1D2': D1D2_twopoint_weights, 'D1R2': D1R2_twopoint_weights, 'R1D2': R1D2_twopoint_weights, 'D1S2': D1S2_twopoint_weights, 'S1D2': S1D2_twopoint_weights}
+            twopoint_weights = {'D1D2': D1D2_twopoint_weights, 'D1R2': D1R2_twopoint_weights, 'R1D2': R1D2_twopoint_weights, 'R1R2': R1R2_twopoint_weights}
+            twopoint_weights.update({'D1S2': D1R2_twopoint_weights, 'S1D2': R1D2_twopoint_weights, 'S1S2': R1R2_twopoint_weights})
+            if direct_selection_attrs is None:
+                selection_attrs = {name: None for name in twopoint_weights}
+            else:
+                selection_attrs = dict(direct_selection_attrs)
+                counts = selection_attrs.pop('counts', None)
+                if counts is None:
+                    counts = twopoint_weights.keys()
+                else:
+                    counts = counts + [count.replace('R', 'S') for count in counts] + [count.replace('S', 'R') for count in counts]
+                selection_attrs = {name: selection_attrs if name in counts else None for name in twopoint_weights}
 
             pairs = [(1, 'D1', 'D2')]
             key = 'S' if with_shifted else 'R'
@@ -2406,9 +2414,11 @@ class CatalogFFTPower(MeshFFTPower):
                 # pairs.append((1, S1, S2))
                 pairs.append((-1, 'D1', '{}2'.format(key)))
                 pairs.append((-1, '{}1'.format(key), 'D2'))
+                pairs.append((1, '{}1'.format(key), '{}2'.format(key)))
 
             powers = {}
             DirectPowerEngine = get_direct_power_engine(direct_engine)
+            with_twopoint_weights = any(n_bitwise_weights.values()) or any(twopoint_weights.values())
             for coeff, label1, label2 in pairs:
                 label12 = label1 + label2
                 label21 = label2.replace('2', '1') + label1.replace('1', '2')
@@ -2417,6 +2427,7 @@ class CatalogFFTPower(MeshFFTPower):
                     continue
 
                 twopoint_weights_12 = twopoint_weights[label12]
+                selection_attrs_12 = selection_attrs[label12]
                 if autocorr:
                     if label2[:-1] == label1[:-1]:
                         label2 = None
@@ -2426,9 +2437,15 @@ class CatalogFFTPower(MeshFFTPower):
                 # In case of autocorrelation, los = firstpoint or endpoint, R1D2 = R1D1 should get the same angular weight as D1R2 = D2R1
                 if (autocorr and label2 is not None) or (self.same_shotnoise and label2[:-1] != label1[:-1]):
                     if twopoint_weights_12 is None: twopoint_weights_12 = twopoint_weights[label21]
+                    if selection_attrs_12 is None: selection_attrs_12 = selection_attrs[label21]
 
                 with_bitwise = n_bitwise_weights[label1] and (label2 is None or n_bitwise_weights[label2])
-                if with_bitwise or twopoint_weights_12:
+                if with_bitwise or twopoint_weights_12 or (selection_attrs_12 and not with_twopoint_weights):
+                    if with_twopoint_weights:
+                        weight_type = 'inverse_bitwise_minus_individual'
+                    else:  # direct_selection: let's remove the pairs
+                        weight_type = 'auto'
+                        coeff *= -1
                     if self.los_type == 'global':
                         raise NotImplementedError('mu-wedge direct computation not handled yet')
                     if self.mpicomm.rank == 0:
@@ -2439,7 +2456,7 @@ class CatalogFFTPower(MeshFFTPower):
                     if self.same_shotnoise and label2[:-1] == label1[:-1]:  # D2 = D1, R2 = R1 positions, but different weights; this is to remove the correct amount of auto-pairs at s = 0
                         positions2 = None
                     powers[label12] = (coeff, DirectPowerEngine(self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions2, weights2=bweights[label2] if label2 is not None else None,
-                                                                ells=ells, limits=direct_limits, limit_type=direct_limit_type, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights_12,
+                                                                ells=ells, selection_attrs=selection_attrs_12, weight_type=weight_type, twopoint_weights=twopoint_weights_12,
                                                                 weight_attrs=weight_attrs, los=self.los_type, position_type='pos', mpicomm=self.mpicomm))
             for coeff, power in powers.values():
                 self.poles.power_direct_nonorm += coeff * power.power_nonorm
