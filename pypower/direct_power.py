@@ -725,7 +725,8 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             self.log_info('Sum over pairs took {:.2f} s.'.format(delta_sum))
 
         self.power_nonorm = self.mpicomm.allreduce(result)
-        if self.autocorr and self.rlimits[0] <= 0.:  # remove auto-pairs
+        with_auto_pairs = self.rlimits[0] <= 0. and all(limits[0] <= 0. for limits in self.selection_attrs.values())
+        if self.autocorr and with_auto_pairs:  # remove auto-pairs
             power_slab(self.power_nonorm, 0., 0., -self._sum_auto_weights(), ells)
 
         self.power_nonorm = self.power_nonorm.astype('c16')
@@ -844,7 +845,8 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
         self.power_nonorm.shape = (len(self.modes), len(ells))
 
         self.power_nonorm = self.power_nonorm.T.astype('c16')
-        if self.autocorr and self.rlimits[0] <= 0.:  # remove auto-pairs
+        with_auto_pairs = self.rlimits[0] <= 0. and all(limits[0] <= 0. for limits in self.selection_attrs.values())
+        if self.autocorr and with_auto_pairs:  # remove auto-pairs
             weights = self._sum_auto_weights()
             for ill, ell in enumerate(ells):
                 self.power_nonorm[ill] -= weights * (2 * ell + 1) * special.legendre(ell)(0.) * special.spherical_jn(ell, 0., derivative=False)
