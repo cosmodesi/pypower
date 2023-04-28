@@ -9,7 +9,7 @@ from . import mpi
 try:
     from pmesh.pm import ParticleMesh
 except ImportError:
-    pass
+    ParticleMesh = None
 
 
 def _get_real_dtype(dtype):
