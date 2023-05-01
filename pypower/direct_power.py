@@ -497,14 +497,14 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
         for name in self.selection_attrs:
             if name not in allowed_selections:
                 raise ValueError('selections should be one of {}.'.format(allowed_selections))
-        self.rlimits = [0., np.inf]
+        self.rlimits = [0., 2.]
         if 'theta' in self.selection_attrs:
             self.rlimits = 2 * np.sin(0.5 * np.deg2rad(self.selection_attrs['theta']))
         if 'rp' in self.selection_attrs:
-            rmin = min(self.mpicomm.allgather(min([np.min(utils.distance(positions.T)) if positions is not None and positions.size else np.inf for positions in [self.positions1, self.positions2]])))
-            rmax = max(self.mpicomm.allgather(max([np.max(utils.distance(positions.T)) if positions is not None and positions.size else -np.inf for positions in [self.positions1, self.positions2]])))
+            rmin = min(self.mpicomm.allgather(min(np.min(utils.distance(positions.T)) if positions is not None and positions.size else np.inf for positions in [self.positions1, self.positions2])))
+            rmax = max(self.mpicomm.allgather(max(np.max(utils.distance(positions.T)) if positions is not None and positions.size else -np.inf for positions in [self.positions1, self.positions2])))
             limits = np.array(self.selection_attrs['rp'], dtype='f8') / np.array([rmax, rmin])
-            self.rlimits = [min(limits[0], self.rlimits[0]), max(limits[1], self.rlimits[1])]
+            self.rlimits = [max(limits[0], self.rlimits[0]), min(limits[1], self.rlimits[1])]
         self.rlimits = (max(self.rlimits[0], 0.), min(self.rlimits[1], 2.))
 
     def _mpi_decompose(self):
