@@ -836,12 +836,15 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
                                   > pip uninstall Corrfunc\n\
                                   > pip install git+https://github.com/adematti/Corrfunc@desi\n') from exc
 
-        result = call_corrfunc(mocks.DDbessel_mocks, autocorr, nthreads=self.nthreads,
-                               X1=limit_positions1[0], Y1=limit_positions1[1], Z1=limit_positions1[2], XP1=positions1[0], YP1=positions1[1], ZP1=positions1[2],
-                               X2=limit_positions2[0], Y2=limit_positions2[1], Z2=limit_positions2[2], XP2=positions2[0], YP2=positions2[1], ZP2=positions2[2],
-                               binfile=self.modes, ells=ells, rmin=self.rlimits[0], rmax=self.rlimits[1], mumax=1., los_type=los_type, **kwargs)
+        if self.size1 or self.size2:  # else rlimits is 0, 0 and raise error
+            result = call_corrfunc(mocks.DDbessel_mocks, autocorr, nthreads=self.nthreads,
+                                   X1=limit_positions1[0], Y1=limit_positions1[1], Z1=limit_positions1[2], XP1=positions1[0], YP1=positions1[1], ZP1=positions1[2],
+                                   X2=limit_positions2[0], Y2=limit_positions2[1], Z2=limit_positions2[2], XP2=positions2[0], YP2=positions2[1], ZP2=positions2[2],
+                                   binfile=self.modes, ells=ells, rmin=self.rlimits[0], rmax=self.rlimits[1], mumax=1., los_type=los_type, **kwargs)['poles']
+        else:
+            result = np.zeros((len(ells), len(self.modes)), dtype='f8')
 
-        self.power_nonorm = self.mpicomm.allreduce(result['poles']) * prefactor
+        self.power_nonorm = self.mpicomm.allreduce(result) * prefactor
         self.power_nonorm.shape = (len(self.modes), len(ells))
 
         self.power_nonorm = self.power_nonorm.T.astype('c16')

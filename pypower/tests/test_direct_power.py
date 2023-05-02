@@ -395,6 +395,11 @@ def test_catalog_power():
     TwoPointWeight = namedtuple('TwoPointWeight', ['sep', 'weight'])
     twopoint_weights = TwoPointWeight(np.logspace(-4, 0, 40), np.linspace(4., 1., 40))
 
+    def get_alpha(attrs, label):
+        label1, label2 = label
+        labelc = {'D': 'data', 'R': 'randoms', 'S': 'shifted'}
+        return attrs['sum_data_weights1'] * attrs['sum_data_weights2'] / (attrs['sum_{}_weights1'.format(labelc[label1])] * attrs['sum_{}_weights2'.format(labelc[label2])])
+
     power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
                             direct_selection_attrs=selection_attrs)
@@ -416,11 +421,11 @@ def test_catalog_power():
                             direct_selection_attrs=selection_attrs)
     direct = DirectPower(power.poles.k, positions1=data1[:3], positions2=data2[:3], weights1=data1[-1:], weights2=data2[-1:], position_type='xyz',
                          ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
-    direct -= DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms2[:3], weights1=data1[-1:], weights2=randoms2[3:], position_type='xyz',
+    direct -= get_alpha(power.attrs, 'DR') * DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms2[:3], weights1=data1[-1:], weights2=randoms2[3:], position_type='xyz',
                           ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
-    direct -= DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data2[:3], weights1=randoms1[3:], weights2=data2[-1:], position_type='xyz',
+    direct -= get_alpha(power.attrs, 'RD') * DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data2[:3], weights1=randoms1[3:], weights2=data2[-1:], position_type='xyz',
                           ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
-    direct += DirectPower(power.poles.k, positions1=randoms1[:3], positions2=randoms2[:3], weights1=randoms1[3:], weights2=randoms2[3:], position_type='xyz',
+    direct += get_alpha(power.attrs, 'RR') * DirectPower(power.poles.k, positions1=randoms1[:3], positions2=randoms2[:3], weights1=randoms1[3:], weights2=randoms2[3:], position_type='xyz',
                           ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
     assert np.allclose(power.poles.power_direct_nonorm, -direct)
 
@@ -430,7 +435,7 @@ def test_catalog_power():
                             direct_selection_attrs={**selection_attrs, 'counts': ['D1D2', 'D1R2']})
     direct = DirectPower(power.poles.k, positions1=data1[:3], positions2=data2[:3], weights1=data1[-1:], weights2=data2[-1:], position_type='xyz',
                          ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
-    direct -= DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms2[:3], weights1=data1[-1:], weights2=randoms2[3:], position_type='xyz',
+    direct -= get_alpha(power.attrs, 'DR') * DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms2[:3], weights1=data1[-1:], weights2=randoms2[3:], position_type='xyz',
                           ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
     assert np.allclose(power.poles.power_direct_nonorm, -direct)
 
@@ -444,7 +449,7 @@ def test_catalog_power():
                               ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
     direct_R1D2 = DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data1[:3], weights1=randoms1[3:], weights2=data1[3:], position_type='xyz',
                               ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
-    assert np.allclose(power.poles.power_direct_nonorm, direct_D1D2.power_nonorm - direct_D1R2.power_nonorm - direct_R1D2.power_nonorm)
+    assert np.allclose(power.poles.power_direct_nonorm, get_alpha(power.attrs, 'DD') * direct_D1D2.power_nonorm - get_alpha(power.attrs, 'DR') * direct_D1R2.power_nonorm - get_alpha(power.attrs, 'RD') * direct_R1D2.power_nonorm)
 
     power = power.poles
     power2 = power + power
@@ -461,7 +466,7 @@ def test_catalog_power():
                               ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
     direct_R1D2 = DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data1[:3], weights1=randoms1[3:], weights2=data2[3:], position_type='xyz',
                               ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
-    assert np.allclose(power.poles.power_direct_nonorm, direct_D1D2.power_nonorm - direct_D1R2.power_nonorm - direct_R1D2.power_nonorm)
+    assert np.allclose(power.poles.power_direct_nonorm, get_alpha(power.attrs, 'DD') * direct_D1D2.power_nonorm - get_alpha(power.attrs, 'DR') * direct_D1R2.power_nonorm - get_alpha(power.attrs, 'RD') * direct_R1D2.power_nonorm)
     assert direct_D1D2.same_shotnoise
     assert power.poles.shotnoise != 0.
 

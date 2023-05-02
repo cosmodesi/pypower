@@ -1634,28 +1634,27 @@ class MeshFFTBase(BaseClass):
                         self.log_warning('Provided compensation {} is not the same as that of provided {} instance ({})'.format(self.compensations[i], mesh.__class__.__name__, compensation))
                 else:
                     self.compensations[i] = compensation
-                self.attrs['data_size{:d}'.format(i + 1)] = mesh.data_size
-                self.attrs['randoms_size{:d}'.format(i + 1)] = mesh.randoms_size
-                self.attrs['sum_data_weights{:d}'.format(i + 1)] = mesh.sum_data_weights
-                self.attrs['sum_randoms_weights{:d}'.format(i + 1)] = mesh.sum_randoms_weights
+                for cname in ['data', 'randoms', 'shifted']:
+                    self.attrs['{}_size{:d}'.format(cname, i + 1)] = getattr(mesh, '{}_size'.format(cname))
+                    self.attrs['sum_{}_weights{:d}'.format(cname, i + 1)] = getattr(mesh, 'sum_{}_weights'.format(cname))
                 self.attrs['resampler{:d}'.format(i + 1)] = mesh.compensation['resampler']
                 self.attrs['interlacing{:d}'.format(i + 1)] = mesh.interlacing
             else:
                 setattr(self, name, mesh)
                 data_size = mesh.pm.Nmesh.prod()
                 self.attrs['data_size{:d}'.format(i + 1)] = data_size
-                self.attrs['randoms_size{:d}'.format(i + 1)] = 0
+                self.attrs['shifted_size{:d}'.format(i + 1)] = self.attrs['randoms_size{:d}'.format(i + 1)] = 0
                 if isinstance(mesh, BaseComplexField):
                     sum_data = data_size
                 else:
                     sum_data = mesh.csum().real
                 self.attrs['sum_data_weights{:d}'.format(i + 1)] = sum_data
-                self.attrs['sum_randoms_weights{:d}'.format(i + 1)] = 0.
+                self.attrs['sum_shifted_weights{:d}'.format(i + 1)] = self.attrs['sum_randoms_weights{:d}'.format(i + 1)] = 0.
                 self.attrs['resampler{:d}'.format(i + 1)] = not self.compensations[i]['resampler'] if self.compensations[i] is not None else None
                 self.attrs['interlacing{:d}'.format(i + 1)] = not self.compensations[i]['shotnoise'] if self.compensations[i] is not None else False
 
         if self.autocorr:
-            for name in ['data_size', 'randoms_size', 'sum_data_weights', 'sum_randoms_weights', 'resampler', 'interlacing']:
+            for name in ['data_size', 'randoms_size', 'shifted_size', 'sum_data_weights', 'sum_randoms_weights', 'sum_shifted_weights', 'resampler', 'interlacing']:
                 self.attrs['{}2'.format(name)] = self.attrs['{}1'.format(name)]
 
         if self.autocorr:
@@ -2441,6 +2440,10 @@ class CatalogFFTPower(MeshFFTPower):
 
                 with_bitwise = n_bitwise_weights[label1] and (label2 is None or n_bitwise_weights[label2])
                 if with_bitwise or twopoint_weights_12 or (selection_attrs_12 and not with_twopoint_weights):
+                    # Rescale to data weights
+                    labelc = {'D': 'data', 'R': 'randoms', 'S': 'shifted'}
+                    coeff *= self.attrs['sum_data_weights1'] * self.attrs['sum_data_weights2']
+                    coeff /= self.attrs['sum_{}_weights{}'.format(labelc[label1[:-1]], label1[-1:])] * self.attrs['sum_{}_weights{}'.format(labelc[(label2 if label2 is not None else label1)[:-1]], (label2 if label2 is not None else label1)[-1:])]
                     if with_twopoint_weights:
                         weight_type = 'inverse_bitwise_minus_individual'
                     else:  # direct_selection: let's remove the pairs
