@@ -850,6 +850,7 @@ class BasePowerSpectrumStatistics(BaseClass):
             else: header = list(header)
             for name in ['autocorr', 'data_size1', 'data_size2', 'sum_data_weights1', 'sum_data_weights2',
                          'randoms_size1', 'randoms_size2', 'sum_randoms_weights1', 'sum_randoms_weights2',
+                         'shifted_size1', 'shifted_size2', 'sum_shifted_weights1', 'sum_shifted_weights2',
                          'los_type', 'los', 'nmesh', 'boxsize', 'boxcenter', 'resampler1', 'resampler2',
                          'interlacing1', 'interlacing2', 'shotnoise', 'wnorm']:
                 value = self.attrs.get(name, getattr(self, name, None))
