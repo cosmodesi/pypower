@@ -165,6 +165,7 @@ def test_window():
         test.save(fn)
 
     assert np.allclose(test(projs[0], 1. / k[::-1]), window_real.corr[0])
+    test.select(rp=2.5)
 
 
 def test_fft_window():

@@ -501,6 +501,29 @@ class CorrelationFunctionSmoothWindow(BaseClass):
         super(CorrelationFunctionSmoothWindow, self).__setstate__(state)
         self.projs = [Projection.from_state(state) for state in self.projs]
 
+    def deepcopy(self):
+        import copy
+        return copy.deepcopy(self)
+
+    def select(self, rp=0.):
+        """Remove contribution from transverse separation smaller than input ``rp`` value."""
+        new = self.deepcopy()
+        mu_min = np.sqrt(np.clip(1. - (rp / self.sep)**2, 0., None))
+
+        def trapz_poly(poly):
+            integ = poly.integ()
+            toret = integ(1.) - integ(mu_min) + integ(-mu_min) - integ(-1.)
+            return toret
+
+        for iprojout, projout in enumerate(self.projs):
+            new.corr[iprojout][...] = 0.
+            for iprojin, projin in enumerate(self.projs):
+                fll = (2 * projout.ell + 1.) / 2. * trapz_poly(special.legendre(projout.ell) * special.legendre(projin.ell))
+                tmp = (projout.ell == projin.ell) * 1. - fll
+                new.corr[iprojout] += tmp * self.corr[iprojin]
+
+        return new
+
 
 def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
     r"""
