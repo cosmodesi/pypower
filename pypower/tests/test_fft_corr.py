@@ -348,6 +348,7 @@ def test_cutsky():
 if __name__ == '__main__':
 
     setup_logging()
+
     test_corr_statistic()
     test_global()
     test_local()

@@ -1,6 +1,6 @@
 r"""
 Implementation of direct estimation of power spectrum multipoles, i.e. summing over particle pairs.
-This should be mostly used to sum over pairs at small separations, otherwise the calculation will be prohibitive.
+This should be mostly used to sum over pairs at small transverse separations, otherwise the calculation will be prohibitive.
 """
 
 import os
@@ -174,7 +174,7 @@ def get_direct_power_engine(engine='corrfunc'):
     Parameters
     ----------
     engine : string, default='kdtree'
-        Name of direct power engine, one of ['kdtree'].
+        Name of direct power engine, one of ['kdtree', 'corrfunc'].
 
     Returns
     -------
@@ -218,7 +218,7 @@ class DirectPower(metaclass=MetaDirectPower):
     Parameters
     ----------
     engine : string, default='kdtree'
-        Name of direct power engine, one of ['kdtree'].
+        Name of direct power engine, one of ['kdtree', 'corrfunc'].
 
     args : list
         Arguments for direct power engine, see :class:`BaseDirectPowerEngine`.
@@ -244,7 +244,7 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
     name = 'base'
 
     def __init__(self, modes, positions1, positions2=None, weights1=None, weights2=None, ells=(0, 2, 4), selection_attrs=None,
-                 position_type='xyz', weight_type='auto', weight_attrs=None, twopoint_weights=None, los='firstpoint', boxsize=None,
+                 position_type='xyz', weight_type='auto', weight_attrs=None, twopoint_weights=None, los='firstpoint',
                  dtype='f8', mpiroot=None, mpicomm=mpi.COMM_WORLD, **kwargs):
         r"""
         Initialize :class:`BaseDirectPowerEngine`.
@@ -258,14 +258,14 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
             Positions in the first data catalog. Typically of shape (3, N) or (N, 3).
 
         positions2 : list, array, default=None
-            Optionally, for cross-power spectrum, positions in the second catalog. See ``positions1``.
+            Optionally, for cross-power, positions in the second catalog. See ``positions1``.
 
         weights1 : array, list, default=None
             Weights of the first catalog. Not required if ``weight_type`` is either ``None`` or "auto".
             See ``weight_type``.
 
         weights2 : array, list, default=None
-            Optionally, for cross-pair counts, weights in the second catalog. See ``weights1``.
+            Optionally, for cross-power, weights in the second catalog. See ``weights1``.
 
         ells : list, tuple, default=(0, 2, 4)
             Multipole orders.
@@ -610,7 +610,7 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
         for name in kwargs:
             if name in self.attrs: kwargs[name] = self.attrs[name]
 
-        result = np.zeros((len(ells), len(self.modes)), dtype='f8')
+        poles = np.zeros((len(ells), len(self.modes)), dtype=self.dtype)
         legendre = [special.legendre(ell) for ell in ells]
 
         # We proceed by slab to avoid blowing up the memory
@@ -642,10 +642,10 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                     tmp2 = tuple(d[sl] for d in d2[:-1]) + ([d[sl] for d in d2[-1]],)
                     yield (tmp2, d1) if swap else (d1, tmp2)
 
-        def power_slab(result, distance, mu, weight, ells):
+        def power_slab(poles, distance, mu, weight, ells):
             for ill, ell in enumerate(ells):
                 tmp = weight * special.spherical_jn(ell, self.modes[:, None] * distance, derivative=False) * legendre[ill](mu)
-                result[ill] += np.sum(tmp, axis=-1)
+                poles[ill] += np.sum(tmp, axis=-1)
 
         delta_tree, delta_sum = 0., 0.
 
@@ -701,7 +701,7 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             if 'rp' in self.selection_attrs:
                 rp2 = (1. - mu**2) * distances**2
                 mask = (rp2 >= self.selection_attrs['rp'][0]**2) & (rp2 < self.selection_attrs['rp'][1]**2)
-                distances, mu, weights = distances[mask], mu[mask], weights[mask]
+                distances, mu, weights = distances[mask], mu[mask], (weights[mask] if weights.ndim else weights)
 
             # To avoid memory issues when performing distance*modes product, work by slabs
             nslabs_pairs = len(ells) * len(self.modes)
@@ -712,11 +712,11 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
                 d = distances[sl]
                 w = 1. if weights.ndim == 0 else weights[sl]
                 if self.los_type in ['global', 'midpoint']:
-                    power_slab(result, d, mu[sl], w, ells)
+                    power_slab(poles, d, mu[sl], w, ells)
                 else:  # firstpoint, endpoint
-                    power_slab(result, d, mu[sl], w, ells)
+                    power_slab(poles, d, mu[sl], w, ells)
                     # if autocorr:
-                    #     power_slab(result, d, mu2[sl], w, ells)
+                    #     power_slab(poles, d, mu2[sl], w, ells)
 
             delta_sum += time.time() - start_i
 
@@ -724,7 +724,7 @@ class KDTreeDirectPowerEngine(BaseDirectPowerEngine):
             self.log_info('Building tree took {:.2f} s.'.format(delta_tree))
             self.log_info('Sum over pairs took {:.2f} s.'.format(delta_sum))
 
-        self.power_nonorm = self.mpicomm.allreduce(result)
+        self.power_nonorm = self.mpicomm.allreduce(poles)
         with_auto_pairs = self.rlimits[0] <= 0. and all(limits[0] <= 0. for limits in self.selection_attrs.values())
         if self.autocorr and with_auto_pairs:  # remove auto-pairs
             power_slab(self.power_nonorm, 0., 0., -self._sum_auto_weights(), ells)
@@ -837,17 +837,16 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
                                   > pip install git+https://github.com/adematti/Corrfunc@desi\n') from exc
 
         if self.size1 or self.size2:  # else rlimits is 0, 0 and raise error
-            result = call_corrfunc(mocks.DDbessel_mocks, autocorr, nthreads=self.nthreads,
-                                   X1=limit_positions1[0], Y1=limit_positions1[1], Z1=limit_positions1[2], XP1=positions1[0], YP1=positions1[1], ZP1=positions1[2],
-                                   X2=limit_positions2[0], Y2=limit_positions2[1], Z2=limit_positions2[2], XP2=positions2[0], YP2=positions2[1], ZP2=positions2[2],
-                                   binfile=self.modes, ells=ells, rmin=self.rlimits[0], rmax=self.rlimits[1], mumax=1., los_type=los_type, **kwargs)['poles']
+            poles = call_corrfunc(mocks.DDbessel_mocks, autocorr, nthreads=self.nthreads,
+                                  X1=limit_positions1[0], Y1=limit_positions1[1], Z1=limit_positions1[2], XP1=positions1[0], YP1=positions1[1], ZP1=positions1[2],
+                                  X2=limit_positions2[0], Y2=limit_positions2[1], Z2=limit_positions2[2], XP2=positions2[0], YP2=positions2[1], ZP2=positions2[2],
+                                  binfile=self.modes, ells=ells, rmin=self.rlimits[0], rmax=self.rlimits[1], mumax=1., los_type=los_type, **kwargs)['poles']
         else:
-            result = np.zeros((len(ells), len(self.modes)), dtype='f8')
+            poles = np.zeros(len(self.modes) * len(ells), dtype=self.dtype)
+        poles = poles.reshape(len(self.modes), len(ells)).T
 
-        self.power_nonorm = self.mpicomm.allreduce(result) * prefactor
-        self.power_nonorm.shape = (len(self.modes), len(ells))
+        self.power_nonorm = (self.mpicomm.allreduce(poles) * prefactor).astype('c16')
 
-        self.power_nonorm = self.power_nonorm.T.astype('c16')
         with_auto_pairs = self.rlimits[0] <= 0. and all(limits[0] <= 0. for limits in self.selection_attrs.values())
         if self.autocorr and with_auto_pairs:  # remove auto-pairs
             weights = self._sum_auto_weights()

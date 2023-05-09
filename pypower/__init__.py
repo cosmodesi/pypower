@@ -7,4 +7,5 @@ from .wide_angle import Projection, BaseMatrix, CorrelationFunctionOddWideAngleM
 from .smooth_window import PowerSpectrumSmoothWindow, CorrelationFunctionSmoothWindow, CatalogSmoothWindow, CorrelationFunctionSmoothWindowMatrix, PowerSpectrumSmoothWindowMatrix
 from .fft_window import PowerSpectrumFFTWindowMatrix, MeshFFTWindow, CatalogFFTWindow
 from .fft_corr import MeshFFTCorr, CatalogFFTCorr, CorrelationFunctionWedges, CorrelationFunctionMultipoles, CorrelationFunctionStatistics
+from .direct_corr import DirectCorr
 from .utils import setup_logging

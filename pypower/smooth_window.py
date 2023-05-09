@@ -16,6 +16,8 @@ from .fftlog import CorrelationToPower
 from .fft_power import (BasePowerSpectrumStatistics, MeshFFTPower, CatalogMesh,
                         _get_real_dtype, _format_positions, _format_all_weights, _get_mesh_attrs, _wrap_positions, unnormalized_shotnoise)
 from .wide_angle import Projection, BaseMatrix, CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix
+from .direct_power import get_direct_power_engine
+from .direct_corr import get_direct_corr_engine
 from . import mpi, utils
 
 
@@ -310,9 +312,11 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         if projs is not None:
             indices = [self.projs.index(proj) for proj in projs]
             self.projs = [self.projs[index] for index in indices]
-            names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'wnorm', 'wnorm_ref', 'shotnoise_nonorm']
+            names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'corr_direct_nonorm', 'wnorm', 'wnorm_ref', 'shotnoise_nonorm']
             for name in names:
-                setattr(self, name, getattr(self, name)[indices])
+                value = getattr(self, name, None)
+                if value is not None:
+                    setattr(self, name, value[indices])
         super(PowerSpectrumSmoothWindow, self).select(*xlims)
         return self
 
@@ -334,14 +338,17 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             others = others[0]
         new = others[0].deepcopy()
         new.projs = []
-        arrays = {name: [] for name in ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'wnorm', 'wnorm_ref', 'shotnoise_nonorm']}
+        arrays = {name: [] for name in ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'corr_direct_nonorm', 'wnorm', 'wnorm_ref', 'shotnoise_nonorm']}
         for other in others:
             indices = [iproj for iproj, proj in enumerate(other.projs) if proj not in new.projs]
             new.projs += [other.projs[index] for index in indices]
             for name, array in arrays.items():
-                arrays[name].append(getattr(other, name)[indices])
+                value = getattr(other, name, None)
+                if value is not None:
+                    arrays[name].append(value[indices])
         for name, array in arrays.items():
-            setattr(new, name, np.concatenate(array, axis=0))
+            if len(array) == len(others):
+                setattr(new, name, np.concatenate(array, axis=0))
         return new
 
     def to_real(self, **kwargs):
@@ -500,6 +507,9 @@ class CorrelationFunctionSmoothWindow(BaseClass):
         """Set this class state dictionary."""
         super(CorrelationFunctionSmoothWindow, self).__setstate__(state)
         self.projs = [Projection.from_state(state) for state in self.projs]
+        for name in ['corr_direct_nonorm', 'sep_direct']:
+            if not hasattr(self, name):
+                setattr(self, name, None)
 
     def deepcopy(self):
         import copy
@@ -576,8 +586,16 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
         sep = np.asarray(sep)
     window = []
     _slab_npoints_max = 10 * 1000
-    for proj in fourier_window.projs:
-        wk = fourier_window(proj=proj, k=k, complex=False, null_zero_mode=False) * smoothing
+    direct_corr = fourier_window.corr_direct_nonorm is not None
+    if direct_corr:
+        sep_direct = np.insert(fourier_window.sep_direct, 0, 0.)
+        sep_direct, indices = np.unique(sep_direct, return_index=True)
+        corr_direct = fourier_window.corr_direct_nonorm / fourier_window.wnorm[:, None]
+        corr_direct = [np.insert(corr, 0, corr[0])[indices] for corr in corr_direct]
+        # Designed to compensate for what is done in PowerSpectrumSmoothWindowMatrix.run()
+        volume = (4. / 3. * np.pi * weights_trapz(sep**3))
+    for iproj, proj in enumerate(fourier_window.projs):
+        wk = fourier_window(proj=proj, k=k, complex=False, null_zero_mode=False, add_direct=not direct_corr) * smoothing
         block = np.empty_like(sep)
         nslabs = min(max(len(k) * len(sep) // _slab_npoints_max, 1), len(sep))
         for islab in range(nslabs):  # proceed by slab to save memory
@@ -589,6 +607,8 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
             # (-i)^ell i = (-1)^(ell//2) if ell is odd
             prefactor = (-1) ** (proj.ell // 2)
             block[sl] = prefactor * np.sum(volume[:, None] * integrand, axis=0)
+        if direct_corr:
+            block += UnivariateSpline(sep_direct, corr_direct[iproj], k=3, s=0, ext='zeros')(sep) / volume
         window.append(block)
 
     return CorrelationFunctionSmoothWindow(sep, window, fourier_window.projs.copy(), wnorm_ref=fourier_window.wnorm_ref)
@@ -603,6 +623,7 @@ class CatalogSmoothWindow(MeshFFTPower):
                  edges=None, projs=None, power_ref=None,
                  los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype=None,
                  resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
+                 direct_engine='corrfunc', direct_selection_attrs=None, direct_edges=None, direct_attrs=None,
                  wnorm=None, shotnoise=None, shotnoise_nonorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogSmoothWindow`, i.e. estimate power spectrum window.
@@ -838,6 +859,13 @@ class CatalogSmoothWindow(MeshFFTPower):
                     if weights[name + '2'] is None: weights[name + '2'] = weights[name + '1']
             mesh2 = get_mesh(positions['R2'], data_weights=weights['R2'], resampler=resampler[1], interlacing=interlacing[1])
 
+        direct_attrs = direct_attrs or {}
+        direct_corr = direct_edges is not None
+        if direct_corr:
+            DirectEngine = get_direct_corr_engine(direct_engine)
+        else:
+            DirectEngine = get_direct_power_engine(direct_engine)
+
         poles = []
         for wa_order, ells in ells_for_wa_order.items():
             mesh2_wa = mesh2
@@ -855,6 +883,29 @@ class CatalogSmoothWindow(MeshFFTPower):
             self.same_shotnoise = autocorr or same_shotnoise  # when providing 2 meshes, shot noise estimate is 0; correct this here
             # Now, run power spectrum estimation
             super(CatalogSmoothWindow, self).__init__(mesh1=mesh1_wa, mesh2=mesh2_wa, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm)
+            positions2, weights2 = None, None
+            if mesh2_wa is not None:
+                positions2, weights2 = mesh2_wa.data_positions, mesh2_wa.data_weights
+            if self.same_shotnoise:
+                positions2 = None
+            if direct_selection_attrs:
+                power = DirectEngine(direct_edges if direct_corr else self.poles.k, positions1=mesh1_wa.data_positions, weights1=mesh1_wa.data_weights, positions2=positions2, weights2=weights2,
+                                     ells=ells, selection_attrs=direct_selection_attrs, weight_type='auto',
+                                     los=los, position_type='pos', mpicomm=self.mpicomm, **direct_attrs)
+                if direct_corr:
+                    self.poles.corr_direct_nonorm = 0.
+                    sep = power.sep.copy()
+                    sep[np.isnan(sep)] = (power.edges[:-1] + power.edges[1:])[np.isnan(sep)] / 2.
+                    self.poles.sep_direct = sep
+                coeff = -1.
+                if direct_corr:
+                    self.poles.attrs['corr_direct'] = power.__getstate__()
+                    self.poles.corr_direct_nonorm += coeff * power.corr_nonorm
+                else:
+                    self.poles.attrs['power_direct'] = power.__getstate__()
+                    self.poles.power_direct_nonorm += coeff * power.power_nonorm
+                if direct_corr:
+                    self.poles.set_power_direct()
             poles.append(PowerSpectrumSmoothWindow.from_power(self.poles, wa_order=wa_order, wnorm_ref=wnorm_ref, mpicomm=self.mpicomm))
 
         self.poles = PowerSpectrumSmoothWindow.concatenate_proj(*poles)

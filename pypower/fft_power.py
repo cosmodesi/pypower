@@ -19,6 +19,7 @@ from .utils import BaseClass, _make_array
 from . import mpi, utils
 from .mesh import CatalogMesh, _get_real_dtype, _get_compensation_window, _get_mesh_attrs, _wrap_positions
 from .direct_power import _format_positions, _format_weights, get_default_nrealizations, get_inverse_probability_weight, get_direct_power_engine
+from .direct_corr import get_direct_corr_engine
 
 
 def _nan_to_zero(array):
@@ -442,13 +443,13 @@ class BasePowerSpectrumStatistics(BaseClass):
     or :meth:`__call__` (accessed through ``my_power_statistic_instance()``).
     """
     name = 'base'
-    _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm', 'attrs']
+    _attrs = ['name', 'edges', 'modes', 'power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'nmodes', 'wnorm', 'shotnoise_nonorm', 'corr_direct_nonorm', 'sep_direct', 'attrs']
     _tosum = ['nmodes']
     _toaverage = ['modes', 'power_nonorm', 'power_direct_nonorm']
     _coords_names = ['k']
     _power_names = ['P(k)']
 
-    def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., power_zero_nonorm=None, power_direct_nonorm=None, attrs=None, mpicomm=None):
+    def __init__(self, edges, modes, power_nonorm, nmodes, wnorm=1., shotnoise_nonorm=0., power_zero_nonorm=None, power_direct_nonorm=None, corr_direct_nonorm=None, sep_direct=None, attrs=None, mpicomm=None):
         r"""
         Initialize :class:`BasePowerSpectrumStatistics`.
 
@@ -496,6 +497,12 @@ class BasePowerSpectrumStatistics(BaseClass):
             self.power_zero_nonorm = np.zeros(self.power_nonorm.shape[:self.power_nonorm.ndim - self.ndim], dtype=self.power_nonorm.dtype)
         else:
             self.power_zero_nonorm = np.asarray(power_zero_nonorm)
+        loc = locals()
+        for name in ['corr_direct_nonorm', 'sep_direct']:
+            value = loc[name]
+            if value is not None:
+                value = np.asarray(value)
+            setattr(self, name, value)
         self.power_direct_nonorm = power_direct_nonorm
         if power_direct_nonorm is None:
             self.power_direct_nonorm = np.zeros_like(self.power_nonorm)
@@ -734,13 +741,19 @@ class BasePowerSpectrumStatistics(BaseClass):
 
     def __setstate__(self, state):
         super(BasePowerSpectrumStatistics, self).__setstate__(state)
-        if not hasattr(self, 'power_zero_nonorm'):  # for backward-compatibility; to be removed soon!
+        # For backward-compatibility; to be removed soon!
+        if not hasattr(self, 'power_zero_nonorm'):
             self.power_zero_nonorm = np.zeros(self.power_nonorm.shape[:self.power_nonorm.ndim - self.ndim], dtype=self.power_nonorm.dtype)
+        for name in ['corr_direct_nonorm', 'sep_direct']:
+            if not hasattr(self, name):
+                setattr(self, name, None)
 
     def __copy__(self):
         new = super(BasePowerSpectrumStatistics, self).__copy__()
-        for name in ['edges', 'modes', 'attrs']:
-            setattr(new, name, getattr(new, name).copy())
+        for name in ['edges', 'modes', 'corr_direct_nonorm', 'sep_direct', 'attrs']:
+            value = getattr(new, name, None)
+            if value is not None:
+                setattr(new, name, value.copy())
         return new
 
     def deepcopy(self):
@@ -769,11 +782,10 @@ class BasePowerSpectrumStatistics(BaseClass):
             raise ValueError('Provide as many weights as instances to average')
         weights = [np.array(weight) for weight in weights]
         for name in cls._attrs:
-            if name.endswith('nonorm') and hasattr(new, name):
+            if name.endswith('nonorm') and getattr(new, name, None) is not None:
                 value = 0.
                 for other, weight in zip(others, weights):
-                    tmp = getattr(other, name)
-                    tmp = np.asarray(tmp)
+                    tmp = np.asarray(getattr(other, name))
                     weight = weight[(Ellipsis,) * weight.ndim + (None,) * (tmp.ndim - weight.ndim)]
                     value += tmp * weight
                 setattr(new, name, value)
@@ -1149,10 +1161,17 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         edges = (self.kedges.copy(), muedges)
         modes = (np.repeat(self.modes[0][:, None], len(dmu), axis=-1), np.repeat(mu[None, :], len(self.k), axis=0))
         power_nonorm, power_direct_nonorm = 0, 0
+        with_corr_direct = self.corr_direct_nonorm is not None
+        corr_direct_nonorm, sep_direct = None, None, None
+        if with_corr_direct:
+            corr_direct_nonorm = 0
+            sep_direct = np.repeat(self.sep_direct[:, None], len(dmu), axis=-1)
         for ell in ells:
             poly = np.diff(special.legendre(ell).integ()(muedges)) / dmu
             power_nonorm += self.power_nonorm[self.ells.index(ell), ..., None] * poly
             power_direct_nonorm += self.power_direct_nonorm[self.ells.index(ell), ..., None] * poly
+            if with_corr_direct:
+                corr_direct_nonorm += corr_direct_nonorm[self.ells.index(ell), ..., None] * poly
         if 0 in self.ells:
             power_zero_nonorm = self.power_zero_nonorm[self.ells.index(0)]
         else:
@@ -1160,6 +1179,7 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         nmodes = self.nmodes[:, None] / dmu
         return PowerSpectrumWedges(edges, modes, power_nonorm, nmodes, wnorm=self.wnorm, shotnoise_nonorm=self.shotnoise_nonorm,
                                    power_zero_nonorm=power_zero_nonorm, power_direct_nonorm=power_direct_nonorm,
+                                   corr_direct_nonorm=corr_direct_nonorm, sep_direct=sep_direct,
                                    attrs=self.attrs, mpicomm=getattr(self, 'mpicomm', None))
 
     def get_power(self, add_direct=True, remove_shotnoise=True, null_zero_mode=True, divide_wnorm=True, complex=True):
@@ -1324,9 +1344,11 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         if ells is not None:
             indices = [self.ells.index(ell) for ell in ells]
             self.ells = tuple(self.ells[index] for index in indices)
-            names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm']
+            names = ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'corr_direct_nonorm']
             for name in names:
-                setattr(self, name, getattr(self, name)[indices])
+                value = getattr(self, name, None)
+                if value is not None:
+                    setattr(self, name, value[indices])
         super(PowerSpectrumMultipoles, self).select(*xlims)
         return self
 
@@ -1348,16 +1370,33 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
             others = others[0]
         new = others[0].deepcopy()
         new.ells = []
-        arrays = {name: [] for name in ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm']}
+        arrays = {name: [] for name in ['power_nonorm', 'power_zero_nonorm', 'power_direct_nonorm', 'corr_direct_nonorm']}
         for other in others:
             indices = [ill for ill, ell in enumerate(other.ells) if ell not in new.ells]
             new.ells += [other.ells[index] for index in indices]
             for name, array in arrays.items():
-                arrays[name].append(getattr(other, name)[indices] * new.wnorm / other.wnorm)
+                value = getattr(other, name, None)
+                if value is not None:
+                    arrays[name].append(value[indices] * new.wnorm / other.wnorm)
         new.ells = tuple(new.ells)
         for name, array in arrays.items():
-            setattr(new, name, np.concatenate(array, axis=0))
+            if len(array) == len(others):
+                setattr(new, name, np.concatenate(array, axis=0))
         return new
+
+    def set_power_direct(self, power_direct_nonorm=None, **kwargs):
+        for name in ['corr_direct_nonorm', 'sep_direct']:
+            value = kwargs.get(name, None)
+            if value is not None:
+                setattr(self, name, np.asarray(value))
+        if power_direct_nonorm is not None:
+            self.power_direct_nonorm = np.asarray(power_direct_nonorm)
+        elif self.corr_direct_nonorm is not None:
+            power_nonorm = []
+            for ill, ell in enumerate(self.ells):
+                value = (-1j)**ell * np.sum(self.corr_direct_nonorm[ill] * special.spherical_jn(ell, self.k[:, None] * self.sep_direct, derivative=False), axis=-1)
+                power_nonorm.append(value)
+            self.power_direct_nonorm = np.array(power_nonorm)
 
 
 def normalization_from_nbar(nbar, weights=None, data_weights=None, mpicomm=mpi.COMM_WORLD):
@@ -2143,7 +2182,7 @@ class CatalogFFTPower(MeshFFTPower):
                  edges=None, ells=(0, 2, 4), los=None,
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
                  resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
-                 direct_engine='corrfunc', direct_selection_attrs=None,
+                 direct_engine='corrfunc', direct_selection_attrs=None, direct_edges=None, direct_attrs=None,
                  wnorm=None, shotnoise=None, shotnoise_nonorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTPower`, i.e. estimate power spectrum.
@@ -2395,6 +2434,8 @@ class CatalogFFTPower(MeshFFTPower):
 
         if self.ells:
 
+            direct_attrs = direct_attrs or {}
+
             twopoint_weights = {'D1D2': D1D2_twopoint_weights, 'D1R2': D1R2_twopoint_weights, 'R1D2': R1D2_twopoint_weights, 'R1R2': R1R2_twopoint_weights}
             twopoint_weights.update({'D1S2': D1R2_twopoint_weights, 'S1D2': R1D2_twopoint_weights, 'S1S2': R1R2_twopoint_weights})
             if direct_selection_attrs is None:
@@ -2417,7 +2458,11 @@ class CatalogFFTPower(MeshFFTPower):
                 pairs.append((1, '{}1'.format(key), '{}2'.format(key)))
 
             powers = {}
-            DirectPowerEngine = get_direct_power_engine(direct_engine)
+            direct_corr = direct_edges is not None
+            if direct_corr:
+                DirectEngine = get_direct_corr_engine(direct_engine)
+            else:
+                DirectEngine = get_direct_power_engine(direct_engine)
             with_twopoint_weights = any(n_bitwise_weights.values()) or any(twopoint_weights.values())
             for coeff, label1, label2 in pairs:
                 label12 = label1 + label2
@@ -2459,8 +2504,24 @@ class CatalogFFTPower(MeshFFTPower):
                     positions2 = positions[label2] if label2 is not None else None
                     if self.same_shotnoise and label2[:-1] == label1[:-1]:  # D2 = D1, R2 = R1 positions, but different weights; this is to remove the correct amount of auto-pairs at s = 0
                         positions2 = None
-                    powers[label12] = (coeff, DirectPowerEngine(self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions2, weights2=bweights[label2] if label2 is not None else None,
-                                                                ells=ells, selection_attrs=selection_attrs_12, weight_type=weight_type, twopoint_weights=twopoint_weights_12,
-                                                                weight_attrs=weight_attrs, los=self.los_type, position_type='pos', mpicomm=self.mpicomm))
-            for coeff, power in powers.values():
-                self.poles.power_direct_nonorm += coeff * power.power_nonorm
+                    powers[label12] = (coeff, DirectEngine(direct_edges if direct_corr else self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions2, weights2=bweights[label2] if label2 is not None else None,
+                                                           ells=ells, selection_attrs=selection_attrs_12, weight_type=weight_type, twopoint_weights=twopoint_weights_12,
+                                                           weight_attrs=weight_attrs, los=self.los_type, position_type='pos', mpicomm=self.mpicomm, **direct_attrs))
+
+            if direct_corr:
+                self.poles.corr_direct_nonorm = 0.
+                for name in [list(powers.keys())[0], 'D1D2', 'R1R2']:
+                    if name in powers:
+                        corr = powers[name][1]
+                        sep = corr.sep.copy()
+                        sep[np.isnan(sep)] = (corr.edges[:-1] + corr.edges[1:])[np.isnan(sep)] / 2.
+                        self.poles.sep_direct = sep
+            for label, (coeff, power) in powers.items():
+                if direct_corr:
+                    self.poles.attrs['corr_direct_{}'.format(label)] = power.__getstate__()
+                    self.poles.corr_direct_nonorm += coeff * power.corr_nonorm
+                else:
+                    self.poles.attrs['power_direct_{}'.format(label)] = power.__getstate__()
+                    self.poles.power_direct_nonorm += coeff * power.power_nonorm
+            if direct_corr:
+                self.poles.set_power_direct()

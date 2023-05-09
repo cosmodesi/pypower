@@ -193,6 +193,7 @@ def test_fft_window():
                                 boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype=dtype).poles
 
         edges = {'step': 0.01}
+
         window1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos').poles
         with tempfile.TemporaryDirectory() as tmp_dir:
             # tmp_dir = '_tests'
@@ -308,6 +309,11 @@ def test_fft_window():
         nk = len(windowc.k)
         windowc.rebin(2)
         assert len(windowc.k) == nk // 2
+
+        if los in ['firstpoint', 'endpoint']:
+            window = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', direct_selection_attrs={'rp': (0., 2.5)}, direct_edges={'step': 0.2, 'max': 10.}).poles
+            #assert np.allclose(window.get_power(add_direct=False), window_root.power)
+            window.to_real()
 
 
 def get_correlation_function_window():
