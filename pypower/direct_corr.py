@@ -214,6 +214,12 @@ class BaseDirectCorrEngine(BaseClass, metaclass=RegisteredDirectCorrEngine):
         if self.mpicomm.rank == 0:
             self.log_info('Using {:d} s-bins between {:.3f} and {:.3f}.'.format(len(edges) - 1, edges[0], edges[-1]))
         self.edges = np.asarray(edges)
+        self._set_bin_type()
+
+    def _set_bin_type(self):
+        self.bin_type = 'custom'
+        if np.allclose(self.edges, np.linspace(self.edges[0], self.edges[-1], len(self.edges))):
+            self.bin_type = 'lin'
 
     def run(self):
         """Method that computes the correlation function and set :attr:`sep` and :attr:`corr_nonorm`, to be implemented in your new engine."""
@@ -221,7 +227,7 @@ class BaseDirectCorrEngine(BaseClass, metaclass=RegisteredDirectCorrEngine):
 
     def __getstate__(self):
         state = {}
-        for name in ['name', 'autocorr', 'is_reversible', 'edges', 'ells', 'sep', 'corr_nonorm', 'size1', 'size2', 'rlimits',
+        for name in ['name', 'autocorr', 'is_reversible', 'edges', 'bin_type', 'ells', 'sep', 'corr_nonorm', 'size1', 'size2', 'rlimits',
                      'los', 'los_type', 'weight_attrs', 'selection_attrs', 'attrs']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
@@ -483,7 +489,7 @@ class CorrfuncDirectCorrEngine(BaseDirectCorrEngine):
                   'weight_type': weight_type,
                   'pair_weights': pair_weights, 'sep_pair_weights': sep_pair_weights,
                   'attrs_pair_weights': weight_attrs, 'verbose': False,
-                  'isa': self.attrs.get('isa', 'fastest')}
+                  'isa': self.attrs.get('isa', 'fastest'), 'bin_type': self.bin_type}
 
         if 'rp' in self.selection_attrs:
             kwargs['attrs_selection'] = {'rp': self.selection_attrs['rp']}
