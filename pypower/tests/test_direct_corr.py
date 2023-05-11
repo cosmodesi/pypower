@@ -124,7 +124,7 @@ def ref_theta(edges, data1, data2=None, boxsize=None, los='midpoint', ells=(0, 2
 
 def test_direct_corr():
     list_engine = ['kdtree', 'corrfunc']
-    edges = np.linspace(0.01, 100, 11)
+    edges = np.linspace(0., 100, 11)
     size = 100
     boxsize = (100,) * 3
     from pypower.direct_corr import KDTreeDirectCorrEngine
@@ -132,9 +132,9 @@ def test_direct_corr():
     list_options = []
 
     for autocorr in [False, True]:
-        # list_options.append({'autocorr':autocorr})
+        list_options.append({'autocorr': autocorr})
         # one-column of weights
-        # list_options.append({'autocorr':autocorr, 'weights_one':[1]})
+        list_options.append({'autocorr': autocorr, 'weights_one': [1]})
         # position type
         for position_type in ['rdd', 'pos', 'xyz']:
             list_options.append({'autocorr': autocorr, 'position_type': position_type})

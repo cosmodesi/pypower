@@ -194,9 +194,9 @@ def test_direct_power():
     list_options = []
 
     for autocorr in [False, True]:
-        # list_options.append({'autocorr':autocorr})
+        list_options.append({'autocorr': autocorr})
         # one-column of weights
-        # list_options.append({'autocorr':autocorr, 'weights_one':[1]})
+        list_options.append({'autocorr': autocorr, 'weights_one': [1]})
         # position type
         for position_type in ['rdd', 'pos', 'xyz']:
             list_options.append({'autocorr': autocorr, 'position_type': position_type})

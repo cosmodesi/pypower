@@ -522,10 +522,11 @@ class CorrfuncDirectCorrEngine(BaseDirectCorrEngine):
         sep = self.mpicomm.allreduce(sep * poles[ells.index(0)])
         poles = self.mpicomm.allreduce(poles)
         with_auto_pairs = self.rlimits[0] <= 0. and self.edges[0] <= 0. and all(limits[0] <= 0. for limits in self.selection_attrs.values())
+
         if self.autocorr and with_auto_pairs:  # remove auto-pairs
             weights = self._sum_auto_weights()
             for ill, ell in enumerate(ells):
-                poles[ill][0] -= weights * (2 * ell + 1) * special.legendre(ell)(0.) * special.spherical_jn(ell, 0., derivative=False)
+                poles[ill][0] -= weights / prefactor * (2 * ell + 1) * special.legendre(ell)(0.)
 
         with np.errstate(divide='ignore', invalid='ignore'):
             self.sep = sep / poles[ells.index(0)]

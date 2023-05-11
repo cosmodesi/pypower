@@ -588,12 +588,12 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
     _slab_npoints_max = 10 * 1000
     direct_corr = fourier_window.corr_direct_nonorm is not None
     if direct_corr:
+        # Designed to compensate for what is done in PowerSpectrumSmoothWindowMatrix.run()
+        volume_direct = 4. / 3. * np.pi * weights_trapz(fourier_window.sep_direct**3)
+        corr_direct = fourier_window.corr_direct_nonorm / fourier_window.wnorm[:, None] / volume_direct
         sep_direct = np.insert(fourier_window.sep_direct, 0, 0.)
         sep_direct, indices = np.unique(sep_direct, return_index=True)
-        corr_direct = fourier_window.corr_direct_nonorm / fourier_window.wnorm[:, None]
-        corr_direct = [np.insert(corr, 0, corr[0])[indices] for corr in corr_direct]
-        # Designed to compensate for what is done in PowerSpectrumSmoothWindowMatrix.run()
-        volume_direct = (4. / 3. * np.pi * weights_trapz(sep**3))
+        corr_direct = [np.insert(corr, 0, corr[0] if proj.ell == 0 else 0.)[indices] for proj, corr in zip(fourier_window.projs, corr_direct)]
     for iproj, proj in enumerate(fourier_window.projs):
         wk = fourier_window(proj=proj, k=k, complex=False, null_zero_mode=False, add_direct=not direct_corr) * smoothing
         block = np.empty_like(sep)
@@ -608,7 +608,7 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
             prefactor = (-1) ** (proj.ell // 2)
             block[sl] = prefactor * np.sum(volume[:, None] * integrand, axis=0)
         if direct_corr:
-            block += UnivariateSpline(sep_direct, corr_direct[iproj], k=3, s=0, ext='zeros')(sep) / volume_direct
+            block += UnivariateSpline(sep_direct, corr_direct[iproj], k=3, s=0, ext='zeros')(sep)
         window.append(block)
 
     return CorrelationFunctionSmoothWindow(sep, window, fourier_window.projs.copy(), wnorm_ref=fourier_window.wnorm_ref)
@@ -1216,7 +1216,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
 
     def resum_input_odd_wide_angle(self, **kwargs):
         """
-        Resum odd wide-angle orders. By default, line-of-sight is chosen as that save in :attr:`attrs` (``attrs['los_type']``).
+        Resum odd wide-angle orders in place. By default, line-of-sight is chosen as that save in :attr:`attrs` (``attrs['los_type']``).
         To override, use input ``kwargs`` which will be passed to :attr:`PowerSpectrumOddWideAngleMatrix`.
         """
         projsin = [proj for proj in self.projsin if proj.wa_order == 0]
@@ -1224,6 +1224,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
         if 'los' not in kwargs and 'los_type' in self.attrs: kwargs['los'] = self.attrs['los_type']
         matrix = PowerSpectrumOddWideAngleMatrix(self.xin[0], projsin=projsin, projsout=self.projsin, **kwargs)
         self.__dict__.update(self.join(matrix, self).__dict__)
+        return self
 
 
 def wigner3j_square(ellout, ellin, prefactor=True):
