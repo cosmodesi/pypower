@@ -593,7 +593,7 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
         corr_direct = fourier_window.corr_direct_nonorm / fourier_window.wnorm[:, None]
         corr_direct = [np.insert(corr, 0, corr[0])[indices] for corr in corr_direct]
         # Designed to compensate for what is done in PowerSpectrumSmoothWindowMatrix.run()
-        volume = (4. / 3. * np.pi * weights_trapz(sep**3))
+        volume_direct = (4. / 3. * np.pi * weights_trapz(sep**3))
     for iproj, proj in enumerate(fourier_window.projs):
         wk = fourier_window(proj=proj, k=k, complex=False, null_zero_mode=False, add_direct=not direct_corr) * smoothing
         block = np.empty_like(sep)
@@ -608,7 +608,7 @@ def power_to_correlation_window(fourier_window, sep=None, k=None, smooth=None):
             prefactor = (-1) ** (proj.ell // 2)
             block[sl] = prefactor * np.sum(volume[:, None] * integrand, axis=0)
         if direct_corr:
-            block += UnivariateSpline(sep_direct, corr_direct[iproj], k=3, s=0, ext='zeros')(sep) / volume
+            block += UnivariateSpline(sep_direct, corr_direct[iproj], k=3, s=0, ext='zeros')(sep) / volume_direct
         window.append(block)
 
     return CorrelationFunctionSmoothWindow(sep, window, fourier_window.projs.copy(), wnorm_ref=fourier_window.wnorm_ref)
