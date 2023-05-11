@@ -1,4 +1,5 @@
 import os
+import time
 import tempfile
 
 import numpy as np
@@ -6,6 +7,51 @@ from scipy import special
 from mpi4py import MPI
 
 from pypower import DirectPower, CatalogFFTPower, mpi, utils, setup_logging
+
+
+class MemoryMonitor(object):
+    """
+    Class that monitors memory usage and clock, useful to check for memory leaks.
+
+    >>> with MemoryMonitor() as mem:
+            '''do something'''
+            mem()
+            '''do something else'''
+    """
+    def __init__(self, pid=None):
+        """
+        Initalize :class:`MemoryMonitor` and register current memory usage.
+
+        Parameters
+        ----------
+        pid : int, default=None
+            Process identifier. If ``None``, use the identifier of the current process.
+        """
+        import psutil
+        self.proc = psutil.Process(os.getpid() if pid is None else pid)
+        self.mem = self.proc.memory_info().rss / 1e6
+        self.time = time.time()
+        msg = 'using {:.3f} [Mb]'.format(self.mem)
+        print(msg, flush=True)
+
+    def __enter__(self):
+        """Enter context."""
+        return self
+
+    def __call__(self, log=None):
+        """Update memory usage."""
+        mem = self.proc.memory_info().rss / 1e6
+        t = time.time()
+        msg = 'using {:.3f} [Mb] (increase of {:.3f} [Mb]) after {:.3f} [s]'.format(mem, mem - self.mem, t - self.time)
+        if log:
+            msg = '[{}] {}'.format(log, msg)
+        print(msg, flush=True)
+        self.mem = mem
+        self.time = t
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        """Exit context."""
+        self()
 
 
 @np.vectorize
@@ -380,13 +426,13 @@ def test_direct_power():
 
 
 def test_catalog_power():
-    nmesh = 100
+    nmesh = 300
     kedges = np.linspace(0., 0.1, 6)
     ells = (0, 2)
     resampler = 'tsc'
     interlacing = 2
-    data1, data2 = generate_catalogs(size=10000, boxsize=(1000.,) * 3, n_individual_weights=1, n_bitwise_weights=2, seed=42)
-    randoms1, randoms2 = generate_catalogs(size=10000, boxsize=(1000.,) * 3, n_individual_weights=1, n_bitwise_weights=0, seed=84)
+    data1, data2 = generate_catalogs(size=50000, boxsize=(2000.,) * 3, n_individual_weights=1, n_bitwise_weights=2, seed=42)
+    randoms1, randoms2 = generate_catalogs(size=100000, boxsize=(2000.,) * 3, n_individual_weights=1, n_bitwise_weights=0, seed=84)
     selection_attrs = {'theta': (0., 1.)}
 
     from collections import namedtuple
@@ -403,6 +449,7 @@ def test_catalog_power():
                             direct_selection_attrs=selection_attrs)
     direct = DirectPower(power.poles.k, positions1=data1[:3], weights1=data1[3:], position_type='xyz',
                          ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual')
+
     assert np.allclose(power.poles.power_direct_nonorm, direct.power_nonorm)
 
     power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
@@ -458,12 +505,14 @@ def test_catalog_power():
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
                             direct_selection_attrs=selection_attrs, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
 
-    direct_D1D2 = DirectPower(power.poles.k, positions1=data1[:3], weights1=data1[3:], weights2=data2[3:], position_type='xyz',
-                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
-    direct_D1R2 = DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms1[:3], weights1=data1[3:], weights2=randoms1[3:], position_type='xyz',
-                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
-    direct_R1D2 = DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data1[:3], weights1=randoms1[3:], weights2=data2[3:], position_type='xyz',
-                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+    with MemoryMonitor() as mem:
+        direct_D1D2 = DirectPower(power.poles.k, positions1=data1[:3], weights1=data1[3:], weights2=data2[3:], position_type='xyz',
+                                  ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+        direct_D1R2 = DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms1[:3], weights1=data1[3:], weights2=randoms1[3:], position_type='xyz',
+                                  ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+        direct_R1D2 = DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data1[:3], weights1=randoms1[3:], weights2=data2[3:], position_type='xyz',
+                                  ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+
     assert np.allclose(power.poles.power_direct_nonorm, get_alpha(power.attrs, 'DD') * direct_D1D2.power_nonorm - get_alpha(power.attrs, 'DR') * direct_D1R2.power_nonorm - get_alpha(power.attrs, 'RD') * direct_R1D2.power_nonorm)
     assert direct_D1D2.same_shotnoise
     assert power.poles.shotnoise != 0.

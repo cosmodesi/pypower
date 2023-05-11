@@ -7,18 +7,7 @@ from mpi4py import MPI
 
 from pypower import DirectCorr, CatalogFFTPower, mpi, utils, setup_logging
 
-
-def generate_catalogs(size=100, boxsize=(1000,) * 3, offset=(1000., 0., 0.), n_individual_weights=1, n_bitwise_weights=0, seed=42):
-    rng = np.random.RandomState(seed=seed)
-    toret = []
-    for i in range(2):
-        positions = [o + rng.uniform(0., 1., size) * b for o, b in zip(offset, boxsize)]
-        weights = utils.pack_bitarrays(*[rng.randint(0, 2, size) for i in range(64 * n_bitwise_weights)], dtype=np.uint64)
-        # weights = utils.pack_bitarrays(*[rng.randint(0, 2, size) for i in range(33)], dtype=np.uint64)
-        # weights = [rng.randint(0, 0xffffffff, size, dtype=np.uint64) for i in range(n_bitwise_weights)]
-        weights += [rng.uniform(0.5, 1., size) for i in range(n_individual_weights)]
-        toret.append(positions + weights)
-    return toret
+from test_direct_power import generate_catalogs, MemoryMonitor
 
 
 def diff(position1, position2):
@@ -322,13 +311,13 @@ def test_direct_corr():
 
 
 def test_catalog_power():
-    nmesh = 100
+    nmesh = 300
     kedges = np.linspace(0., 0.1, 6)
     ells = (0, 2)
     resampler = 'tsc'
     interlacing = 2
-    data1, data2 = generate_catalogs(size=10000, boxsize=(1000.,) * 3, n_individual_weights=1, n_bitwise_weights=2, seed=42)
-    randoms1, randoms2 = generate_catalogs(size=10000, boxsize=(1000.,) * 3, n_individual_weights=1, n_bitwise_weights=0, seed=84)
+    data1, data2 = generate_catalogs(size=50000, boxsize=(2000.,) * 3, n_individual_weights=1, n_bitwise_weights=2, seed=42)
+    randoms1, randoms2 = generate_catalogs(size=100000, boxsize=(2000.,) * 3, n_individual_weights=1, n_bitwise_weights=0, seed=84)
     selection_attrs = {'theta': (0., 1.)}
 
     from collections import namedtuple
@@ -401,12 +390,14 @@ def test_catalog_power():
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
                             direct_selection_attrs=selection_attrs, direct_edges=direct_edges, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
 
-    direct_D1D2 = DirectCorr(direct_edges, positions1=data1[:3], weights1=data1[3:], weights2=data2[3:], position_type='xyz',
-                             ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
-    direct_D1R2 = DirectCorr(direct_edges, positions1=data1[:3], positions2=randoms1[:3], weights1=data1[3:], weights2=randoms1[3:], position_type='xyz',
-                             ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
-    direct_R1D2 = DirectCorr(direct_edges, positions1=randoms1[:3], positions2=data1[:3], weights1=randoms1[3:], weights2=data2[3:], position_type='xyz',
-                             ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+    with MemoryMonitor() as mem:
+        direct_D1D2 = DirectCorr(direct_edges, positions1=data1[:3], weights1=data1[3:], weights2=data2[3:], position_type='xyz',
+                                ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+        direct_D1R2 = DirectCorr(direct_edges, positions1=data1[:3], positions2=randoms1[:3], weights1=data1[3:], weights2=randoms1[3:], position_type='xyz',
+                                ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+        direct_R1D2 = DirectCorr(direct_edges, positions1=randoms1[:3], positions2=data1[:3], weights1=randoms1[3:], weights2=data2[3:], position_type='xyz',
+                                ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+
     assert np.allclose(power.poles.corr_direct_nonorm, get_alpha(power.attrs, 'DD') * direct_D1D2.corr_nonorm - get_alpha(power.attrs, 'DR') * direct_D1R2.corr_nonorm - get_alpha(power.attrs, 'RD') * direct_R1D2.corr_nonorm)
     assert direct_D1D2.same_shotnoise
     assert power.poles.shotnoise != 0.
