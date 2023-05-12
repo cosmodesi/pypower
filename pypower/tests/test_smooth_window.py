@@ -165,7 +165,7 @@ def test_window():
         test.save(fn)
 
     assert np.allclose(test(projs[0], 1. / k[::-1]), window_real.corr[0])
-    test.select(rp=2.5)
+    test.select(rp=(2.5, np.inf))
 
 
 def test_fft_window():
@@ -312,7 +312,6 @@ def test_fft_window():
 
         if los in ['firstpoint', 'endpoint']:
             window = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos', direct_selection_attrs={'rp': (0., 2.5)}, direct_edges={'step': 0.2, 'max': 10.}).poles
-            #assert np.allclose(window.get_power(add_direct=False), window_root.power)
             window.to_real()
 
 

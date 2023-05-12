@@ -515,21 +515,20 @@ class CorrelationFunctionSmoothWindow(BaseClass):
         import copy
         return copy.deepcopy(self)
 
-    def select(self, rp=0.):
-        """Remove contribution from transverse separation smaller than input ``rp`` value."""
+    def select(self, rp=(0., np.inf)):
+        """Restrict window to contribution from transverse separation in input ``rp`` range."""
         new = self.deepcopy()
-        mu_min = np.sqrt(np.clip(1. - (rp / self.sep)**2, 0., None))
+        mu_max, mu_min = (np.sqrt(np.clip(1. - (rp / self.sep)**2, 0., 1.)) for rp in rp)
 
         def trapz_poly(poly):
             integ = poly.integ()
-            toret = integ(1.) - integ(mu_min) + integ(-mu_min) - integ(-1.)
+            toret = integ(mu_max) - integ(mu_min) + integ(-mu_min) - integ(-mu_max)
             return toret
 
         for iprojout, projout in enumerate(self.projs):
             new.corr[iprojout][...] = 0.
             for iprojin, projin in enumerate(self.projs):
-                fll = (2 * projout.ell + 1.) / 2. * trapz_poly(special.legendre(projout.ell) * special.legendre(projin.ell))
-                tmp = (projout.ell == projin.ell) * 1. - fll
+                tmp = (2 * projout.ell + 1.) / 2. * trapz_poly(special.legendre(projout.ell) * special.legendre(projin.ell))
                 new.corr[iprojout] += tmp * self.corr[iprojin]
 
         return new
