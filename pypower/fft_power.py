@@ -2461,6 +2461,10 @@ class CatalogFFTPower(MeshFFTPower):
             direct_corr = direct_edges is not None
             if direct_corr:
                 DirectEngine = get_direct_corr_engine(direct_engine)
+                if isinstance(direct_edges, dict):
+                    ds = direct_edges.get('step', 1.)
+                    if direct_edges.get('max', None) is None:
+                        direct_edges['max'] = np.sum(self.boxsize**2)**0.5 + 1e-5 * ds
             else:
                 DirectEngine = get_direct_power_engine(direct_engine)
             with_twopoint_weights = any(n_bitwise_weights.values()) or any(twopoint_weights.values())

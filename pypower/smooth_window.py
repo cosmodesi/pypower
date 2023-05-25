@@ -68,11 +68,11 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             self.shotnoise_nonorm = _make_array(0., len(self.power_nonorm), dtype=self.power_nonorm.dtype)
             for iproj, proj in enumerate(self.projs):
                 if proj.ell == 0: self.shotnoise_nonorm[iproj] = shotnoise_nonorm
-        self.wnorm = _make_array(self.wnorm, len(self.power_nonorm), dtype=self.power_nonorm.dtype)
+        self.wnorm = _make_array(self.wnorm, len(self.power_nonorm), dtype=self.power_nonorm.real.dtype)
         if wnorm_ref is None:
             self.wnorm_ref = self.wnorm.copy()
         else:
-            self.wnorm_ref = _make_array(wnorm_ref, len(self.power_nonorm), dtype=self.power_nonorm.dtype)
+            self.wnorm_ref = _make_array(wnorm_ref, len(self.power_nonorm), dtype=self.power_nonorm.real.dtype)
         self.volume = None
         if 'boxsize' in self.attrs:
             self.volume = (2. * np.pi)**3 / np.prod(self.attrs['boxsize']) * self.nmodes

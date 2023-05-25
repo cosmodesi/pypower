@@ -411,6 +411,12 @@ def test_catalog_power():
     assert np.allclose(poles.power[:2], power.poles.power)
     assert np.allclose(poles.power[2:], power2.poles.power)
 
+    direct_edges = {'step': 0.2}
+    power2 = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
+                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=4, edges=kedges, position_type='xyz',
+                             direct_selection_attrs=selection_attrs, direct_edges=direct_edges, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
+
+
 
 if __name__ == '__main__':
 
