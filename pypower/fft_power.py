@@ -1162,7 +1162,7 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         modes = (np.repeat(self.modes[0][:, None], len(dmu), axis=-1), np.repeat(mu[None, :], len(self.k), axis=0))
         power_nonorm, power_direct_nonorm = 0, 0
         with_corr_direct = self.corr_direct_nonorm is not None
-        corr_direct_nonorm, sep_direct = None, None, None
+        corr_direct_nonorm = sep_direct = None
         if with_corr_direct:
             corr_direct_nonorm = 0
             sep_direct = np.repeat(self.sep_direct[:, None], len(dmu), axis=-1)
