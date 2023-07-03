@@ -325,10 +325,12 @@ class BaseMatrix(BaseClass):
                 else:
                     shape = (len(self.xin[iin]), len(self.xout[iout]))
                     if projout == projin:
+                        self.log_info('Required ({}, {}) is not in matrix. Trying to set diagonal matrix for these projections.'.format(projin, projout))
                         if shape[1] != shape[0]:
-                            raise ValueError('Cannot set diagonal matrix for ({}, {}) as expected shape is {}'.format(projin, projout, shape))
+                            raise ValueError('Required ({}, {}) is not in matrix. Cannot set diagonal matrix for these projections as expected shape is {}'.format(projin, projout, shape))
                         tmp = np.eye(shape[0], dtype=self.dtype)
                     else:
+                        self.log_info('Required ({}, {}) is not in matrix. Setting zero matrix for these projections.'.format(projin, projout))
                         tmp = np.zeros(shape, dtype=self.dtype)
                 line.append(tmp)
             value.append(line)

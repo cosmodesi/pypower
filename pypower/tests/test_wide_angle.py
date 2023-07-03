@@ -51,13 +51,16 @@ def test_matrix():
 
     projsin = [Projection(0, 0), Projection(2, 1), Projection(4, 0)]
     projsout = [Projection(2, 0), Projection(1, 1), Projection(2, 0)]
-    xin = xout = np.arange(20)
-    matrix = np.eye(len(projsin) * len(xin))
+    xin, xout = np.arange(40), np.arange(20)
+    shape = (len(projsin) * len(xin), len(projsout) * len(xout))
+    matrix = np.arange(np.prod(shape)).reshape(shape)
     matrix = BaseMatrix(matrix, xin, xout, projsin, projsout, weightsin=np.linspace(0.2, 1., len(xin)), weightsout=np.linspace(0.2, 1., len(xout)))
+    matrix.select_proj(projsout=[(1, 1), (2, 0), (2, 0)])
+    assert matrix.projsout == [Projection(1, 1), Projection(2, 0), Projection(2, 0)]
     matrix.select_proj(projsout=projsout[:-1])
     assert matrix.projsout == projsout[:-1]
     assert len(matrix.xout) == len(matrix.projsout)
-    assert matrix.shape == (len(projsin) * len(xin), len(matrix.projsout) * len(xin))
+    assert matrix.shape == (len(projsin) * len(xin), len(matrix.projsout) * len(xout))
     matrix.select_x(xinlim=(2, np.inf))
     assert len(matrix.xin[0]) == len(xin) - 2
     assert matrix.shape == (len(matrix.projsin) * len(matrix.xin[0]), len(matrix.projsout) * len(matrix.xout[0]))
@@ -89,6 +92,23 @@ def test_matrix():
 
     matrix.prod_proj([[0, 1.]] * 3, axes=('out', -1), projs=matrix.projsout + [matrix.projsout[-1]])
     assert len(matrix.xout) == len(matrix.projsout) == 3
+
+    projsin = [Projection(0, None), Projection(2, None)]
+    projsout = [Projection(0, None), Projection(2, None), Projection(4, None)]
+    xin, xout = np.arange(23), np.arange(20)
+    shape = (len(projsin) * len(xin), len(projsout) * len(xout))
+    matrix = np.arange(np.prod(shape)).reshape(shape)
+    matrix = BaseMatrix(matrix, xin, xout, projsin, projsout, weightsin=np.linspace(0.2, 1., len(xin)), weightsout=np.linspace(0.2, 1., len(xout)))
+    matrix.select_proj(projsin=(0, None), projsout=(0, None))
+    assert matrix.projsout == [Projection(0, None)]
+
+    projsin = [Projection(0, 0)]
+    projsout = [Projection(2, 0)]
+    xin, xout = np.arange(20), np.arange(20)
+    shape = (len(projsin) * len(xin), len(projsout) * len(xout))
+    matrix = np.arange(np.prod(shape)).reshape(shape)
+    matrix = BaseMatrix(matrix, xin, xout, projsin, projsout, weightsin=np.linspace(0.2, 1., len(xin)), weightsout=np.linspace(0.2, 1., len(xout)))
+    matrix.select_proj(projsout=[(0, 0), (4, 0)])
 
 
 def test_power_spectrum_odd_wideangle():
