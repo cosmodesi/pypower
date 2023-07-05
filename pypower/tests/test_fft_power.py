@@ -146,152 +146,151 @@ def test_fft():
 
 def test_power_statistic():
 
-    for dtype in ['f8', 'c16']:
+    edges = np.linspace(0., 0.2, 11)
+    modes = (edges[:-1] + edges[1:]) / 2.
+    nmodes = np.arange(modes.size)
+    ells = (0, 2, 4)
+    power = [ill * np.arange(nmodes.size, dtype='f8') + 0.1j * (np.arange(nmodes.size, dtype='f8') - 5) for ill in ells]
+    power = PowerSpectrumStatistics(edges, modes, power, nmodes, ells, statistic='multipole')
+    power_ref = power.copy()
+    power.rebin(factor=2)
+    assert power.power.shape[1] == power_ref.power.shape[1] // 2  # poles are first dimension
+    k = (power_ref.modes[0][::2] * power_ref.nmodes[::2] + power_ref.modes[0][1::2] * power_ref.nmodes[1::2]) / (power_ref.nmodes[::2] + power_ref.nmodes[1::2])
+    assert np.allclose(power.k, k)
+    assert np.allclose(power.kedges, np.linspace(0., 0.2, 6))
+    assert power.shape == (modes.size // 2,)
+    assert np.allclose(power_ref[::2].power_nonorm, power.power_nonorm)
+    power2 = power_ref.copy()
+    power2.select((0., 0.1, 0.04))
+    assert np.all(power2.modes[0] <= 0.1)
+    assert np.allclose(np.diff(power2.edges[0]), 0.04)
+    wedges = power_ref.to_wedges(muedges=np.linspace(-1., 1., 11))
+    assert wedges.shape == power_ref.shape + (10,)
+    wedges.get_power()
 
-        edges = np.linspace(0., 0.2, 11)
-        modes = (edges[:-1] + edges[1:]) / 2.
-        nmodes = np.arange(modes.size)
-        ells = (0, 2, 4)
-        power = [ill * np.arange(nmodes.size, dtype='f8') + 0.1j * (np.arange(nmodes.size, dtype='f8') - 5) for ill in ells]
-        power = PowerSpectrumStatistics(edges, modes, power, nmodes, ells, statistic='multipole')
-        power_ref = power.copy()
-        power.rebin(factor=2)
-        assert power.power.shape[1] == power_ref.power.shape[1] // 2  # poles are first dimension
-        k = (power_ref.modes[0][::2] * power_ref.nmodes[::2] + power_ref.modes[0][1::2] * power_ref.nmodes[1::2]) / (power_ref.nmodes[::2] + power_ref.nmodes[1::2])
-        assert np.allclose(power.k, k)
-        assert np.allclose(power.kedges, np.linspace(0., 0.2, 6))
-        assert power.shape == (modes.size // 2,)
-        assert np.allclose(power_ref[::2].power_nonorm, power.power_nonorm)
-        power2 = power_ref.copy()
-        power2.select((0., 0.1))
-        assert np.all(power2.modes[0] <= 0.1)
-        wedges = power_ref.to_wedges(muedges=np.linspace(-1., 1., 11))
-        assert wedges.shape == power_ref.shape + (10,)
-        wedges.get_power()
+    def mid(edges):
+        return (edges[:-1] + edges[1:]) / 2.
 
-        def mid(edges):
-            return (edges[:-1] + edges[1:]) / 2.
+    for axis in range(power.ndim): assert np.allclose(power.modeavg(axis=axis, method='mid'), mid(power.edges[axis]))
 
-        for axis in range(power.ndim): assert np.allclose(power.modeavg(axis=axis, method='mid'), mid(power.edges[axis]))
+    power2 = power_ref + power_ref
+    assert np.allclose(power2.power, power_ref.power, equal_nan=True)
+    assert np.allclose(power2.wnorm, 2. * power_ref.wnorm, equal_nan=True)
 
-        power2 = power_ref + power_ref
-        assert np.allclose(power2.power, power_ref.power, equal_nan=True)
-        assert np.allclose(power2.wnorm, 2. * power_ref.wnorm, equal_nan=True)
+    power2 = PowerSpectrumMultipoles.concatenate_proj(power_ref, power_ref)
+    assert np.allclose(power2.power[:len(power_ref.power)], power_ref.power, equal_nan=True)
+    power2.select((0., 0.3), ells=(0, 2))
+    assert power2.ells == (0, 2)
 
-        power2 = PowerSpectrumMultipoles.concatenate_proj(power_ref, power_ref)
-        assert np.allclose(power2.power[:len(power_ref.power)], power_ref.power, equal_nan=True)
-        power2.select(ells=(0, 2))
-        assert power2.ells == (0, 2)
+    power = power_ref.copy()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # tmp_dir = '_tests'
+        # power.mpicomm = mpicomm # to get a Barrier (otherwise the directory on root=0 may be deleted before other ranks access it)
+        # fn = mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        power.save(fn)
+        test = PowerSpectrumStatistics.load(fn)
+        assert np.allclose(test.power, power.power, equal_nan=True)
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        test.save(fn)
 
-        power = power_ref.copy()
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # tmp_dir = '_tests'
-            # power.mpicomm = mpicomm # to get a Barrier (otherwise the directory on root=0 may be deleted before other ranks access it)
-            # fn = mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
-            fn = os.path.join(tmp_dir, 'tmp.npy')
-            power.save(fn)
-            test = PowerSpectrumStatistics.load(fn)
-            assert np.allclose(test.power, power.power, equal_nan=True)
-            fn = os.path.join(tmp_dir, 'tmp.npy')
-            test.save(fn)
+    power2 = power.copy()
+    power2.modes[0] = 1
+    assert np.all(power.modes[0] == test.modes[0])
 
-        power2 = power.copy()
-        power2.modes[0] = 1
-        assert np.all(power.modes[0] == test.modes[0])
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_dir = '_tests'
+        fn = os.path.join(tmp_dir, 'tmp_poles.txt')
+        power.save_txt(fn, complex=False)
+        test = np.loadtxt(fn, unpack=True)
+        assert np.allclose(test, [power.nmodes, power.modeavg(method='mid'), power.k] + list(power.power.real), equal_nan=True)
+        power.save_txt(fn, complex=True)
+        test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
+        assert np.allclose(test, [power.nmodes, power.modeavg(method='mid'), power.k] + list(power.power), equal_nan=True)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_dir = '_tests'
-            fn = os.path.join(tmp_dir, 'tmp_poles.txt')
-            power.save_txt(fn, complex=False)
-            test = np.loadtxt(fn, unpack=True)
-            assert np.allclose(test, [power.nmodes, power.modeavg(method='mid'), power.k] + list(power.power.real), equal_nan=True)
-            power.save_txt(fn, complex=True)
-            test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
-            assert np.allclose(test, [power.nmodes, power.modeavg(method='mid'), power.k] + list(power.power), equal_nan=True)
+    for complex in [False, True]:
+        assert np.allclose(power(complex=complex, return_k=True)[1], power.get_power(complex=complex), equal_nan=True)
+        assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
+        assert np.isnan(power(k=-1., ell=0, complex=complex))
+        assert not np.isnan(power(k=modes, complex=complex)).any()
+        assert np.allclose(power(k=[0.1, 0.2], ell=power.ells), power(k=[0.1, 0.2]))
+        assert power(k=[0.1, 0.2], complex=complex).shape == (len(power.ells), 2)
+        assert power(k=[0.1, 0.2], ell=0, complex=complex).shape == (2,)
+        assert power(k=0.1, ell=0, complex=complex).shape == ()
+        assert power(k=0.1, ell=(0, 2), complex=complex).shape == (2,)
+        assert np.allclose(power(k=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], complex=complex)[..., ::-1], atol=0)
+        assert np.allclose(power(k=[0.2, 0.1], ell=(0, 2), complex=complex), power(k=[0.1, 0.2], ell=(2, 0), complex=complex)[::-1, ::-1], atol=0)
 
-        for complex in [False, True]:
-            assert np.allclose(power(complex=complex, return_k=True)[1], power.get_power(complex=complex), equal_nan=True)
-            assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
-            assert np.isnan(power(k=-1., ell=0, complex=complex))
-            assert not np.isnan(power(k=modes, complex=complex)).any()
-            assert np.allclose(power(k=[0.1, 0.2], ell=power.ells), power(k=[0.1, 0.2]))
-            assert power(k=[0.1, 0.2], complex=complex).shape == (len(power.ells), 2)
-            assert power(k=[0.1, 0.2], ell=0, complex=complex).shape == (2,)
-            assert power(k=0.1, ell=0, complex=complex).shape == ()
-            assert power(k=0.1, ell=(0, 2), complex=complex).shape == (2,)
-            assert np.allclose(power(k=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], complex=complex)[..., ::-1], atol=0)
-            assert np.allclose(power(k=[0.2, 0.1], ell=(0, 2), complex=complex), power(k=[0.1, 0.2], ell=(2, 0), complex=complex)[::-1, ::-1], atol=0)
+    edges = (np.linspace(0., 0.2, 11), np.linspace(-1., 1., 21))
+    modes = np.meshgrid(*((e[:-1] + e[1:]) / 2 for e in edges), indexing='ij')
+    nmodes = np.arange(modes[0].size, dtype='i8').reshape(modes[0].shape)
+    power = np.arange(nmodes.size, dtype='f8').reshape(nmodes.shape)
+    power = power + 0.1j * (power - 5)
+    power = PowerSpectrumStatistics(edges, modes, power, nmodes, statistic='wedge')
+    power_ref = power.copy()
+    power.rebin(factor=(2, 2))
+    assert power.power.shape[0] == power_ref.power.shape[0] // 2
+    assert power.modes[0].shape == (5, 10)
+    assert not np.isnan(power(0., 0.))
+    assert np.isnan(power(-1., 0.))
+    power.rebin(factor=(1, 10))
+    assert power.power_nonorm.shape == (5, 1)
+    assert np.allclose(power_ref[::2, ::20].power_nonorm, power.power_nonorm, atol=0)
+    assert power_ref[1:7:2].shape[0] == 3
+    power2 = power_ref.copy()
+    power2.select(None, (0., 0.5))
+    assert np.all(power2.modes[1] <= 0.5)
+    for axis in range(power.ndim): assert np.allclose(power.modeavg(axis=axis, method='mid'), mid(power.edges[axis]))
 
-        edges = (np.linspace(0., 0.2, 11), np.linspace(-1., 1., 21))
+    power2 = power_ref + power_ref
+    assert np.allclose(power2.power, power_ref.power)
+    assert np.allclose(power2.wnorm, 2. * power_ref.wnorm)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # tmp_dir = '_tests'
+        # power.mpicomm = mpicomm # to get a Barrier (otherwise the directory on root=0 may be deleted before other ranks access it)
+        # fn = mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        power.save(fn)
+        test = PowerSpectrumStatistics.load(fn)
+        assert np.all(test.power == power.power)
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        test.save(fn)
+
+    power = power_ref.copy()
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # tmp_dir = '_tests'
+        fn = os.path.join(tmp_dir, 'tmp_wedges.txt')
+        power.save_txt(fn, complex=False)
+        test = np.loadtxt(fn, unpack=True)
+        mids = np.meshgrid(*(power.modeavg(axis=axis, method='mid') for axis in range(power.ndim)), indexing='ij')
+        assert np.allclose([tt.reshape(power.shape) for tt in test], [power.nmodes, mids[0], power.modes[0], mids[1], power.modes[1], power.power.real], equal_nan=True)
+        power.save_txt(fn, complex=True)
+        test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
+        assert np.allclose([tt.reshape(power.shape) for tt in test], [power.nmodes, mids[0], power.modes[0], mids[1], power.modes[1], power.power], equal_nan=True)
+
+    for muedges in [np.linspace(-1., 1., 21), np.linspace(-1., 1., 2)]:
+        edges = (np.linspace(0., 0.2, 11), muedges)
         modes = np.meshgrid(*((e[:-1] + e[1:]) / 2 for e in edges), indexing='ij')
-        nmodes = np.arange(modes[0].size, dtype='i8').reshape(modes[0].shape)
+        nmodes = np.ones(tuple(len(e) - 1 for e in edges), dtype='i8')
         power = np.arange(nmodes.size, dtype='f8').reshape(nmodes.shape)
         power = power + 0.1j * (power - 5)
         power = PowerSpectrumStatistics(edges, modes, power, nmodes, statistic='wedge')
-        power_ref = power.copy()
-        power.rebin(factor=(2, 2))
-        assert power.power.shape[0] == power_ref.power.shape[0] // 2
-        assert power.modes[0].shape == (5, 10)
-        assert not np.isnan(power(0., 0.))
-        assert np.isnan(power(-1., 0.))
-        power.rebin(factor=(1, 10))
-        assert power.power_nonorm.shape == (5, 1)
-        assert np.allclose(power_ref[::2, ::20].power_nonorm, power.power_nonorm, atol=0)
-        assert power_ref[1:7:2].shape[0] == 3
-        power2 = power_ref.copy()
-        power2.select(None, (0., 0.5))
-        assert np.all(power2.modes[1] <= 0.5)
-        for axis in range(power.ndim): assert np.allclose(power.modeavg(axis=axis, method='mid'), mid(power.edges[axis]))
-
-        power2 = power_ref + power_ref
-        assert np.allclose(power2.power, power_ref.power)
-        assert np.allclose(power2.wnorm, 2. * power_ref.wnorm)
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # tmp_dir = '_tests'
-            # power.mpicomm = mpicomm # to get a Barrier (otherwise the directory on root=0 may be deleted before other ranks access it)
-            # fn = mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
-            fn = os.path.join(tmp_dir, 'tmp.npy')
-            power.save(fn)
-            test = PowerSpectrumStatistics.load(fn)
-            assert np.all(test.power == power.power)
-            fn = os.path.join(tmp_dir, 'tmp.npy')
-            test.save(fn)
-
-        power = power_ref.copy()
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # tmp_dir = '_tests'
-            fn = os.path.join(tmp_dir, 'tmp_wedges.txt')
-            power.save_txt(fn, complex=False)
-            test = np.loadtxt(fn, unpack=True)
-            mids = np.meshgrid(*(power.modeavg(axis=axis, method='mid') for axis in range(power.ndim)), indexing='ij')
-            assert np.allclose([tt.reshape(power.shape) for tt in test], [power.nmodes, mids[0], power.modes[0], mids[1], power.modes[1], power.power.real], equal_nan=True)
-            power.save_txt(fn, complex=True)
-            test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
-            assert np.allclose([tt.reshape(power.shape) for tt in test], [power.nmodes, mids[0], power.modes[0], mids[1], power.modes[1], power.power], equal_nan=True)
-
-        for muedges in [np.linspace(-1., 1., 21), np.linspace(-1., 1., 2)]:
-            edges = (np.linspace(0., 0.2, 11), muedges)
-            modes = np.meshgrid(*((e[:-1] + e[1:]) / 2 for e in edges), indexing='ij')
-            nmodes = np.ones(tuple(len(e) - 1 for e in edges), dtype='i8')
-            power = np.arange(nmodes.size, dtype='f8').reshape(nmodes.shape)
-            power = power + 0.1j * (power - 5)
-            power = PowerSpectrumStatistics(edges, modes, power, nmodes, statistic='wedge')
-            for complex in [False, True]:
-                assert np.allclose(power(complex=complex, return_k=True, return_mu=True)[2], power.get_power(complex=complex), equal_nan=True)
-                assert np.allclose(power(complex=complex, return_k=True)[1], power.get_power(complex=complex), equal_nan=True)
-                assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
-                assert not np.isnan(power(0., 0., complex=complex))
-                assert np.isnan(power([-1.] * 5, 0., complex=complex)).all()
-                assert np.isnan(power(-1., [0.] * 5, complex=complex)).all()
-                assert power(k=[0.1, 0.2], complex=complex).shape == (2, power.shape[1])
-                assert power(k=[0.1, 0.2], mu=[0.3], complex=complex).shape == (2, 1)
-                assert power(k=[[0.1, 0.2]] * 3, mu=[[0.3]] * 2, complex=complex).shape == (3, 2, 2, 1)
-                assert power(k=[0.1, 0.2], mu=0., complex=complex).shape == (2,)
-                assert power(k=0.1, mu=0., complex=complex).shape == ()
-                assert power(k=0.1, mu=[0., 0.1], complex=complex).shape == (2,)
-                assert np.allclose(power(k=[0.2, 0.1], mu=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], mu=[0.1, 0.2], complex=complex)[::-1, ::-1], atol=0)
+        for complex in [False, True]:
+            assert np.allclose(power(complex=complex, return_k=True, return_mu=True)[2], power.get_power(complex=complex), equal_nan=True)
+            assert np.allclose(power(complex=complex, return_k=True)[1], power.get_power(complex=complex), equal_nan=True)
+            assert np.allclose(power(complex=complex), power.get_power(complex=complex), equal_nan=True)
+            assert not np.isnan(power(0., 0., complex=complex))
+            assert np.isnan(power([-1.] * 5, 0., complex=complex)).all()
+            assert np.isnan(power(-1., [0.] * 5, complex=complex)).all()
+            assert power(k=[0.1, 0.2], complex=complex).shape == (2, power.shape[1])
+            assert power(k=[0.1, 0.2], mu=[0.3], complex=complex).shape == (2, 1)
+            assert power(k=[[0.1, 0.2]] * 3, mu=[[0.3]] * 2, complex=complex).shape == (3, 2, 2, 1)
+            assert power(k=[0.1, 0.2], mu=0., complex=complex).shape == (2,)
+            assert power(k=0.1, mu=0., complex=complex).shape == ()
+            assert power(k=0.1, mu=[0., 0.1], complex=complex).shape == (2,)
+            assert np.allclose(power(k=[0.2, 0.1], mu=[0.2, 0.1], complex=complex), power(k=[0.1, 0.2], mu=[0.1, 0.2], complex=complex)[::-1, ::-1], atol=0)
 
 
 def test_ylm():

@@ -641,6 +641,7 @@ class BasePowerSpectrumStatistics(BaseClass):
 
             statistic.select((0, 0.3))  # restrict first axis to (0, 0.3)
             statistic.select(None, (0, 0.2))  # restrict second axis to (0, 0.2)
+            statistic.select((0, 0.3, 0.01))  # rebin to match step size of 0.01 and restrict to (0, 0.3)
 
         """
         if len(xlims) > self.ndim:
@@ -649,8 +650,20 @@ class BasePowerSpectrumStatistics(BaseClass):
         for iaxis, xlim in enumerate(xlims):
             if xlim is None:
                 slices.append(slice(None))
+            elif len(xlim) == 3:
+                factor = int(xlim[2] / np.diff(self.edges[iaxis]).mean() + 0.5)
+                if not np.allclose(np.diff(self.edges[iaxis][::factor]), xlim[2]):
+                    raise ValueError('Unable to match step {} with edges {}'.format(xlim[2], self.edges[iaxis]))
+                slices.append(slice(0, (self.shape[iaxis] // factor) * factor, factor))
+            elif len(xlim) != 2:
+                raise ValueError('Input limits must be a tuple (min, max) or (min, max, step)')
+        self.slice(*slices)
+        slices = []
+        for iaxis, xlim in enumerate(xlims):
+            if xlim is None:
+                slices.append(slice(None))
             else:
-                x = self.modeavg(axis=iaxis)
+                x = self.modeavg(axis=iaxis, method='mid')
                 indices = np.flatnonzero((x >= xlim[0]) & (x <= xlim[1]))
                 if indices.size:
                     slices.append(slice(indices[0], indices[-1] + 1, 1))

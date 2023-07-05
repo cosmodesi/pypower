@@ -192,6 +192,8 @@ class BaseCorrelationFunctionStatistics(BaseClass):
                 toret = (self.edges[axis][:-1] + self.edges[axis][1:]) / 2.
         return toret
 
+    sepavg = modeavg
+
     def __call__(self):
         """Method that interpolates correlation function measurement at any point."""
         raise NotImplementedError('Implement method "__call__" in your {}'.format(self.__class__.__name__))
@@ -213,8 +215,9 @@ class BaseCorrelationFunctionStatistics(BaseClass):
 
         .. code-block:: python
 
-            statistic.select((0, 30)) # restrict first axis to (0, 30)
-            statistic.select(None, (0, 20)) # restrict second axis to (0, 20)
+            statistic.select((0, 30))  # restrict first axis to (0, 30)
+            statistic.select(None, (0, 20))  # restrict second axis to (0, 20)
+            statistic.select((0, 30, 4))   # rebin to match step size of 4 and restrict to (0, 30)
 
         """
         if len(xlims) > self.ndim:
@@ -223,8 +226,20 @@ class BaseCorrelationFunctionStatistics(BaseClass):
         for iaxis, xlim in enumerate(xlims):
             if xlim is None:
                 slices.append(slice(None))
+            elif len(xlim) == 3:
+                factor = int(xlim[2] / np.diff(self.edges[iaxis]).mean() + 0.5)
+                if not np.allclose(np.diff(self.edges[iaxis][::factor]), xlim[2]):
+                    raise ValueError('Unable to match step {} with edges {}'.format(xlim[2], self.edges[iaxis]))
+                slices.append(slice(0, (self.shape[iaxis] // factor) * factor, factor))
+            elif len(xlim) != 2:
+                raise ValueError('Input limits must be a tuple (min, max) or (min, max, step)')
+        self.slice(*slices)
+        slices = []
+        for iaxis, xlim in enumerate(xlims):
+            if xlim is None:
+                slices.append(slice(None))
             else:
-                x = self.modeavg(axis=iaxis)
+                x = self.modeavg(axis=iaxis, method='mid')
                 indices = np.flatnonzero((x >= xlim[0]) & (x <= xlim[1]))
                 if indices.size:
                     slices.append(slice(indices[0], indices[-1] + 1, 1))
