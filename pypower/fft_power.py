@@ -1517,7 +1517,7 @@ def normalization(*meshs, uniform=False, resampler='cic', cellsize=10., fields=N
         nmesh, boxsize, boxcenter = _get_mesh_attrs(cellsize=cellsize, positions=positions, boxpad=1.1, mpicomm=mesh1.mpicomm)
         # nmesh += 1
         # boxsize = nmesh * cellsize  # enforce exact cellsize
-        cellsize = boxsize / nmesh  # just to get correct shape
+        cellsize = boxsize / nmesh  # just to get correct shape (i.e., cellsize->(10,10,10) so prod below gives volume)
 
         # Assign positions/weights to mesh
         def get_mesh_nbar(mesh, field='data'):
@@ -1533,6 +1533,7 @@ def normalization(*meshs, uniform=False, resampler='cic', cellsize=10., fields=N
             toret += (get_mesh_nbar(mesh1, field=field1) * get_mesh_nbar(mesh2, field=field2)).csum()
             nfields += 1
         # Meshes are in "weights units" (1/dV missing in each mesh), so multiply by dV * (1/dV)^2
+        # cellsize changed above to 3-vector
         toret /= nfields * np.prod(cellsize)
         return toret
 
