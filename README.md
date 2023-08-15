@@ -68,3 +68,28 @@ python setup.py develop --user
 [nbodykit](https://github.com/bccp/nbodykit) for recipe and most routines for power spectrum estimation.
 Patrick McDonald for [recipe](https://github.com/cosmodesi/GC_derivations) for window function matrix estimation.
 Juan Mena Fernandez for issue reports.
+
+
+# Citations
+
+The power spectrum estimator is (except for to the normalization factor) the same as in
+```
+@ARTICLE{2017JCAP...07..002H,
+       author = {{Hand}, Nick and {Li}, Yin and {Slepian}, Zachary and {Seljak}, Uro{\v{s}}},
+        title = "{An optimal FFT-based anisotropic power spectrum estimator}",
+      journal = {\jcap},
+     keywords = {Astrophysics - Cosmology and Nongalactic Astrophysics},
+         year = 2017,
+        month = jul,
+       volume = {2017},
+       number = {7},
+          eid = {002},
+        pages = {002},
+          doi = {10.1088/1475-7516/2017/07/002},
+archivePrefix = {arXiv},
+       eprint = {1704.02357},
+ primaryClass = {astro-ph.CO},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2017JCAP...07..002H},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+```

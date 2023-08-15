@@ -162,7 +162,7 @@ def test_power_statistic():
     assert np.allclose(power_ref[::2].power_nonorm, power.power_nonorm)
     power2 = power_ref.copy()
     power2.select((0., 0.1, 0.04))
-    assert np.all(power2.modes[0] <= 0.1)
+    assert np.all(power2.modeavg(axis=0, method='mid') <= 0.1)
     assert np.allclose(np.diff(power2.edges[0]), 0.04)
     wedges = power_ref.to_wedges(muedges=np.linspace(-1., 1., 11))
     assert wedges.shape == power_ref.shape + (10,)
