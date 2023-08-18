@@ -424,7 +424,8 @@ class CorrelationFunctionSmoothWindow(BaseClass):
         self.sep = np.asarray(sep)
         self.projs = [Projection(proj) for proj in projs]
         self.corr = np.asarray(corr)
-        self.wnorm_ref = wnorm_ref
+        if wnorm_ref is None: wnorm_ref = 1.
+        self.wnorm_ref = _make_array(wnorm_ref, len(self.corr), dtype=self.corr.real.dtype)
 
     def __call__(self, proj=None, sep=None, return_sep=False, default_zero=False):
         r"""

@@ -211,7 +211,9 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
         projsin = [projin]
         ells = getattr(power, 'ells', [0])  # in case of PowerSpectrumWedges, only 0
         projsout = [Projection(ell=ell, wa_order=None) for ell in ells]
-        xout = [np.squeeze(np.array([modes.ravel() for modes in power.modes]).T)] * len(projsout)  # modes are k for PowerSpectrumMultipoles, (k, mu) for PowerSpectrumWedges
+        xout = [np.array([modes.ravel() for modes in power.modes]).T] * len(projsout)  # modes are k for PowerSpectrumMultipoles, (k, mu) for PowerSpectrumWedges
+        for xx in xout:  # np.squeeze(xx, axis=-1) raises an error when last axis not of size 1
+            if xx.shape[-1] == 1: xx.shape = -1
         weights = [power.nmodes.ravel()] * len(projsout)
         matrix = np.atleast_2d(power.power.ravel())
         attrs = power.attrs.copy()
@@ -607,16 +609,16 @@ class MeshFFTWindow(MeshFFTPower):
                 wfield[:] += cfield[:]
 
             proj_result = project_to_basis(wfield, self.edges, antisymmetric=bool(ellout % 2))[0]
-            result.append(tuple(np.squeeze(proj_result[ii]) for ii in [2, -1]))
+            result.append(tuple(np.ravel(proj_result[ii]) for ii in [2, -1]))
             k, nmodes = proj_result[0], proj_result[3]
 
         del dfield
 
         power, power_zero = (self.nmesh.prod(dtype='f8')**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
         if self.swap: power, power_zero = (tmp.conj() for tmp in (power, power_zero))
-        k, nmodes = np.squeeze(k), np.squeeze(nmodes)
+        k, nmodes = np.ravel(k), np.ravel(nmodes)
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': 0., 'attrs': self.attrs}
-        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
+        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=np.ravel(power_zero), nmodes=nmodes, ells=self.ells, **kwargs)
 
     def run(self):
 

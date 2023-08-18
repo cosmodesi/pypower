@@ -59,7 +59,7 @@ def test_corr_statistic():
     assert np.allclose(corr_ref[::2].corr_nonorm, corr.corr_nonorm)
     corr2 = corr_ref.copy()
     corr2.select((0., 0.1, 0.04))
-    assert np.all(corr2.modes[0] <= 0.1)
+    assert np.all(corr2.modeavg(axis=0, method='mid') <= 0.1)
     assert np.allclose(np.diff(corr2.edges[0]), 0.04)
     wedges = corr_ref.to_wedges(muedges=np.linspace(-1., 1., 11))
     assert wedges.shape == corr_ref.shape + (10,)
@@ -218,6 +218,11 @@ def test_global():
         result.poles.save_txt(fn, complex=False)
         fn = os.path.join(tmp_dir, 'tmp_wedges.txt')
         result.wedges.save_txt(fn, complex=False)
+
+    result = CatalogFFTCorr(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], ells=ells, los=los,
+                            edges=np.linspace(0., 50., 2), boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm)
+    result.poles.get_corr()
+    result.wedges.get_corr()
 
 
 def test_local():

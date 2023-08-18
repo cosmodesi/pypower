@@ -1205,7 +1205,7 @@ class MeshFFTCorr(MeshFFTBase):
             rfield = Aell.c2r()
             del Aell
             proj_result = project_to_basis(rfield, self.edges, exclude_zero=False)[0]
-            result.append(np.squeeze(proj_result[2]))
+            result.append(np.ravel(proj_result[2]))
             result_zero.append(np.ones_like(result[-1]) * rfield.cmean())
             s, nmodes = proj_result[0], proj_result[3]
 
@@ -1302,16 +1302,16 @@ class MeshFFTCorr(MeshFFTBase):
 
             # Project on to 1d s-basis (averaging over mu=[-1, 1])
             proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
-            result.append(4 * np.pi * np.squeeze(proj_result[2]))
+            result.append(4 * np.pi * np.ravel(proj_result[2]))
             proj_result = project_to_basis(Aell_zero, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
-            result_zero.append(4 * np.pi * np.squeeze(proj_result[2]))
+            result_zero.append(4 * np.pi * np.ravel(proj_result[2]))
             s, nmodes = proj_result[0], proj_result[3]
 
         # pmesh convention is F(s) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
         corr, corr_zero = (np.array([r[ells.index(ell)] for ell in self.ells]) for r in (result, result_zero))
         corr, corr_zero = (self.nmesh.prod(dtype='f8')**2 / self.boxsize.prod(dtype='f8') * tmp for tmp in (corr, corr_zero))
         # Format the corr results into :class:`CorrelationFunctionMultipoles` instance
-        s, nmodes = np.squeeze(s), np.squeeze(nmodes)
+        s, nmodes = np.ravel(s), np.ravel(nmodes)
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': self.shotnoise * self.wnorm * self.nmesh.prod(dtype='f8') / self.boxsize.prod(dtype='f8'),
                   'attrs': self.attrs, 'mpicomm': self.mpicomm}
         self.poles = CorrelationFunctionMultipoles(modes=s, edges=self.edges[0], corr_nonorm=corr, corr_zero_nonorm=corr_zero, nmodes=nmodes, ells=self.ells, **kwargs)

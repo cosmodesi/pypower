@@ -672,7 +672,7 @@ def test_catalog_power():
         mesh = fkp.to_mesh(position='Position', comp_weight='Weight', nbar='NZ', BoxSize=boxsize, Nmesh=nmesh, resampler=resampler, interlaced=bool(interlacing), compensated=True, dtype=dtype)
         return ConvolvedFFTPower(mesh, poles=ells, dk=dk, kmin=kedges[0], kmax=kedges[-1] + 1e-9)
 
-    def get_catalog_power(data, randoms, position_type='pos', edges=kedges, boxsize=boxsize, nmesh=nmesh, dtype=dtype, as_cross=False, **kwargs):
+    def get_catalog_power(data, randoms, position_type='pos', edges=kedges, boxsize=boxsize, nmesh=nmesh, dtype=dtype, as_cross=False, los=los, **kwargs):
         data_positions, randoms_positions = data['Position'], randoms['Position']
         if position_type == 'xyz':
             data_positions, randoms_positions = data['Position'].T, randoms['Position'].T
@@ -751,6 +751,10 @@ def test_catalog_power():
             assert np.allclose(power.poles(ell=ell).imag, c_power.poles(ell=ell).imag, atol=atol, rtol=1e-3)
             atol = 2e-1 if ell % 2 else 1e-5
             assert np.allclose(power.poles(ell=ell).real, c_power.poles(ell=ell).real, atol=atol, rtol=1e-3)
+
+    power = get_catalog_power(data, randoms, edges=np.linspace(0., 0.1, 2), los='x')
+    power.poles.get_power()
+    power.wedges.get_power()
 
     list_options = []
     list_options.append({})
@@ -964,7 +968,6 @@ if __name__ == '__main__':
     # test_interlacing()
     # test_fft()
     # test_memory()
-    test_mesh_power()
     test_power_statistic()
     test_find_edges()
     test_ylm()

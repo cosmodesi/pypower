@@ -2064,7 +2064,7 @@ class MeshFFTPower(MeshFFTBase):
             # the 1D monopole
             # from nbodykit.algorithms.fftpower import project_to_basis
             proj_result = project_to_basis(Aell, self.edges, exclude_zero=False)[0]
-            result.append(tuple(np.squeeze(proj_result[ii]) for ii in [2, -1]))
+            result.append(tuple(np.ravel(proj_result[ii]) for ii in [2, -1]))
             k, nmodes = proj_result[0], proj_result[3]
 
             if rank == 0:
@@ -2144,16 +2144,16 @@ class MeshFFTPower(MeshFFTBase):
 
             # Project on to 1d k-basis (averaging over mu=[-1,1])
             proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
-            result.append(tuple(4 * np.pi * np.squeeze(proj_result[ii]) for ii in [2, -1]))
+            result.append(tuple(4 * np.pi * np.ravel(proj_result[ii]) for ii in [2, -1]))
             k, nmodes = proj_result[0], proj_result[3]
 
         # pmesh convention is F(k) = 1/N^3 \sum_{r} e^{-ikr} F(r); let us correct it here
         power, power_zero = (self.nmesh.prod(dtype='f8')**2 * np.array([result[ells.index(ell)][ii] for ell in self.ells]).conj() for ii in range(2))
         if swap: power, power_zero = (tmp.conj() for tmp in (power, power_zero))
         # Format the power results into :class:`PowerSpectrumMultipoles` instance
-        k, nmodes = np.squeeze(k), np.squeeze(nmodes)
+        k, nmodes = np.ravel(k), np.ravel(nmodes)
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': self.shotnoise * self.wnorm, 'attrs': self.attrs, 'mpicomm': self.mpicomm}
-        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=power_zero, nmodes=nmodes, ells=self.ells, **kwargs)
+        self.poles = PowerSpectrumMultipoles(modes=k, edges=self.edges[0], power_nonorm=power, power_zero_nonorm=np.ravel(power_zero), nmodes=nmodes, ells=self.ells, **kwargs)
 
 
 def _format_all_weights(dtype=None, weight_type=None, weight_attrs=None, mpicomm=None, mpiroot=None, **kwargs):
