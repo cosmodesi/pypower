@@ -118,6 +118,7 @@ def test_direct_corr():
     boxsize = (100,) * 3
     from pypower.direct_corr import KDTreeDirectCorrEngine
     _slab_npairs_max = KDTreeDirectCorrEngine._slab_npairs_max
+    _slab_nobjs_max = KDTreeDirectCorrEngine._slab_nobjs_max
     list_options = []
 
     for autocorr in [False, True]:
@@ -129,7 +130,7 @@ def test_direct_corr():
             list_options.append({'autocorr': autocorr, 'position_type': position_type})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'nthreads': 2})
         # pip
-        list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'weight_type': 'inverse_bitwise_minus_individual', 'slab_npairs_max': 10})
+        list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'weight_type': 'inverse_bitwise_minus_individual', 'slab_npairs_max': 10, 'slab_nobjs_max': 10})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'dtype': 'f4'})
 
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'bitwise_type': 'i4'})
@@ -172,11 +173,8 @@ def test_direct_corr():
             position_type = options.pop('position_type', 'xyz')
             dtype = options.pop('dtype', None)
 
-            slab_npairs_max = options.pop('slab_npairs_max', None)
-            if slab_npairs_max is not None:
-                KDTreeDirectCorrEngine._slab_npairs_max = slab_npairs_max
-            else:
-                KDTreeDirectCorrEngine._slab_npairs_max = _slab_npairs_max
+            KDTreeDirectCorrEngine._slab_npairs_max = options.pop('slab_npairs_max', _slab_npairs_max)
+            KDTreeDirectCorrEngine._slab_nobjs_max = options.pop('slab_nobjs_max', _slab_nobjs_max)
 
             ref_options = options.copy()
             weight_attrs = ref_options.pop('weight_attrs', {}).copy()
@@ -441,6 +439,6 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    #test_direct_corr()
+    test_direct_corr()
     #test_catalog_power()
-    test_mem()
+    #test_mem()

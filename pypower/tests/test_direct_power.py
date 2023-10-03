@@ -237,6 +237,7 @@ def test_direct_power():
     boxsize = (100,) * 3
     from pypower.direct_power import KDTreeDirectPowerEngine
     _slab_npairs_max = KDTreeDirectPowerEngine._slab_npairs_max
+    _slab_nobjs_max = KDTreeDirectPowerEngine._slab_nobjs_max
     list_options = []
 
     for autocorr in [False, True]:
@@ -248,7 +249,7 @@ def test_direct_power():
             list_options.append({'autocorr': autocorr, 'position_type': position_type})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'nthreads': 2})
         # pip
-        list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'weight_type': 'inverse_bitwise_minus_individual', 'slab_npairs_max': 10})
+        list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'weight_type': 'inverse_bitwise_minus_individual', 'slab_npairs_max': 10, 'slab_nobjs_max': 10})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'dtype': 'f4'})
 
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'bitwise_type': 'i4'})
@@ -290,11 +291,8 @@ def test_direct_power():
             position_type = options.pop('position_type', 'xyz')
             dtype = options.pop('dtype', None)
 
-            slab_npairs_max = options.pop('slab_npairs_max', None)
-            if slab_npairs_max is not None:
-                KDTreeDirectPowerEngine._slab_npairs_max = slab_npairs_max
-            else:
-                KDTreeDirectPowerEngine._slab_npairs_max = _slab_npairs_max
+            KDTreeDirectPowerEngine._slab_npairs_max = options.pop('slab_npairs_max', _slab_npairs_max)
+            KDTreeDirectPowerEngine._slab_nobjs_max = options.pop('slab_nobjs_max', _slab_nobjs_max)
 
             ref_options = options.copy()
             weight_attrs = ref_options.pop('weight_attrs', {}).copy()
@@ -531,7 +529,7 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    test_legendre_bessel()
-    test_bitwise_weight()
+    #test_legendre_bessel()
+    #test_bitwise_weight()
     test_direct_power()
-    test_catalog_power()
+    #test_catalog_power()
