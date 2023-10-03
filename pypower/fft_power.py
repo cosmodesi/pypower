@@ -1400,6 +1400,18 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         return new
 
     def set_power_direct(self, power_direct_nonorm=None, **kwargs):
+        """
+        Set direct power spectrum.
+
+        Parameters
+        ----------
+        power_direct_nonorm : array, default=None
+            Direct estimation of power spectrum to be stored in :attr:`power_direct_nonorm`.
+
+        **kwargs : dict
+            ``corr_direct_nonorm`` and ``sep_direct`` can be provided, in which case
+            :attr:`power_direct_nonorm` is computed as the Bessel transform of ``corr_direct_nonorm``.
+        """
         for name in ['corr_direct_nonorm', 'sep_direct']:
             value = kwargs.get(name, None)
             if value is not None:
@@ -1407,10 +1419,15 @@ class PowerSpectrumMultipoles(BasePowerSpectrumStatistics):
         if power_direct_nonorm is not None:
             self.power_direct_nonorm = np.asarray(power_direct_nonorm)
         elif self.corr_direct_nonorm is not None:
+            _slab_npoints_max = 1000 * 1000
+            nslabs = min(max(len(self.k) * len(self.sep_direct) // _slab_npoints_max, 1), len(self.k))
             power_nonorm = []
             for ill, ell in enumerate(self.ells):
-                value = (-1j)**ell * np.sum(self.corr_direct_nonorm[ill] * special.spherical_jn(ell, self.k[:, None] * self.sep_direct, derivative=False), axis=-1)
-                power_nonorm.append(value)
+                tmp = []
+                for islab in range(nslabs):
+                    sl = slice(islab * len(self.k) // nslabs, (islab + 1) * len(self.k) // nslabs)
+                    tmp.append((-1j)**ell * np.sum(self.corr_direct_nonorm[ill] * special.spherical_jn(ell, self.k[sl, None] * self.sep_direct, derivative=False), axis=-1))
+                power_nonorm.append(np.concatenate(tmp, axis=0))
             self.power_direct_nonorm = np.array(power_nonorm)
 
 
@@ -1861,7 +1878,7 @@ class MeshFFTPower(MeshFFTBase):
         mesh2 : CatalogMesh, RealField, ComplexField, default=None
             In case of cross-correlation, second mesh, with same size and physical extent (``boxsize`` and ``boxcenter``) that ``mesh1``.
 
-        edges : tuple, array, default=None
+        edges : tuple, array, dict, default=None
             If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
             Else, one can also provide :math:`\mu`-edges (hence a tuple ``(kedges, muedges)``) for :attr:`wedges`.
             If ``kedges`` is ``None``, defaults to edges containing unique :math:`k` (norm) values, see :func:`find_unique_edges`.
@@ -2295,7 +2312,7 @@ class CatalogFFTPower(MeshFFTPower):
             When ``boxsize`` is determined from input positions, take ``boxpad`` times the smallest box enclosing positions as ``boxsize``.
 
         wrap : bool, default=False
-            Whether to wrap input positions in [0, boxsize[?
+            Whether to wrap input positions in [0, boxsize[.
             If ``False`` and input positions do not fit in the the box size, raise a :class:`ValueError`.
 
         dtype : string, dtype, default='f8'
@@ -2367,7 +2384,8 @@ class CatalogFFTPower(MeshFFTPower):
             See ``D1D2_twopoint_weights``.
 
         direct_engine : string, default='corrfunc'
-            Engine for direct power spectrum computation (if input weights are bitwise weights), one of ["kdtree", "corrfunc"].
+            Engine for direct power spectrum computation (if bitwise weights or ``twopoint_weights``, or ``direct_selection_attrs``);
+            one of ["kdtree", "corrfunc"].
 
         direct_selection_attrs : dict, default={'theta': (0., 2 / 60.)}
             To select pairs to be counted in the direct power spectrum computation, provide mapping between the quantity (string)
@@ -2375,6 +2393,17 @@ class CatalogFFTPower(MeshFFTPower):
             e.g. ``{'rp': (0., 20.)}`` to select pairs with 'rp' between 0 and 20.
             ``{'theta': (0., 1.)}`` to select pairs with 'theta' between 0 and 1 degree.
             One can additionally provide e.g. 'counts': ['D1D2', 'D1R2'] to specify direct counts for which the selection is to be applied.
+            If bitwise weights or ``twopoint_weights`` are provided, then this direct power is added to the FFT-based power spectrum;
+            else it is subtracted (for e.g. the :math:`r_{p}`-cut).
+
+        direct_edges : array, dict
+            To compute direct power spectrum by taking the Bessel transform of pair counts (in configuration space),
+            provide these separation bin edges. May be a dictionary, with keys 'min' (minimum :math:`s`, defaults to 0),
+            'max' (maximum :math:`s`, defaults to maximum separation given input positions), and 'step' (defaults to 1).
+
+        direct_attrs : dict, default=None
+            Optional arguments for :class:`BaseDirectCorrEngine` (if ``direct_edges`` is provided), or for :class:`BaseDirectPowerEngine`;
+            e.g. ``nthreads``.
 
         wnorm : float, default=None
             Power spectrum normalization, to use instead of internal estimate obtained with :func:`normalization`.

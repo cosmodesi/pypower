@@ -242,7 +242,7 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
     """Direct power spectrum measurement, summing over particle pairs."""
 
     name = 'base'
-    _slab_nobjs_max = 1000 * 1000
+    _slab_nobjs_max = 10 * 1000 * 1000
 
     def __init__(self, modes, positions1, positions2=None, weights1=None, weights2=None, ells=(0, 2, 4), selection_attrs=None,
                  position_type='xyz', weight_type='auto', weight_attrs=None, twopoint_weights=None, los='firstpoint',
@@ -522,8 +522,25 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
             size2 = len(positions2)
             csize2 = self.mpicomm.allreduce(size2)
             nslabs = min(int(csize2 / self._slab_nobjs_max + 1.), max(csize2, 1))
+            try:
+                import healpy as hp
+            except ImportError:
+                hp = None
+            else:
+                nside = 2**max(9, int(np.log2(nslabs) + 0.5))  # 2^9 = 512
+                hpind = hp.vec2pix(nside, *limit_positions2.T)
+                uhpind = mpi.gather(np.unique(hpind), mpicomm=self.mpicomm, mpiroot=0)
+                if self.mpicomm.rank == 0:
+                    uhpind = np.unique(uhpind)
             for islab in range(nslabs):
-                sl = slice(islab * size2 // nslabs, (islab + 1) * size2 // nslabs)
+                if hp is None:
+                    sl = slice(islab * size2 // nslabs, (islab + 1) * size2 // nslabs)
+                else:
+                    tmp_uhpind = None
+                    if self.mpicomm.rank == 0:
+                        sl = slice(islab * len(uhpind) // nslabs, (islab + 1) * len(uhpind) // nslabs)
+                        tmp_uhpind = uhpind[sl]
+                    sl = np.isin(hpind, self.mpicomm.bcast(tmp_uhpind, root=0))
                 tmp_positions1, tmp_weights1 = limit_positions1, [positions1] + weights1
                 if nslabs == 1 and self.autocorr:
                     tmp_positions2, tmp_weights2 = None, None
@@ -856,9 +873,9 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
 
             if self.size1 or self.size2:  # else rlimits is 0, 0 and raise error
                 poles = call_corrfunc(mocks.DDbessel_mocks, autocorr, nthreads=self.nthreads,
-                                    X1=limit_positions1[0], Y1=limit_positions1[1], Z1=limit_positions1[2], XP1=positions1[0], YP1=positions1[1], ZP1=positions1[2],
-                                    X2=limit_positions2[0], Y2=limit_positions2[1], Z2=limit_positions2[2], XP2=positions2[0], YP2=positions2[1], ZP2=positions2[2],
-                                    binfile=self.modes, ells=ells, rmin=self.rlimits[0], rmax=self.rlimits[1], mumax=1., los_type=los_type, **kwargs)['poles']
+                                      X1=limit_positions1[0], Y1=limit_positions1[1], Z1=limit_positions1[2], XP1=positions1[0], YP1=positions1[1], ZP1=positions1[2],
+                                      X2=limit_positions2[0], Y2=limit_positions2[1], Z2=limit_positions2[2], XP2=positions2[0], YP2=positions2[1], ZP2=positions2[2],
+                                      binfile=self.modes, ells=ells, rmin=self.rlimits[0], rmax=self.rlimits[1], mumax=1., los_type=los_type, **kwargs)['poles']
             else:
                 poles = np.zeros(len(self.modes) * len(ells), dtype=self.dtype)
             sum_poles += (self.mpicomm.allreduce(poles.reshape(len(self.modes), len(ells)).T) * prefactor).astype('c16')

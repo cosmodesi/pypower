@@ -1424,7 +1424,7 @@ class CatalogFFTCorr(MeshFFTCorr):
             When ``boxsize`` is determined from input positions, take ``boxpad`` times the smallest box enclosing positions as ``boxsize``.
 
         wrap : bool, default=False
-            Whether to wrap input positions in [0, boxsize[?
+            Whether to wrap input positions in [0, boxsize[.
             If ``False`` and input positions do not fit in the the box size, raise a :class:`ValueError`.
 
         dtype : string, dtype, default='f8'

@@ -439,6 +439,6 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    test_direct_corr()
-    #test_catalog_power()
+    #test_direct_corr()
+    test_catalog_power()
     #test_mem()

@@ -99,8 +99,11 @@ class BaseDirectCorrEngine(BaseClass, metaclass=RegisteredDirectCorrEngine):
 
         Parameters
         ----------
-        edges : array
+        edges : array, dict
             Separation bin edges.
+            May be a dictionary, with keys 'min' (minimum :math:`s`, defaults to 0),
+            'max' (maximum :math:`s`, defaults to maximum separation given input positions),
+            and 'step' (defaults to 1).
 
         positions1 : list, array
             Positions in the first data catalog. Typically of shape (3, N) or (N, 3).

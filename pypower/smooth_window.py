@@ -701,7 +701,7 @@ class CatalogSmoothWindow(MeshFFTPower):
             When ``boxsize`` is determined from input positions, take ``boxpad`` times the smallest box enclosing positions as ``boxsize``.
 
         wrap : bool, default=False
-            Whether to wrap input positions in [0, boxsize[?
+            Whether to wrap input positions in [0, boxsize[.
             If ``False`` and input positions do not fit in the the box size, raise a :class:`ValueError`.
 
         dtype : string, dtype, default=None
@@ -746,6 +746,28 @@ class CatalogSmoothWindow(MeshFFTPower):
             defaulting to the number of bits in input weights plus one);
             "noffset", the offset to be added to the bitwise counts in the denominator (defaulting to 1)
             and "default_value", the default value of weights if the denominator is zero (defaulting to 0).
+
+        direct_engine : string, default='corrfunc'
+            Engine for direct window function computation (if bitwise weights or ``twopoint_weights``, or ``direct_selection_attrs``);
+            one of ["kdtree", "corrfunc"].
+
+        direct_selection_attrs : dict, default={'theta': (0., 2 / 60.)}
+            To select pairs to be counted in the direct window function computation, provide mapping between the quantity (string)
+            and the interval (tuple of floats),
+            e.g. ``{'rp': (0., 20.)}`` to select pairs with 'rp' between 0 and 20.
+            ``{'theta': (0., 1.)}`` to select pairs with 'theta' between 0 and 1 degree.
+            One can additionally provide e.g. 'counts': ['D1D2', 'D1R2'] to specify direct counts for which the selection is to be applied.
+            If bitwise weights or ``twopoint_weights`` are provided, then this direct power is added to the FFT-based window function;
+            else it is subtracted (for e.g. the :math:`r_{p}`-cut).
+
+        direct_edges : array, dict
+            To compute direct window function by taking the Bessel transform of pair counts (in configuration space),
+            provide these separation bin edges. May be a dictionary, with keys 'min' (minimum :math:`s`, defaults to 0),
+            'max' (maximum :math:`s`, defaults to maximum separation given input positions), and 'step' (defaults to 1).
+
+        direct_attrs : dict, default=None
+            Optional arguments for :class:`BaseDirectCorrEngine` (if ``direct_edges`` is provided), or for :class:`BaseDirectPowerEngine`;
+            e.g. ``nthreads``.
 
         wnorm : float, default=None
             Window function normalization.
