@@ -417,10 +417,30 @@ def test_catalog_power():
                              direct_selection_attrs=selection_attrs, direct_edges=direct_edges, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
 
 
+def test_mem():
+    from test_fft_power import MemoryMonitor
+    nmesh = 100
+    kedges = np.linspace(0., 0.1, 6)
+    ells = (0, 2)
+    resampler = 'tsc'
+    interlacing = 2
+    data1, data2 = generate_catalogs(size=50000, boxsize=(2000.,) * 3, n_individual_weights=1, n_bitwise_weights=0, seed=42)
+    randoms1, randoms2 = generate_catalogs(size=100000, boxsize=(2000.,) * 3, n_individual_weights=1, n_bitwise_weights=0, seed=84)
+    selection_attrs = {'rp': (0., 5.)}
+    direct_edges = {'step': 0.1, 'max': 10000}
+
+    with MemoryMonitor() as mem:
+        for i in range(5):
+            power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
+                                    nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
+                                    direct_selection_attrs=selection_attrs, direct_edges=direct_edges)
+            mem()
+
 
 if __name__ == '__main__':
 
     setup_logging()
 
-    test_direct_corr()
-    test_catalog_power()
+    #test_direct_corr()
+    #test_catalog_power()
+    test_mem()

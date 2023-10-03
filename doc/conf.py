@@ -65,7 +65,7 @@ html_static_path = []
 git_repo = 'https://github.com/cosmodesi/pypower.git'
 git_root = 'https://github.com/cosmodesi/pypower/blob/main/'
 
-extlinks = {'root': (git_root + '%s','')}
+extlinks = {'root': (git_root + '%s', '%s')}
 
 intersphinx_mapping = {
     'numpy': ('https://numpy.org/doc/stable/', None)
