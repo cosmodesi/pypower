@@ -882,6 +882,7 @@ class CatalogSmoothWindow(MeshFFTPower):
             mesh2 = get_mesh(positions['R2'], data_weights=weights['R2'], resampler=resampler[1], interlacing=interlacing[1])
 
         direct_attrs = direct_attrs or {}
+        direct_attrs['nthreads'] = nthreads = direct_attrs.get('nthreads', 1)
         direct_corr = direct_edges is not None
         if direct_corr:
             DirectEngine = get_direct_corr_engine(direct_engine)
@@ -905,15 +906,36 @@ class CatalogSmoothWindow(MeshFFTPower):
             self.same_shotnoise = autocorr or same_shotnoise  # when providing 2 meshes, shot noise estimate is 0; correct this here
             # Now, run power spectrum estimation
             super(CatalogSmoothWindow, self).__init__(mesh1=mesh1_wa, mesh2=mesh2_wa, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm)
-            positions2, weights2 = None, None
-            if mesh2_wa is not None:
-                positions2, weights2 = mesh2_wa.data_positions, mesh2_wa.data_weights
-            if self.same_shotnoise:
-                positions2 = None
+
             if direct_selection_attrs:
-                power = DirectEngine(direct_edges if direct_corr else self.poles.k, positions1=mesh1_wa.data_positions, weights1=mesh1_wa.data_weights, positions2=positions2, weights2=weights2,
-                                     ells=ells, selection_attrs=direct_selection_attrs, weight_type='auto',
-                                     los=los, position_type='pos', mpicomm=self.mpicomm, **direct_attrs)
+                positions1, weights1 = mesh1_wa.data_positions, mesh1_wa.data_weights
+                positions2, weights2 = None, None
+                if mesh2_wa is not None:
+                    positions2, weights2 = mesh2_wa.data_positions, mesh2_wa.data_weights
+                if self.same_shotnoise:
+                    positions2 = None
+
+                color = self.mpicomm.rank % nthreads == 0
+                subcomm = self.mpicomm.Split(color, 0)
+                if nthreads == 1:
+                    mpiroot = None
+                else:
+                    mpiroot = 0
+                    positions1 = mpi.gather(positions1, mpicomm=mpicomm, mpiroot=mpiroot)
+                    weights1 = mpi.gather(weights1, mpicomm=mpicomm, mpiroot=mpiroot)
+                    if positions2 is not None:
+                        positions2 = mpi.gather(positions2, mpicomm=mpicomm, mpiroot=mpiroot)
+                    if weights2 is not None:
+                        weights2 = mpi.gather(weights2, mpicomm=mpicomm, mpiroot=mpiroot)
+
+                if color:
+                    power = DirectEngine(direct_edges if direct_corr else self.poles.k, positions1=positions1, weights1=weights1, positions2=positions2, weights2=weights2,
+                                         ells=ells, selection_attrs=direct_selection_attrs, weight_type='auto', los=los, position_type='pos', mpicomm=subcomm, mpiroot=mpiroot, **direct_attrs)
+                else:
+                    power = None
+                mpi.barrier_idle(mpicomm=self.mpicomm, sleep=0.5)
+                power = self.mpicomm.bcast(power, root=0)
+
                 if direct_corr:
                     self.poles.corr_direct_nonorm = 0.
                     sep = power.sep.copy()
@@ -927,7 +949,9 @@ class CatalogSmoothWindow(MeshFFTPower):
                     self.poles.attrs['power_direct'] = power.__getstate__()
                     self.poles.power_direct_nonorm += coeff * power.power_nonorm
                 if direct_corr:
-                    self.poles.set_power_direct()
+                    if self.mpicomm.rank == 0:
+                        self.poles.set_power_direct()
+                    self.poles = self.mpicomm.bcast(self.poles, root=0)
             poles.append(PowerSpectrumSmoothWindow.from_power(self.poles, wa_order=wa_order, wnorm_ref=wnorm_ref, mpicomm=self.mpicomm))
 
         self.poles = PowerSpectrumSmoothWindow.concatenate_proj(*poles)

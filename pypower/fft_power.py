@@ -2480,6 +2480,7 @@ class CatalogFFTPower(MeshFFTPower):
         if self.ells:
 
             direct_attrs = direct_attrs or {}
+            direct_attrs['nthreads'] = nthreads = direct_attrs.get('nthreads', 1)
 
             twopoint_weights = {'D1D2': D1D2_twopoint_weights, 'D1R2': D1R2_twopoint_weights, 'R1D2': R1D2_twopoint_weights, 'R1R2': R1R2_twopoint_weights}
             twopoint_weights.update({'D1S2': D1R2_twopoint_weights, 'S1D2': R1D2_twopoint_weights, 'S1S2': R1R2_twopoint_weights})
@@ -2550,12 +2551,34 @@ class CatalogFFTPower(MeshFFTPower):
                         self.log_info('Computing direct estimation {}.'.format(label12))
                         for label in [label1] + ([label2] if label2 is not None else []):
                             if positions[label] is None: raise ValueError('{} must be provided'.format(label))
+                    positions1, weights1 = positions[label1], bweights[label1]
                     positions2 = positions[label2] if label2 is not None else None
+                    weights2 = bweights[label2] if label2 is not None else None
                     if self.same_shotnoise and label2[:-1] == label1[:-1]:  # D2 = D1, R2 = R1 positions, but different weights; this is to remove the correct amount of auto-pairs at s = 0
                         positions2 = None
-                    powers[label12] = (coeff, DirectEngine(direct_edges if direct_corr else self.poles.k, positions[label1], weights1=bweights[label1], positions2=positions2, weights2=bweights[label2] if label2 is not None else None,
-                                                           ells=ells, selection_attrs=selection_attrs_12, weight_type=weight_type, twopoint_weights=twopoint_weights_12,
-                                                           weight_attrs=weight_attrs, los=self.los_type, position_type='pos', mpicomm=self.mpicomm, **direct_attrs))
+
+                    color = self.mpicomm.rank % nthreads == 0
+                    subcomm = self.mpicomm.Split(color, 0)
+
+                    if nthreads == 1:
+                        mpiroot = None
+                    else:
+                        mpiroot = 0
+                        positions1 = mpi.gather(positions1, mpicomm=mpicomm, mpiroot=mpiroot)
+                        weights1 = [mpi.gather(weight, mpicomm=mpicomm, mpiroot=mpiroot) for weight in weights1]
+                        if positions2 is not None:
+                            positions2 = mpi.gather(positions2, mpicomm=mpicomm, mpiroot=mpiroot)
+                        if weights2 is not None:
+                            weights2 = [mpi.gather(weight, mpicomm=mpicomm, mpiroot=mpiroot) for weight in weights2]
+
+                    if color:
+                        power = (coeff, DirectEngine(direct_edges if direct_corr else self.poles.k, positions1, weights1=weights1, positions2=positions2, weights2=weights2,
+                                                     ells=ells, selection_attrs=selection_attrs_12, weight_type=weight_type, twopoint_weights=twopoint_weights_12,
+                                                     weight_attrs=weight_attrs, los=self.los_type, position_type='pos', mpicomm=subcomm, mpiroot=mpiroot, **direct_attrs))
+                    else:
+                        power = None
+                    mpi.barrier_idle(mpicomm=self.mpicomm, sleep=0.5)
+                    powers[label12] = self.mpicomm.bcast(power, root=0)
 
             if direct_corr:
                 self.poles.corr_direct_nonorm = 0.
@@ -2573,4 +2596,6 @@ class CatalogFFTPower(MeshFFTPower):
                     self.poles.attrs['power_direct_{}'.format(label)] = power.__getstate__()
                     self.poles.power_direct_nonorm += coeff * power.power_nonorm
             if direct_corr:
-                self.poles.set_power_direct()
+                if self.mpicomm.rank == 0:
+                    self.poles.set_power_direct()
+                self.poles = self.mpicomm.bcast(self.poles, root=0)

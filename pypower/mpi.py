@@ -11,6 +11,27 @@ else:
     COMM_SELF = MPI.COMM_SELF
 
 
+def barrier_idle(mpicomm=COMM_WORLD, tag=0, sleep=1.):
+    """
+    MPI barrier fonction that solves the problem that idle processes occupy 100% CPU.
+    See: https://goo.gl/NofOO9.
+    """
+    import time
+    size = mpicomm.size
+    if size == 1: return
+    rank = mpicomm.rank
+    mask = 1
+    while mask < size:
+        dst = (rank + mask) % size
+        src = (rank - mask + size) % size
+        req = mpicomm.isend(None, dst, tag)
+        while not mpicomm.Iprobe(src, tag):
+            time.sleep(sleep)
+        mpicomm.recv(None, src, tag)
+        req.Wait()
+        mask <<= 1
+
+
 def gather(data, mpiroot=0, mpicomm=COMM_WORLD):
     """
     Taken from https://github.com/bccp/nbodykit/blob/master/nbodykit/utils.py.
