@@ -233,6 +233,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         Note
         ----
         Typically, you will want to input windows with decreasing box size (largest box size first).
+        Direct window function estimation is taken from the first in ``others``.
 
         Parameters
         ----------
@@ -254,6 +255,11 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
         if len(others) == 1 and utils.is_sequence(others[0]):
             others = others[0]
         new = others[0].deepcopy()
+        for other in others:
+            if new.corr_direct_nonorm is None and other.corr_direct_nonorm is not None:
+                new.corr_direct_nonorm = np.copy(other.corr_direct_nonorm)
+                new.sep_direct = np.copy(other.sep_direct)
+
         names = ['power_nonorm', 'power_direct_nonorm', 'nmodes', 'volume']
 
         if frac_nyq is None or np.ndim(frac_nyq) == 0:

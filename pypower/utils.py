@@ -242,7 +242,7 @@ def cartesian_to_sky(positions, wrap=True, degree=True):
     return [ra / conversion, dec / conversion, dist]
 
 
-def sky_to_cartesian(rdd, degree=True, dtype=None):
+def sky_to_cartesian(rdd, degree=True):
     """
     Transform distance, RA, Dec into cartesian coordinates.
 
