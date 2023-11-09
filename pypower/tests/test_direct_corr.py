@@ -79,6 +79,8 @@ def ref_theta(edges, data1, data2=None, boxsize=None, los='midpoint', ells=(0, 2
     legendre = [special.legendre(ell) for ell in ells]
     selection_attrs = dict(selection_attrs or {})
     theta_limits = selection_attrs.get('theta', None)
+    if theta_limits is not None:
+        costheta_limits = np.cos(np.deg2rad(theta_limits)[::-1])
     rp_limits = selection_attrs.get('rp', None)
     npairs = 0
     for i1, xyzw1 in enumerate(zip(*data1)):
@@ -88,6 +90,9 @@ def ref_theta(edges, data1, data2=None, boxsize=None, los='midpoint', ells=(0, 2
             if theta_limits is not None:
                 theta = np.rad2deg(np.arccos(min(dotproduct_normalized(xyz1, xyz2), 1)))  # min to avoid rounding errors
                 if theta < theta_limits[0] or theta >= theta_limits[1]: continue
+                #if all(x1 == x2 for x1, x2 in zip(xyz1, xyz2)): costheta = 1.
+                #else: costheta = min(dotproduct_normalized(xyz1, xyz2), 1)
+                #if costheta <= costheta_limits[0] or costheta > costheta_limits[1]: continue
             dxyz = diff(xyz1, xyz2)
             dist = norm(dxyz)
             npairs += 1
@@ -145,6 +150,7 @@ def test_direct_corr():
         # selection
         for los in ['midpoint', 'firstpoint', 'endpoint']:
             list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'los': los, 'selection_attrs': {'rp': (0., 10.)}})
+            list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'los': los, 'selection_attrs': {'theta': (0., 5.)}})
         # twopoint_weights
         from collections import namedtuple
         TwoPointWeight = namedtuple('TwoPointWeight', ['sep', 'weight'])
@@ -276,6 +282,8 @@ def test_direct_corr():
             test = run(mpiroot=None)
             test.to_power(modes=np.linspace(0.01, 0.2, 10))
 
+            print(test.corr_nonorm, poles_ref)
+            print(test.corr_nonorm - poles_ref)
             assert np.allclose(test.corr_nonorm, poles_ref, **tol)
             assert np.allclose(test.sep, sep_ref, equal_nan=True, **tol)
             test_zero = run(mpiroot=None, pass_none=False, pass_zero=True)
@@ -439,6 +447,6 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    #test_direct_corr()
+    test_direct_corr()
     test_catalog_power()
     #test_mem()

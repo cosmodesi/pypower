@@ -264,6 +264,7 @@ def test_direct_power():
         # selection
         for los in ['midpoint', 'firstpoint', 'endpoint']:
             list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'los': los, 'selection_attrs': {'rp': (0., 10.)}})
+            list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'los': los, 'selection_attrs': {'theta': (0., 5.)}})
         # twopoint_weights
         from collections import namedtuple
         TwoPointWeight = namedtuple('TwoPointWeight', ['sep', 'weight'])
@@ -531,5 +532,5 @@ if __name__ == '__main__':
 
     #test_legendre_bessel()
     #test_bitwise_weight()
-    #test_direct_power()
+    test_direct_power()
     test_catalog_power()

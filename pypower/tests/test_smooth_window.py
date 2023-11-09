@@ -314,6 +314,9 @@ def test_fft_window():
             window = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges,
                                          position_type='pos', direct_selection_attrs={'rp': (0., 2.5)}, direct_edges={'step': 0.2, 'max': 10.}, direct_attrs={'nthreads': 4}).poles
             window.to_real()
+            window = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges,
+                                         position_type='pos', direct_selection_attrs={'theta': (0., 2.5)}, direct_edges={'step': 0.2, 'max': 10.}, direct_attrs={'nthreads': 4}).poles
+            window.to_real()
 
 
 def get_correlation_function_window():

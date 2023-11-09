@@ -760,11 +760,11 @@ class CatalogSmoothWindow(MeshFFTPower):
         direct_selection_attrs : dict, default={'theta': (0., 2 / 60.)}
             To select pairs to be counted in the direct window function computation, provide mapping between the quantity (string)
             and the interval (tuple of floats),
-            e.g. ``{'rp': (0., 20.)}`` to select pairs with 'rp' between 0 and 20.
-            ``{'theta': (0., 1.)}`` to select pairs with 'theta' between 0 and 1 degree.
+            e.g. ``{'rp': (0., 20.)}`` to select pairs with transverse separation 'rp' between 0 and 20,
+            `{'theta': (0., 20.)}`` to select pairs with separation angle 'theta' between 0 and 20 degrees.
             One can additionally provide e.g. 'counts': ['D1D2', 'D1R2'] to specify direct counts for which the selection is to be applied.
             If bitwise weights or ``twopoint_weights`` are provided, then this direct power is added to the FFT-based window function;
-            else it is subtracted (for e.g. the :math:`r_{p}`-cut).
+            else it is subtracted (for e.g. the :math:`r_{p}`-cut or :math:`\theta`-cut).
 
         direct_edges : array, dict
             To compute direct window function by taking the Bessel transform of pair counts (in configuration space),

@@ -319,8 +319,8 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
         selection_attrs : dict, default={'theta': (0., 2 / 60.)}
             To select pairs to be counted, provide mapping between the quantity (string)
             and the interval (tuple of floats),
-            e.g. ``{'rp': (0., 20.)}`` to select pairs with 'rp' between 0 and 20.
-            ``{'theta': (0., 1.)}`` to select pairs with 'theta' between 0 and 1 degree.
+            e.g. ``{'rp': (0., 20.)}`` to select pairs with transverse separation 'rp' between 0 and 20,
+            `{'theta': (0., 20.)}`` to select pairs with separation angle 'theta' between 0 and 20 degrees.
 
         los : string, array, default=None
             If ``los`` is 'firstpoint' (resp. 'endpoint', 'midpoint'), use local (varying) first-point (resp. end-point, mid-point) line-of-sight.
@@ -816,7 +816,7 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
                 weights1 = reformat_bitweights(dweights1)
                 if not autocorr:
                     weights2 = reformat_bitweights(dweights2)
-                weight_attrs = (self.weight_attrs['noffset'], self.weight_attrs['default_value'] / self.weight_attrs['nrealizations'])
+                weight_attrs = {'noffset': self.weight_attrs['noffset'], 'default_value': self.weight_attrs['default_value'] / self.weight_attrs['nrealizations']}
 
             elif dweights1:
                 weight_type = 'pair_product'
@@ -853,7 +853,6 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
                     'pair_weights': pair_weights, 'sep_pair_weights': sep_pair_weights,
                     'attrs_pair_weights': weight_attrs, 'verbose': False,
                     'isa': self.attrs.get('isa', 'fastest')}
-
             if 'rp' in self.selection_attrs:
                 kwargs['attrs_selection'] = {'rp': self.selection_attrs['rp']}
 

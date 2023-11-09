@@ -214,7 +214,7 @@ def _get_box(*positions):
     return pos_min, pos_max
 
 
-def cartesian_to_sky(positions, wrap=True, degree=True):
+def cartesian_to_sky(positions, wrap=True, degree=True, dtype=None):
     r"""
     Transform cartesian coordinates into distance, RA, Dec.
 
@@ -236,13 +236,13 @@ def cartesian_to_sky(positions, wrap=True, degree=True):
     """
     dist = distance(positions)
     ra = np.arctan2(positions[1], positions[0])
-    if wrap: ra %= 2 * np.pi
+    if wrap: ra %= 2. * np.pi
     dec = np.arcsin(positions[2] / dist)
     conversion = np.pi / 180. if degree else 1.
-    return [ra / conversion, dec / conversion, dist]
+    return [np.asarray(xx, dtype=dtype) for xx in [ra / conversion, dec / conversion, dist]]
 
 
-def sky_to_cartesian(rdd, degree=True):
+def sky_to_cartesian(rdd, degree=True, dtype=None):
     """
     Transform distance, RA, Dec into cartesian coordinates.
 
@@ -266,7 +266,7 @@ def sky_to_cartesian(rdd, degree=True):
     x = dist * cos_dec * np.cos(ra * conversion)
     y = dist * cos_dec * np.sin(ra * conversion)
     z = dist * np.sin(dec * conversion)
-    return [x, y, z]
+    return [np.asarray(xx, dtype=dtype) for xx in [x, y, z]]
 
 
 def rebin(array, new_shape, statistic=np.sum):
@@ -280,8 +280,8 @@ def rebin(array, new_shape, statistic=np.sum):
 
     Example
     -------
-    >>> m = np.arange(0,100,1).reshape((10,10))
-    >>> n = rebin(m, new_shape=(5,5), statistic=np.sum)
+    >>> m = np.arange(0, 100, 1).reshape((10, 10))
+    >>> n = rebin(m, new_shape=(5, 5), statistic=np.sum)
     >>> print(n)
 
     [[ 22  30  38  46  54]

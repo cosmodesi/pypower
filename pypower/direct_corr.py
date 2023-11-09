@@ -169,8 +169,8 @@ class BaseDirectCorrEngine(BaseClass, metaclass=RegisteredDirectCorrEngine):
         selection_attrs : dict, default={'theta': (0., 2 / 60.)}
             To select pairs to be counted, provide mapping between the quantity (string)
             and the interval (tuple of floats),
-            e.g. ``{'rp': (0., 20.)}`` to select pairs with 'rp' between 0 and 20.
-            ``{'theta': (0., 1.)}`` to select pairs with 'theta' between 0 and 1 degree.
+            e.g. ``{'rp': (0., 20.)}`` to select pairs with transverse separation 'rp' between 0 and 20,
+            `{'theta': (0., 20.)}`` to select pairs with separation angle 'theta' between 0 and 20 degrees.
 
         los : string, array, default=None
             If ``los`` is 'firstpoint' (resp. 'endpoint', 'midpoint'), use local (varying) first-point (resp. end-point, mid-point) line-of-sight.
@@ -466,7 +466,7 @@ class CorrfuncDirectCorrEngine(BaseDirectCorrEngine):
                 weights1 = reformat_bitweights(dweights1)
                 if not autocorr:
                     weights2 = reformat_bitweights(dweights2)
-                weight_attrs = (self.weight_attrs['noffset'], self.weight_attrs['default_value'] / self.weight_attrs['nrealizations'])
+                weight_attrs = {'noffset': self.weight_attrs['noffset'], 'default_value': self.weight_attrs['default_value'] / self.weight_attrs['nrealizations']}
 
             elif dweights1:
                 weight_type = 'pair_product'
@@ -503,7 +503,6 @@ class CorrfuncDirectCorrEngine(BaseDirectCorrEngine):
                       'pair_weights': pair_weights, 'sep_pair_weights': sep_pair_weights,
                       'attrs_pair_weights': weight_attrs, 'verbose': False,
                       'isa': self.attrs.get('isa', 'fastest'), 'bin_type': self.bin_type}
-
             if 'rp' in self.selection_attrs:
                 kwargs['attrs_selection'] = {'rp': self.selection_attrs['rp']}
 
@@ -523,9 +522,9 @@ class CorrfuncDirectCorrEngine(BaseDirectCorrEngine):
 
             if self.size1 or self.size2:  # else rlimits is 0, 0 and raise error
                 poles = call_corrfunc(mocks.DDleg_mocks, autocorr, nthreads=self.nthreads,
-                                    X1=limit_positions1[0], Y1=limit_positions1[1], Z1=limit_positions1[2], XP1=positions1[0], YP1=positions1[1], ZP1=positions1[2],
-                                    X2=limit_positions2[0], Y2=limit_positions2[1], Z2=limit_positions2[2], XP2=positions2[0], YP2=positions2[1], ZP2=positions2[2],
-                                    binfile=self.edges, ells=ells, rmin=self.rlimits[0], rmax=self.rlimits[1], mumax=1., los_type=los_type, **kwargs)
+                                      X1=limit_positions1[0], Y1=limit_positions1[1], Z1=limit_positions1[2], XP1=positions1[0], YP1=positions1[1], ZP1=positions1[2],
+                                      X2=limit_positions2[0], Y2=limit_positions2[1], Z2=limit_positions2[2], XP2=positions2[0], YP2=positions2[1], ZP2=positions2[2],
+                                      binfile=self.edges, ells=ells, rmin=self.rlimits[0], rmax=self.rlimits[1], mumax=1., los_type=los_type, **kwargs)
                 sep, poles = poles['savg'], poles['poles']
             else:
                 sep = poles = np.zeros((len(self.edges) - 1) * len(ells), dtype=self.dtype)
