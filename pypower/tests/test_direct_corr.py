@@ -282,8 +282,6 @@ def test_direct_corr():
             test = run(mpiroot=None)
             test.to_power(modes=np.linspace(0.01, 0.2, 10))
 
-            print(test.corr_nonorm, poles_ref)
-            print(test.corr_nonorm - poles_ref)
             assert np.allclose(test.corr_nonorm, poles_ref, **tol)
             assert np.allclose(test.sep, sep_ref, equal_nan=True, **tol)
             test_zero = run(mpiroot=None, pass_none=False, pass_zero=True)

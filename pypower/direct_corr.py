@@ -505,6 +505,7 @@ class CorrfuncDirectCorrEngine(BaseDirectCorrEngine):
                       'isa': self.attrs.get('isa', 'fastest'), 'bin_type': self.bin_type}
             if 'rp' in self.selection_attrs:
                 kwargs['attrs_selection'] = {'rp': self.selection_attrs['rp']}
+            #kwargs['attrs_selection'] = self.selection_attrs  # theta-cut already included with rlimits
 
             limit_positions1, positions1 = dlimit_positions1.T, dpositions1.T
             if autocorr:
