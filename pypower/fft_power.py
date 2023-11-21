@@ -500,8 +500,7 @@ class BasePowerSpectrumStatistics(BaseClass):
         loc = locals()
         for name in ['corr_direct_nonorm', 'sep_direct']:
             value = loc[name]
-            if value is not None:
-                value = np.asarray(value)
+            if value is not None: value = np.asarray(value)
             setattr(self, name, value)
         self.power_direct_nonorm = power_direct_nonorm
         if power_direct_nonorm is None:

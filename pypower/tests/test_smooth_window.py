@@ -279,12 +279,17 @@ def test_fft_window():
             # theory multipoles at wa_order = 0, and wide-angle terms at wa_order = 1
             projsin = list(ellsin) + PowerSpectrumOddWideAngleMatrix.propose_out(ellsin, wa_orders=wa_orders)
             # Window matrix
-            wm = PowerSpectrumSmoothWindowMatrix(kout, projsin=projsin, projsout=ellsout, window=window, sep=sep, kin_rebin=kin_rebin, kin_lim=kin_lim, default_zero=True)
+            wm = PowerSpectrumSmoothWindowMatrix(kout, projsin=projsin, projsout=ellsout, weightsout=poles.nmodes, window=window, sep=sep, kin_rebin=kin_rebin, kin_lim=kin_lim, default_zero=True)
             assert np.allclose(wm.weight, poles.wnorm)
             bak = wm.value.copy()
             wm2 = wm + wm
             assert np.allclose(wm2.value, wm.value)
             assert np.allclose(wm2.value, bak)
+
+            wm = PowerSpectrumSmoothWindowMatrix(poles, projsin=projsin, window=window, sep=sep, kin_rebin=kin_rebin, kin_lim=kin_lim, default_zero=True)
+            assert np.allclose(wm.weight, poles.wnorm)
+            assert np.allclose([proj.ell for proj in wm.projsout], poles.ells)
+            assert np.allclose(wm.weightsout[0], poles.nmodes)
 
         randoms['Position'][0] -= boxsize
         projsin = [(ell, 0) for ell in range(0, 2 * max(ells) + 1, 2)]

@@ -13,7 +13,7 @@ from scipy import special
 
 from .utils import BaseClass, _make_array
 from .fftlog import CorrelationToPower
-from .fft_power import (BasePowerSpectrumStatistics, MeshFFTPower, CatalogMesh,
+from .fft_power import (BasePowerSpectrumStatistics, PowerSpectrumMultipoles, MeshFFTPower, CatalogMesh,
                         _get_real_dtype, _format_positions, _format_all_weights, _get_mesh_attrs, _wrap_positions, unnormalized_shotnoise)
 from .wide_angle import Projection, BaseMatrix, CorrelationFunctionOddWideAngleMatrix, PowerSpectrumOddWideAngleMatrix
 from .direct_power import get_direct_power_engine
@@ -675,7 +675,7 @@ class CatalogSmoothWindow(MeshFFTPower):
             Finally, if any of ``power_ref.ells`` is odd, all (even and odd) poles will be computed at wide-angle orders 0 and 1,
             up to :math:`2 \ell_{\mathrm{max}}` and :math:`2 \ell_{\mathrm{max}} + 1`, respectively.
 
-        power_ref : PowerSpectrumMultipoless, default=None
+        power_ref : PowerSpectrumMultipoles, default=None
             "Reference" power spectrum estimation, e.g. of the actual data.
             It is used to set default values for ``projs``, ``los``, ``boxsize``, ``boxcenter``, ``nmesh``,
             ``interlacing``, ``resampler`` and ``wnorm`` if those are ``None``.
@@ -1117,20 +1117,23 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
 
         Parameters
         ----------
-        kout : array
-            Output wavenumbers.
+        kout : array, PowerSpectrumMultipoles
+            Output wavenumbers or power spectrum estimation to take wavenumbers from.
+            Typically, one would use for ``kout`` and ``weightsout`` the modes :attr:`PowerSpectrumMultipoles.k`
+            and number of modes :attr:`PowerSpectrumMultipoles.nmodes` of the observed power spectrum,
+            such that output k-modes and their weighting of power spectrum and window matrix match.
 
         projsin : list
             Input projections.
 
         projsout : list, default=None
-            Output projections. Defaults to ``propose_out(projsin, sum_wa=sum_wa)``.
+            Output projections. Defaults to the poles of ``kout`` if it is a :class:`PowerSpectrumMultipoles`,
+            else ``propose_out(projsin, sum_wa=sum_wa)``.
 
         weightsout : array, list, default=None
             Optionally, list of weights to apply when rebinning output "observed" coordinates.
-            Typically, one would use for ``kout`` and ``weightsout`` the modes :attr:`BasePowerSpectrumStatistics.k`
-            and number of modes :attr:`BasePowerSpectrumStatistics.nmodes` of the observed power spectrum,
-            such that output k-modes of power spectrum and window matrix match after rebinning.
+            Defaults to the number of modes :attr:`PowerSpectrumMultipoles.nmodes` of ``kout`` if it is a :class:`PowerSpectrumMultipoles`,
+            else no weight.
 
         k : array, default=None
             Wavenumber for Hankel transforms; must be log-spaced.
@@ -1167,6 +1170,13 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
         attrs : dict, default=None
             Dictionary of other attributes.
         """
+        wnorm_ref = 1.
+        if isinstance(kout, PowerSpectrumMultipoles):
+            if projsout is None: projsout = tuple(kout.ells)
+            if weightsout is None: weightsout = np.array(kout.nmodes)
+            wnorm_ref = kout.wnorm
+            kout = np.array(kout.k)
+
         self.xy = 1.
 
         if k is None:
@@ -1202,7 +1212,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
         else:
             self.projsout = [Projection(proj, default_wa_order=None if self.sum_wa else 0) for proj in projsout]
 
-        self._set_xw(xin=self.k, xout=kout, weightsout=weightsout, weight=getattr(window, 'wnorm_ref', [1.])[0])
+        self._set_xw(xin=self.k, xout=kout, weightsout=weightsout, weight=getattr(window, 'wnorm_ref', [wnorm_ref])[0])
         self.run()
 
     def run(self):
