@@ -328,6 +328,9 @@ class BaseCorrelationFunctionStatistics(BaseClass):
         return state
 
     def __setstate__(self, state):
+        name = {'wedge': 'wedges'}.get(self.name, 'poles')
+        if name in state:  # actually a MeshFFTPower object, which has wedges or poles
+            state = state[name]
         super(BaseCorrelationFunctionStatistics, self).__setstate__(state)
         if self.corr_zero_nonorm.ndim < self.corr_nonorm.ndim:  # for backward-compatibility; to be removed soon!
             self.corr_zero_nonorm = np.zeros_like(self.corr_nonorm)

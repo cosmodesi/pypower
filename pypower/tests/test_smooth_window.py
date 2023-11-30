@@ -194,7 +194,8 @@ def test_fft_window():
 
         edges = {'step': 0.01}
 
-        window1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos').poles
+        cwindow1 = CatalogSmoothWindow(randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'], power_ref=poles, edges=edges, position_type='pos')
+        window1 = cwindow1.poles
         with tempfile.TemporaryDirectory() as tmp_dir:
             # tmp_dir = '_tests'
             fn = data.mpicomm.bcast(os.path.join(tmp_dir, 'tmp.npy'), root=0)
@@ -206,6 +207,8 @@ def test_fft_window():
             fn = os.path.join(tmp_dir, 'tmp.npy')
             window.save(fn)
             assert np.allclose(window.power[0], window1.power[0], equal_nan=True)
+            cwindow1.save(fn)
+            PowerSpectrumSmoothWindow.load(fn).power
 
         poles_f4 = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
                                    boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, los=los, edges=kedges, position_type='pos', dtype='f4').poles

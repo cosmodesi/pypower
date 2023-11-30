@@ -218,6 +218,9 @@ def test_global():
         result.poles.save_txt(fn, complex=False)
         fn = os.path.join(tmp_dir, 'tmp_wedges.txt')
         result.wedges.save_txt(fn, complex=False)
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        result.save(fn)
+        CorrelationFunctionMultipoles.load(fn).corr
 
     result = CatalogFFTCorr(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], ells=ells, los=los,
                             edges=np.linspace(0., 50., 2), boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm)
@@ -255,6 +258,9 @@ def test_local():
         tmp_dir = '_tests'
         fn = os.path.join(tmp_dir, 'tmp_poles.txt')
         result.poles.save_txt(fn, complex=False)
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        result.save(fn)
+        CorrelationFunctionMultipoles.load(fn).corr
 
     poles_0 = CatalogFFTCorr(data_positions1=data_positions, data_weights1=data_weights, data_weights2=0.5 * data_weights, ells=0, los=los,
                              edges={'step': 6.}, boxsize=boxsize, nmesh=nmesh, resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm, mpiroot=mpiroot).poles

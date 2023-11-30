@@ -5,7 +5,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from mockfactory import Catalog
 
-from pypower import CatalogFFTPower, CatalogMesh, MeshFFTWindow, CatalogFFTWindow, mpi, setup_logging
+from pypower import CatalogFFTPower, CatalogMesh, MeshFFTWindow, PowerSpectrumFFTWindowMatrix, CatalogFFTWindow, mpi, setup_logging
 from pypower.fft_window import get_correlation_function_tophat_derivative
 
 from test_fft_power import data_fn, randoms_fn
@@ -75,6 +75,7 @@ def test_fft_window():
             window = CatalogFFTWindow.load(fn)
             window.mpicomm = data.mpicomm
             window.save(fn)
+            PowerSpectrumFFTWindowMatrix.load(fn).value
 
         mesh1 = CatalogMesh(data_positions=randoms['Position'], data_weights=randoms['Weight'], nmesh=power.attrs['nmesh'], boxsize=power.attrs['boxsize'], boxcenter=power.attrs['boxcenter'],
                             resampler=power.attrs['resampler1'], interlacing=power.attrs['interlacing1'], position_type='pos', dtype=dtype)

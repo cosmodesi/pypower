@@ -227,6 +227,13 @@ class PowerSpectrumFFTWindowMatrix(BaseMatrix):
             state[name] = getattr(self, name)
         return state
 
+    def __setstate__(self, state):
+        """Set this class state."""
+        name = 'poles'
+        if name in state:  # actually a MeshFFTWindow object, which has wedges or poles
+            state = state[name]
+        super(PowerSpectrumFFTWindowMatrix, self).__setstate__(state)
+
     def resum_input_odd_wide_angle(self, **kwargs):
         """
         Resum odd wide-angle orders.

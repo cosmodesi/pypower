@@ -8,7 +8,7 @@ from cosmoprimo.fiducial import DESI
 from mockfactory import LagrangianLinearMock, Catalog
 from mockfactory.make_survey import RandomBoxCatalog
 
-from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, ArrayMesh, PowerSpectrumStatistics, PowerSpectrumMultipoles, mpi, utils, setup_logging
+from pypower import MeshFFTPower, CatalogFFTPower, CatalogMesh, ArrayMesh, PowerSpectrumStatistics, PowerSpectrumMultipoles, PowerSpectrumWedges, mpi, utils, setup_logging
 from pypower.fft_power import normalization, normalization_from_nbar, unnormalized_shotnoise, find_unique_edges, get_real_Ylm, project_to_basis
 
 
@@ -503,6 +503,8 @@ def test_mesh_power():
                 power = MeshFFTPower.load(fn)
                 fn = os.path.join(tmp_dir, 'tmp.npy')
                 power.save(fn)
+                poles = PowerSpectrumMultipoles.load(fn).power
+                wedges = PowerSpectrumWedges.load(fn).power
 
             check_wedges(power.wedges, ref_power.power)
 
@@ -744,6 +746,7 @@ def test_catalog_power():
             power = CatalogFFTPower.load(fn)
             fn = os.path.join(tmp_dir, 'tmp.npy')
             power.save(fn)
+            poles = PowerSpectrumMultipoles.load(fn)
 
         check_poles(power.poles, ref_power)
         for ell in ells:

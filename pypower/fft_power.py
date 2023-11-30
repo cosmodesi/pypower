@@ -754,6 +754,9 @@ class BasePowerSpectrumStatistics(BaseClass):
         return state
 
     def __setstate__(self, state):
+        name = {'wedge': 'wedges'}.get(self.name, 'poles')
+        if name in state:  # actually a MeshFFTPower object, which has wedges or poles
+            state = state[name]
         super(BasePowerSpectrumStatistics, self).__setstate__(state)
         # For backward-compatibility; to be removed soon!
         if not hasattr(self, 'power_zero_nonorm'):
