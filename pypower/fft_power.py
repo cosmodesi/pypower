@@ -2362,8 +2362,10 @@ class CatalogFFTPower(MeshFFTPower):
             defaulting to the number of bits in input weights plus one);
             "noffset", the offset to be added to the bitwise counts in the denominator (defaulting to 1)
             and "default_value", the default value of pairwise weights if the denominator is zero (defaulting to 0).
-            Inverse probability weight is then computed as: :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2}))`.
-            For example, for the "zero-truncated" estimator (arXiv:1912.08803), one would use noffset = 0.
+            The method used to compute the normalization of PIP weights can be specified with the keyword "normalization":
+            "counter" to normalize each pair by eq. 19 of arXiv:1912.08803.
+            In this case "nalways" specifies the number of bits systematically set to 1 minus the number of bits systematically set to 0 (defaulting to 0).
+            For example, for the "zero-truncated" estimator (arXiv:1912.08803), one would use noffset = 0, nalways = 1.
 
         D1D2_twopoint_weights : WeightTwoPointEstimator, default=None
             Weights to be applied to each pair of particles between first and second data catalogs.

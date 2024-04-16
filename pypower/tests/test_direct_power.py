@@ -151,9 +151,16 @@ def wiip(weights, nrealizations=None, noffset=1, default_value=0.):
     return toret
 
 
-def wpip_single(weights1, weights2, nrealizations=None, noffset=1, default_value=0.):
+def wpip_single(weights1, weights2, nrealizations=None, noffset=1, default_value=0., correction=None):
     denom = noffset + sum(bin(w1 & w2).count('1') for w1, w2 in zip(weights1, weights2))
-    return default_value if denom == 0 else nrealizations / denom
+    if denom == 0:
+        weight = default_value
+    else:
+        weight = nrealizations / denom
+        if correction is not None:
+            c = tuple(sum(bin(w).count('1') for w in weights) for weights in [weights1, weights2])
+            weight /= correction[c]
+    return weight
 
 
 def wiip_single(weights, nrealizations=None, noffset=1, default_value=0.):
@@ -161,10 +168,10 @@ def wiip_single(weights, nrealizations=None, noffset=1, default_value=0.):
     return default_value if denom == 0 else nrealizations / denom
 
 
-def get_weight(xyz1, xyz2, weights1, weights2, n_bitwise_weights=0, twopoint_weights=None, nrealizations=None, noffset=1, default_value=0., weight_type='auto'):
+def get_weight(xyz1, xyz2, weights1, weights2, n_bitwise_weights=0, twopoint_weights=None, nrealizations=None, noffset=1, default_value=0., correction=None, weight_type='auto'):
     weight = 1
     if nrealizations is not None:
-        weight *= wpip_single(weights1[:n_bitwise_weights], weights2[:n_bitwise_weights], nrealizations=nrealizations, noffset=noffset, default_value=default_value)
+        weight *= wpip_single(weights1[:n_bitwise_weights], weights2[:n_bitwise_weights], nrealizations=nrealizations, noffset=noffset, default_value=default_value, correction=correction)
     if twopoint_weights is not None:
         sep_twopoint_weights = twopoint_weights.sep
         twopoint_weights = twopoint_weights.weight
@@ -241,6 +248,8 @@ def test_direct_power():
     list_options = []
 
     for autocorr in [False, True]:
+        list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 2, 'weight_attrs': {'normalization': 'counter'}})
+        """
         list_options.append({'autocorr': autocorr})
         # one-column of weights
         list_options.append({'autocorr': autocorr, 'weights_one': [1]})
@@ -258,6 +267,7 @@ def test_direct_power():
             list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 1, 'iip': 2})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'weight_attrs': {'nrealizations': 42, 'noffset': 3}})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 2, 'weight_attrs': {'noffset': 0, 'default_value': 0.8}})
+        list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 2, 'weight_attrs': {'normalization': 'counter'}})
         # los
         for los in ['midpoint', 'firstpoint', 'endpoint']:
             list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'los': los})
@@ -272,6 +282,7 @@ def test_direct_power():
         list_options.append({'autocorr': autocorr, 'twopoint_weights': twopoint_weights})
         list_options.append({'autocorr': autocorr, 'n_bitwise_weights': 2, 'twopoint_weights': twopoint_weights, 'weight_type': 'inverse_bitwise_minus_individual'})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'twopoint_weights': twopoint_weights})
+        """
 
     for engine in list_engine:
         for options in list_options:
@@ -328,9 +339,6 @@ def test_direct_power():
                 n_bitwise_weights = 0
                 weight_attrs['nrealizations'] = None
 
-            itemsize = np.dtype('f8' if dtype is None else dtype).itemsize
-            tol = {'atol': 1e-8, 'rtol': 1e-2} if itemsize <= 4 else {'atol': 1e-8, 'rtol': 1e-5}
-
             if dtype is not None:
                 for ii in range(len(data1_ref)):
                     if np.issubdtype(data1_ref[ii].dtype, np.floating):
@@ -340,7 +348,22 @@ def test_direct_power():
             twopoint_weights = ref_options.pop('twopoint_weights', None)
             if twopoint_weights is not None:
                 twopoint_weights = TwoPointWeight(np.cos(np.radians(twopoint_weights.sep[::-1], dtype=dtype)), np.asarray(twopoint_weights.weight[::-1], dtype=dtype))
+
+            if weight_attrs.get('normalization', None) == 'counter':
+                nalways = weight_attrs.get('nalways', 0)
+                nrealizations = weight_attrs['nrealizations']
+                joint = utils.joint_occurences(nrealizations, noffset=weight_attrs['noffset'] + nalways, default_value=weight_attrs['default_value'])
+                correction = np.zeros((nrealizations,) * 2, dtype='f8')
+                for c1 in range(correction.shape[0]):
+                    for c2 in range(correction.shape[1]):
+                        correction[c1][c2] = joint[c1 - nalways][c2 - nalways] if c2 <= c1 else joint[c2 - nalways][c1 - nalways]
+                weight_attrs['correction'] = correction
+            weight_attrs.pop('normalization', None)
+
             ref = ref_theta(modes, data1_ref, data2=data2_ref if not autocorr else None, autocorr=autocorr, n_bitwise_weights=n_bitwise_weights, twopoint_weights=twopoint_weights, selection_attrs=selection_attrs, **ref_options, **weight_attrs)
+
+            itemsize = np.dtype('f8' if dtype is None else dtype).itemsize
+            tol = {'atol': 1e-8, 'rtol': 1e-2} if itemsize <= 4 else {'atol': 1e-8, 'rtol': 1e-5}
 
             if bitwise_type is not None and n_bitwise_weights > 0:
 

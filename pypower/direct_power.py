@@ -29,7 +29,7 @@ def _vlogical_and(*arrays):
     return toret
 
 
-def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, default_value=0., dtype='f8'):
+def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, default_value=0., correction=None, dtype='f8'):
     r"""
     Return inverse probability weight given input bitwise weights.
     Inverse probability weight is computed as: :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2} \& ...))`.
@@ -49,6 +49,9 @@ def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, defa
     default_value : float, default=0.
         Default weight value, if the denominator is zero (defaults to 0).
 
+    correction : 2D array, default=None
+        Optionally, divide weight by ``correction[nbits1, nbits2]`` with ``nbits1``, ``nbits2`` the number of non-zero bits in weights.
+
     dtype : string, np.dtype
         Type for output weight.
 
@@ -65,6 +68,9 @@ def get_inverse_probability_weight(*weights, noffset=1, nrealizations=None, defa
     denom[mask] = 1
     toret = np.empty_like(denom, dtype=dtype)
     toret[...] = nrealizations / denom
+    if correction is not None:
+        c = tuple(sum(utils.popcount(w) for w in weight) for weight in weights)
+        toret /= correction[c]
     toret[mask] = default_value
     return toret
 
@@ -308,6 +314,17 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
             Inverse probability weight is then computed as: :math:`\mathrm{nrealizations}/(\mathrm{noffset} + \mathrm{popcount}(w_{1} \& w_{2}))`.
             For example, for the "zero-truncated" estimator (arXiv:1912.08803), one would use noffset = 0.
 
+        weight_attrs : dict, default=None
+            Dictionary of weighting scheme attributes. In case ``weight_type`` is "inverse_bitwise",
+            one can provide "nrealizations", the total number of realizations (*including* current one;
+            defaulting to the number of bits in input weights plus one);
+            "noffset", the offset to be added to the bitwise counts in the denominator (defaulting to 1)
+            and "default_value", the default value of pairwise weights if the denominator is zero (defaulting to 0).
+            The method used to compute the normalization of PIP weights can be specified with the keyword "normalization":
+            "counter" to normalize each pair by eq. 19 of arXiv:1912.08803.
+            In this case "nalways" specifies the number of bits systematically set to 1 minus the number of bits systematically set to 0 (defaulting to 0).
+            For example, for the "zero-truncated" estimator (arXiv:1912.08803), one would use noffset = 0, nalways = 1.
+
         twopoint_weights : WeightTwoPointEstimator, default=None
             Weights to be applied to each pair of particles.
             A :class:`WeightTwoPointEstimator` instance (from *pycorr*) or any object with arrays ``sep``
@@ -415,8 +432,11 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
             self.weights1 = self.weights2 = []
 
         else:
-
+            self.weight_attrs.update(nalways=weight_attrs.get('nalways', 0), normalization=weight_attrs.get('normalization', None), correction=weight_attrs.get('correction', None))
             noffset = weight_attrs.get('noffset', 1)
+            if int(noffset) != noffset:
+                raise ValueError('Only integer offset accepted')
+            noffset = int(noffset)
             default_value = weight_attrs.get('default_value', 0.)
             self.weight_attrs.update(noffset=noffset, default_value=default_value)
 
@@ -436,31 +456,36 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
 
             if self.autocorr:
 
+                nrealizations = get_nrealizations(self.weights1[:n_bitwise_weights1])
+                self.weight_attrs.update(nrealizations=nrealizations)
                 self.weights2 = self.weights1
-                self.weight_attrs['nrealizations'] = get_nrealizations(self.weights1[:n_bitwise_weights1])
                 self.n_bitwise_weights = n_bitwise_weights1
 
             else:
                 if n_bitwise_weights2 == n_bitwise_weights1:
 
-                    self.weight_attrs['nrealizations'] = get_nrealizations(self.weights1[:n_bitwise_weights1])
+                    nrealizations = get_nrealizations(self.weights1[:n_bitwise_weights1])
                     self.n_bitwise_weights = n_bitwise_weights1
 
                 else:
                     if n_bitwise_weights2 == 0:
                         indweights = self.weights1[n_bitwise_weights1] if len(self.weights1) > n_bitwise_weights1 else 1.
-                        self.weight_attrs['nrealizations'] = get_nrealizations(self.weights1[:n_bitwise_weights1])
+                        nrealizations = get_nrealizations(self.weights1[:n_bitwise_weights1])
+                        self.weight_attrs.update(nrealizations=nrealizations)  # required by _get_inverse_probability_weight
                         self.weights1 = [self._get_inverse_probability_weight(self.weights1[:n_bitwise_weights1]) * indweights]
                         self.n_bitwise_weights = 0
                         if self.mpicomm.rank == 0: self.log_info('Setting IIP weights for first catalog.')
                     elif n_bitwise_weights1 == 0:
                         indweights = self.weights2[n_bitwise_weights2] if len(self.weights2) > n_bitwise_weights2 else 1.
-                        self.weight_attrs['nrealizations'] = get_nrealizations(self.weights2[:n_bitwise_weights2])
+                        nrealizations = get_nrealizations(self.weights2[:n_bitwise_weights2])
+                        self.weight_attrs.update(nrealizations=nrealizations)
                         self.weights2 = [self._get_inverse_probability_weight(self.weights2[:n_bitwise_weights2]) * indweights]
                         self.n_bitwise_weights = 0
                         if self.mpicomm.rank == 0: self.log_info('Setting IIP weights for second catalog.')
                     else:
                         raise ValueError('Incompatible length of bitwise weights: {:d} and {:d} bytes'.format(n_bitwise_weights1, n_bitwise_weights2))
+
+                self.weight_attrs.update(nrealizations=nrealizations)
 
         if len(self.weights1) == len(self.weights2) + 1:
             self.weights2.append(np.ones(len(self.positions2), dtype=self.dtype))
@@ -468,6 +493,20 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
             self.weights1.append(np.ones(len(self.positions1), dtype=self.dtype))
         elif len(self.weights1) != len(self.weights2):
             raise ValueError('Something fishy happened with weights; number of weights1/weights2 is {:d}/{:d}'.format(len(self.weights1), len(self.weights2)))
+
+        normalization = self.weight_attrs['normalization'] = self.weight_attrs.get('normalization', 'total') or 'total'
+        allowed_normalizations = ['total', 'counter']
+        if normalization not in allowed_normalizations:
+            raise ValueError('normalization should be one of {}'.format(allowed_normalizations))
+
+        if normalization == 'counter' and self.weight_attrs['correction'] is None:
+            nrealizations, nalways = self.weight_attrs['nrealizations'], self.weight_attrs['nalways']
+            joint = utils.joint_occurences(nrealizations, noffset=self.weight_attrs['noffset'] + nalways, default_value=self.weight_attrs['default_value'])
+            correction = np.zeros((nrealizations,) * 2, dtype=self.dtype)
+            for c1 in range(correction.shape[0]):
+                for c2 in range(correction.shape[1]):
+                    correction[c1][c2] = joint[c1 - nalways][c2 - nalways] if c2 <= c1 else joint[c2 - nalways][c1 - nalways]
+            self.weight_attrs['correction'] = correction
 
         self.twopoint_weights = twopoint_weights
         self.cos_twopoint_weights = None
@@ -490,7 +529,8 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
 
     def _get_inverse_probability_weight(self, *weights):
         return get_inverse_probability_weight(*weights, noffset=self.weight_attrs['noffset'], nrealizations=self.weight_attrs['nrealizations'],
-                                              default_value=self.weight_attrs['default_value'], dtype=self.dtype)
+                                              default_value=self.weight_attrs['default_value'], correction=self.weight_attrs['correction'] if len(weights) == 2 else None,
+                                              dtype=self.dtype)
 
     def _set_selection(self, selection_attrs=None):
         self.selection_attrs = {str(name): tuple(float(v) for v in value) for name, value in (selection_attrs or {'theta': (0., 2. / 60.)}).items()}
@@ -817,6 +857,8 @@ class CorrfuncDirectPowerEngine(BaseDirectPowerEngine):
                 if not autocorr:
                     weights2 = reformat_bitweights(dweights2)
                 weight_attrs = {'noffset': self.weight_attrs['noffset'], 'default_value': self.weight_attrs['default_value'] / self.weight_attrs['nrealizations']}
+                correction = self.weight_attrs.get('correction', None)
+                if correction is not None: weight_attrs['correction'] = correction
 
             elif dweights1:
                 weight_type = 'pair_product'

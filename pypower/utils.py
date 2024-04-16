@@ -5,6 +5,7 @@ import sys
 import time
 import logging
 import traceback
+from functools import lru_cache
 
 import numpy as np
 
@@ -415,4 +416,85 @@ def reformat_bitarrays(*arrays, dtype=np.uint64, copy=True):
             toret[iarray] = np.squeeze(np.concatenate(array, axis=-1).view(dtype), axis=-1)
         else:
             toret[iarray] = array[0][..., 0]
+    return toret
+
+
+def pascal_triangle(n_rows):
+    """
+    Compute Pascal triangle.
+    Taken from https://stackoverflow.com/questions/24093387/pascals-triangle-for-python.
+
+    Parameters
+    ----------
+    n_rows : int
+        Number of rows in the Pascal triangle, i.e. maximum number of elements :math:`n`.
+
+    Returns
+    -------
+    triangle : list
+        List of list of binomial coefficients.
+        The binomial coefficient :math:`(k, n)` is ``triangle[n][k]``.
+    """
+    toret = [[1]]  # a container to collect the rows
+    for _ in range(1, n_rows + 1):
+        row = [1]
+        last_row = toret[-1]  # reference the previous row
+        # this is the complicated part, it relies on the fact that zip
+        # stops at the shortest iterable, so for the second row, we have
+        # nothing in this list comprension, but the third row sums 1 and 1
+        # and the fourth row sums in pairs. It's a sliding window.
+        row += [sum(pair) for pair in zip(last_row, last_row[1:])]
+        # finally append the final 1 to the outside
+        row.append(1)
+        toret.append(row)  # add the row to the results.
+    return toret
+
+
+@lru_cache(maxsize=10, typed=False)
+def joint_occurences(nrealizations=128, max_occurences=None, noffset=1, default_value=0):
+    """
+    Return expected value of inverse counts, i.e. eq. 21 of arXiv:1912.08803.
+
+    Parameters
+    ----------
+    nrealizations : int
+        Number of realizations (including current realization).
+
+    max_occurences : int, default=None
+        Maximum number of occurences (including ``noffset``).
+        If ``None``, defaults to ``nrealizations``.
+
+    noffset : int, default=1
+        The offset added to the bitwise count, typically 0 or 1.
+        See "zero truncated estimator" and "efficient estimator" of arXiv:1912.08803.
+
+    default_value : float, default=0.
+        The default value of pairwise weights if the denominator is zero (defaulting to 0).
+
+    Returns
+    -------
+    occurences : list
+        Expected value of inverse counts.
+    """
+    # gk(c1, c2)
+    if max_occurences is None: max_occurences = nrealizations
+
+    binomial_coeffs = pascal_triangle(nrealizations)
+
+    def prob(c12, c1, c2):
+        return binomial_coeffs[c1 - noffset][c12 - noffset] * binomial_coeffs[nrealizations - c1][c2 - c12] / binomial_coeffs[nrealizations - noffset][c2 - noffset]
+
+    def fk(c12):
+        if c12 == 0:
+            return default_value
+        return nrealizations / c12
+
+    toret = []
+    for c1 in range(noffset, max_occurences + 1):
+        row = []
+        for c2 in range(noffset, c1 + 1):
+            # we have c12 <= c1, c2 and nrealizations >= c1 + c2 + c12
+            row.append(sum(fk(c12) * prob(c12, c1, c2) for c12 in range(max(noffset, c1 + c2 - nrealizations), min(c1, c2) + 1)))
+        toret.append(row)
+
     return toret
