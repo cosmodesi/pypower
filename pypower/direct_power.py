@@ -499,7 +499,7 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
         if normalization not in allowed_normalizations:
             raise ValueError('normalization should be one of {}'.format(allowed_normalizations))
 
-        if normalization == 'counter' and self.weight_attrs['correction'] is None:
+        if self.n_bitwise_weights and normalization == 'counter' and self.weight_attrs['correction'] is None:
             nrealizations, nalways = self.weight_attrs['nrealizations'], self.weight_attrs['nalways']
             joint = utils.joint_occurences(nrealizations, noffset=self.weight_attrs['noffset'] + nalways, default_value=self.weight_attrs['default_value'])
             correction = np.zeros((nrealizations,) * 2, dtype=self.dtype)
