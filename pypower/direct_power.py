@@ -506,6 +506,7 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
             for c1 in range(correction.shape[0]):
                 for c2 in range(correction.shape[1]):
                     correction[c1][c2] = joint[c1 - nalways][c2 - nalways] if c2 <= c1 else joint[c2 - nalways][c1 - nalways]
+                    correction[c1][c2] /= (nrealizations / (noffset + c1) * nrealizations / (noffset + c2))
             self.weight_attrs['correction'] = correction
 
         self.twopoint_weights = twopoint_weights

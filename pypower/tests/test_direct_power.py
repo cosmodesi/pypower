@@ -249,7 +249,6 @@ def test_direct_power():
 
     for autocorr in [False, True]:
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 2, 'weight_attrs': {'normalization': 'counter'}})
-        """
         list_options.append({'autocorr': autocorr})
         # one-column of weights
         list_options.append({'autocorr': autocorr, 'weights_one': [1]})
@@ -282,7 +281,6 @@ def test_direct_power():
         list_options.append({'autocorr': autocorr, 'twopoint_weights': twopoint_weights})
         list_options.append({'autocorr': autocorr, 'n_bitwise_weights': 2, 'twopoint_weights': twopoint_weights, 'weight_type': 'inverse_bitwise_minus_individual'})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'twopoint_weights': twopoint_weights})
-        """
 
     for engine in list_engine:
         for options in list_options:
@@ -351,12 +349,14 @@ def test_direct_power():
 
             if weight_attrs.get('normalization', None) == 'counter':
                 nalways = weight_attrs.get('nalways', 0)
+                noffset = weight_attrs.get('noffset', 1)
                 nrealizations = weight_attrs['nrealizations']
                 joint = utils.joint_occurences(nrealizations, noffset=weight_attrs['noffset'] + nalways, default_value=weight_attrs['default_value'])
                 correction = np.zeros((nrealizations,) * 2, dtype='f8')
                 for c1 in range(correction.shape[0]):
                     for c2 in range(correction.shape[1]):
                         correction[c1][c2] = joint[c1 - nalways][c2 - nalways] if c2 <= c1 else joint[c2 - nalways][c1 - nalways]
+                        correction[c1][c2] /= (nrealizations / (noffset + c1) * nrealizations / (noffset + c2))
                 weight_attrs['correction'] = correction
             weight_attrs.pop('normalization', None)
 
@@ -506,16 +506,17 @@ def test_catalog_power():
                         ells=ells, selection_attrs=selection_attrs, weight_type='auto').power_nonorm
     assert np.allclose(power.poles.power_direct_nonorm, -direct)
 
+    weight_attrs = {'normalization': 'counter'}
     power = CatalogFFTPower(data_positions1=data1[:3], data_weights1=data1[3:], randoms_positions1=randoms1[:3], randoms_weights1=randoms1[3:],
                             nmesh=nmesh, resampler=resampler, interlacing=interlacing, ells=ells, edges=kedges, position_type='xyz',
-                            direct_selection_attrs=selection_attrs, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights)
+                            direct_selection_attrs=selection_attrs, D1D2_twopoint_weights=twopoint_weights, D1R2_twopoint_weights=twopoint_weights, weight_attrs=weight_attrs)
 
     direct_D1D2 = DirectPower(power.poles.k, positions1=data1[:3], weights1=data1[3:], position_type='xyz',
-                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights) #, weight_attrs=weight_attrs)
     direct_D1R2 = DirectPower(power.poles.k, positions1=data1[:3], positions2=randoms1[:3], weights1=data1[3:], weights2=randoms1[3:], position_type='xyz',
-                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights, weight_attrs=weight_attrs)
     direct_R1D2 = DirectPower(power.poles.k, positions1=randoms1[:3], positions2=data1[:3], weights1=randoms1[3:], weights2=data1[3:], position_type='xyz',
-                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights)
+                              ells=ells, selection_attrs=selection_attrs, weight_type='inverse_bitwise_minus_individual', twopoint_weights=twopoint_weights, weight_attrs=weight_attrs)
     assert np.allclose(power.poles.power_direct_nonorm, get_alpha(power.attrs, 'DD') * direct_D1D2.power_nonorm - get_alpha(power.attrs, 'DR') * direct_D1R2.power_nonorm - get_alpha(power.attrs, 'RD') * direct_R1D2.power_nonorm)
 
     power = power.poles
