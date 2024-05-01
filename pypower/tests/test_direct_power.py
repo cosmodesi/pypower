@@ -267,6 +267,7 @@ def test_direct_power():
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'weight_attrs': {'nrealizations': 42, 'noffset': 3}})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 2, 'weight_attrs': {'noffset': 0, 'default_value': 0.8}})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 2, 'weight_attrs': {'normalization': 'counter'}})
+        list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 0, 'weight_attrs': {'normalization': 'counter'}})
         # los
         for los in ['midpoint', 'firstpoint', 'endpoint']:
             list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'los': los})
@@ -281,6 +282,7 @@ def test_direct_power():
         list_options.append({'autocorr': autocorr, 'twopoint_weights': twopoint_weights})
         list_options.append({'autocorr': autocorr, 'n_bitwise_weights': 2, 'twopoint_weights': twopoint_weights, 'weight_type': 'inverse_bitwise_minus_individual'})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'twopoint_weights': twopoint_weights})
+
 
     for engine in list_engine:
         for options in list_options:
@@ -326,6 +328,8 @@ def test_direct_power():
                 kwargs = {name: weight_attrs[name] for name in ['nrealizations', 'noffset', 'default_value']}
                 return data[:3] + [wiip(data[3:3 + n_bitwise_weights], **kwargs)] + data[3 + n_bitwise_weights:]
 
+            if n_bitwise_weights == 0:
+                weight_attrs['nrealizations'] = None
             if iip:
                 data1_ref = dataiip(data1_ref)
                 data2_ref = dataiip(data2_ref)
@@ -347,7 +351,7 @@ def test_direct_power():
             if twopoint_weights is not None:
                 twopoint_weights = TwoPointWeight(np.cos(np.radians(twopoint_weights.sep[::-1], dtype=dtype)), np.asarray(twopoint_weights.weight[::-1], dtype=dtype))
 
-            if weight_attrs.get('normalization', None) == 'counter':
+            if n_bitwise_weights and weight_attrs.get('normalization', None) == 'counter':
                 nalways = weight_attrs.get('nalways', 0)
                 noffset = weight_attrs.get('noffset', 1)
                 nrealizations = weight_attrs['nrealizations']
@@ -550,6 +554,96 @@ def test_catalog_power():
     assert np.allclose(poles.power[2:], power2.poles.power)
 
 
+def format_pip_reference():
+    ref_dir = 'reference_pip'
+    for mode in ['gal_w_uncorrelated', 'gal_w_correlated'][1:]:
+        fn = os.path.join(ref_dir, 'Arnaud_test_{}.dat'.format(mode))
+        nbits = 62
+        dtype = [(axis, np.float64) for axis in 'xyz']
+        dtype += [('indweight', np.float64), ('bitweight0', np.int32), ('bitweight1', np.int32)]
+        dtype += [('bit{:d}'.format(ibit), np.bool_) for ibit in range(nbits)]
+        tmp = []
+        with open(fn, 'r') as file:
+            for line in file:
+                if line.strip().startswith('#'): continue
+                line = [el.strip() for el in line.split(' ')]
+                line = [el for el in line if el]
+                if line[3] == 'F':
+                    continue
+                for ii in range(4, len(line)):
+                    if ii == 4:
+                        line[ii] = float(line[ii])
+                    elif ii in [5, 6]:
+                        line[ii] = int(line[ii])
+                    else:
+                        line[ii] = line[ii] == 'T'
+                tmp.append(tuple(line[:3] + line[4:]))
+        tmp = np.array(tmp, dtype=dtype)
+        np.save(os.path.join(ref_dir, '{}.npy'.format(mode)), tmp)
+    #fn = os.path.join(ref_dir, 'Arnaud_test_ran.dat')
+    #tmp = np.loadtxt(fn, dtype=[(axis, np.float64) for axis in 'xyz'])
+    #np.save(os.path.join(ref_dir, 'ran.npy'), tmp)
+
+
+def test_pip_counts_correction():
+
+    from pypower.direct_power import get_inverse_probability_weight
+    from pypower import DirectPower
+    ref_dir = 'reference_pip'
+    ref_fn = os.path.join(ref_dir, 'Arnaud_ng512_tm0.5_P_pipco_mp.dat')
+    mode = 'correlated'
+    no_indweight = False
+    fn = os.path.join(ref_dir, 'gal_w_{}.npy'.format(mode))
+    tmp = np.load(fn)
+    nbits = len([name for name in tmp.dtype.names if name.startswith('bit') and 'weight' not in name])
+    data_weights = [tmp['indweight']] + utils.pack_bitarrays(*[tmp['bit{:d}'.format(ibit)] for ibit in range(nbits)])
+    data_weights_iip = [data_weights[0], get_inverse_probability_weight(data_weights[1:], noffset=1, nrealizations=1 + nbits)]
+    if no_indweight:
+        data_weights = data_weights[1:]
+        data_weights_iip = data_weights_iip[1:]
+    data_positions = [tmp[axis] for axis in 'xyz']
+    #fn = os.path.join(ref_dir, 'ran.npy')
+    #tmp = np.load(fn)
+    #randoms_positions = [tmp[axis] for axis in 'xyz']
+    kmid, kavg, p0, p2, p4, norm = np.loadtxt(ref_fn, unpack=True, usecols=[0, 1, 5, 6, 7, 9])
+
+    ref = np.array([p0, p2, p4]) * norm
+    los = 'midpoint'
+    selection_attrs = {'theta': (0., 0.5)}
+    ells = (0, 2, 4)
+
+    result = DirectPower(kavg, positions1=data_positions, weights1=data_weights, ells=ells, los=los,
+                         weight_type='inverse_bitwise_minus_individual', weight_attrs={'nrealizations': 1 + nbits, 'normalization': 'counter'},
+                         selection_attrs=selection_attrs, position_type='xyz', nthreads=4)
+
+    #result2 = DirectPower(kavg, positions1=data_positions, weights1=data_weights, ells=ells, los=los,
+    #                      weight_type='inverse_bitwise_minus_individual', weight_attrs={'nrealizations': 1 + nbits},
+    #                      selection_attrs=selection_attrs, position_type='xyz', nthreads=4)
+
+    tol = {'rtol': 2e-1, 'atol': 0.}
+    print(result.power_nonorm / ref)
+    #print(result2.power_nonorm / result.power_nonorm)
+    assert np.allclose(result.power_nonorm, ref, **tol)
+
+    if True:
+        from matplotlib import pyplot as plt
+
+        ax = plt.gca()
+        ax.plot([], [], color='k', linestyle='-', label='Arnaud')
+        ax.plot([], [], color='k', linestyle='--', label='Davide')
+        #ax.plot([], [], color='k', linestyle=':', label='Arnaud, no correction')
+        for ill, ell in enumerate(result.ells):
+            color = 'C{:d}'.format(ill)
+            ax.plot(kavg, kavg * result.power_nonorm[ill].real, color=color, linestyle='-', label='$\ell = {:d}$'.format(ell))
+            ax.plot(kavg, kavg * ref[ill], color=color, linestyle='--')
+            #ax.plot(kavg, kavg * result2.power_nonorm[ill].real, color=color, linestyle=':')
+        ax.legend()
+        ax.set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
+        ax.set_ylabel('$kP(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        utils.savefig('_tests/tmp.png')
+        plt.show()
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -558,3 +652,5 @@ if __name__ == '__main__':
     #test_bitwise_weight()
     test_direct_power()
     test_catalog_power()
+    #format_pip_reference()
+    test_pip_counts_correction()

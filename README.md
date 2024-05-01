@@ -63,12 +63,12 @@ python setup.py develop --user
 
 **pypower** is free software distributed under a BSD3 license. For details see the [LICENSE](https://github.com/cosmodesi/pypower/blob/main/LICENSE).
 
-## Credits
+## Acknowledgments
 
-[nbodykit](https://github.com/bccp/nbodykit) for recipe and most routines for power spectrum estimation.
-Patrick McDonald for [recipe](https://github.com/cosmodesi/GC_derivations) for window function matrix estimation.
-Juan Mena Fernandez for issue reports.
-
+- [nbodykit](https://github.com/bccp/nbodykit) for recipe and most routines for power spectrum estimation.
+- Patrick McDonald for [recipe](https://github.com/cosmodesi/GC_derivations) for window function matrix estimation.
+- Juan Mena Fernandez for issue reports.
+- Davide Bianchi for cross-checks of PIP correction.
 
 # Citations
 

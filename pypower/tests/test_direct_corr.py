@@ -114,6 +114,7 @@ def test_direct_corr():
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'weight_attrs': {'nrealizations': 42, 'noffset': 3}})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 2, 'weight_attrs': {'noffset': 0, 'default_value': 0.8}})
         list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 2, 'weight_attrs': {'normalization': 'counter'}})
+        list_options.append({'autocorr': autocorr, 'n_individual_weights': 1, 'n_bitwise_weights': 0, 'weight_attrs': {'normalization': 'counter'}})
         # los
         for los in ['midpoint', 'firstpoint', 'endpoint']:
             list_options.append({'autocorr': autocorr, 'n_individual_weights': 2, 'n_bitwise_weights': 2, 'los': los, 'ells': (0, 1, 2, 3, 4, 5, 6, 8)})
@@ -174,6 +175,8 @@ def test_direct_corr():
                 kwargs = {name: weight_attrs[name] for name in ['nrealizations', 'noffset', 'default_value']}
                 return data[:3] + [wiip(data[3:3 + n_bitwise_weights], **kwargs)] + data[3 + n_bitwise_weights:]
 
+            if n_bitwise_weights == 0:
+                weight_attrs['nrealizations'] = None
             if iip:
                 data1_ref = dataiip(data1_ref)
                 data2_ref = dataiip(data2_ref)
@@ -195,7 +198,7 @@ def test_direct_corr():
             if twopoint_weights is not None:
                 twopoint_weights = TwoPointWeight(np.cos(np.radians(twopoint_weights.sep[::-1], dtype=dtype)), np.asarray(twopoint_weights.weight[::-1], dtype=dtype))
 
-            if weight_attrs.get('normalization', None) == 'counter':
+            if n_bitwise_weights and weight_attrs.get('normalization', None) == 'counter':
                 nalways = weight_attrs.get('nalways', 0)
                 noffset = weight_attrs.get('noffset', 1)
                 nrealizations = weight_attrs['nrealizations']
