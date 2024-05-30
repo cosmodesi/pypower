@@ -120,6 +120,13 @@ class BaseMatrix(BaseClass):
 
     projsout : list
         List of output "observed" projections.
+
+    weightsin : list
+        List of weights to apply when rebinning input "theory" coordinates.
+
+    weightsout : list
+        List of weights to apply when rebinning output "observed" coordinates.
+
     """
     weightsin = None
     weightsout = None
@@ -165,8 +172,9 @@ class BaseMatrix(BaseClass):
         self.projsin = [Projection(proj) for proj in projsin]
         self.projsout = [Projection(proj) for proj in projsout]
         self.xin, self.xout = ([np.arange(s)] for s in self.value.shape)
-        self.weightsin = self.weightsout = None
         self._set_xw(shape=self.value.shape, xin=xin, xout=xout, weightsin=weightsin, weightsout=weightsout, weight=weight)
+        if weightsin is None: self.weightsin = [np.ones(len(xin), dtype='f8') for xin in self.xin]
+        if weightsout is None: self.weightsout = [np.ones(len(xout), dtype='f8') for xout in self.xout]
         self.attrs = attrs or {}
 
     def _set_xw(self, shape=None, weight=1., **kwargs):
@@ -453,17 +461,8 @@ class BaseMatrix(BaseClass):
                 projs = [Projection(proj) for proj in projs]
             inprojs[axis] = projs
 
-            masks[axis] = []
-            x = getattr(self, 'x{}'.format(axis))
-            lim = locals()['x{}lim'.format(axis)]
-            for proj in projs:
-                selfii = selfprojs.index(proj)
-                if lim is not None:
-                    tmp = (x[selfii] >= lim[0]) & (x[selfii] <= lim[1])
-                    tmp = np.all(tmp, axis=tuple(range(1, tmp.ndim)))
-                else:
-                    tmp = np.ones(x[selfii].shape[0], dtype='?')
-                masks[axis].append(tmp)
+            xlim = locals()['x{}lim'.format(axis)]
+            masks[axis] = self.index_x(axis=axis, xlim=xlim, projs=projs, concatenate=False)
 
             for name in ['x', 'weights']:
                 arrays = getattr(self, '{}{}'.format(name, axis))
@@ -480,6 +479,54 @@ class BaseMatrix(BaseClass):
 
         self.value = np.bmat(value).A
         return self
+
+    def index_x(self, axis='out', xlim=None, projs=None, concatenate=True):
+        """
+        Return indices for given input x-limits and projs.
+
+        Parameters
+        ----------
+        axis : str, default='out'
+            Axis, 'in' or 'out'.
+
+        xlim : tuple, default=None
+            Restrict output coordinates to these (min, max) limits.
+            Defaults to ``(-np.inf, np.inf)``.
+
+        projs : list, default=None
+            List of input projections to return indices for.
+            Defaults to :attr:`projsin` if ``axis == 'in'``, :attr:`projsout` if ``axis == 'out'``.
+
+        concatenate : bool, default=True
+            If ``False``, return list of indices, for each input projection.
+
+        Returns
+        -------
+        indices : array, list
+        """
+        selfprojs = getattr(self, 'projs{}'.format(axis))
+        if projs is None:
+            projs = selfprojs
+        else:
+            isscalar = not isinstance(projs, list)
+            if isscalar: projs = [projs]
+            projs = [Projection(proj) for proj in projs]
+        toret = []
+        for proj in projs:
+            selfii = selfprojs.index(proj)
+            x = getattr(self, 'x{}'.format(axis))
+            offset = sum(len(xx) for xx in x[:selfii]) if concatenate else 0
+            if xlim is not None:
+                tmp = (x[selfii] >= xlim[0]) & (x[selfii] <= xlim[1])
+                tmp = np.all(tmp, axis=tuple(range(1, tmp.ndim)))
+            else:
+                tmp = np.ones(x[selfii].shape[0], dtype='?')
+            toret.append(offset + np.flatnonzero(tmp))
+        if concatenate:
+            return np.concatenate(toret, axis=0)
+        if isscalar:
+            return toret[0]
+        return toret
 
     def rebin_x(self, factorin=1, factorout=1, projsin=None, projsout=None, statistic=None):
         """
