@@ -808,6 +808,12 @@ class BaseMatrix(BaseClass):
         if weights is None:
             weights = [other.weight for other in others]
         new.value = np.average([other.value for other in others], weights=weights, axis=0)
+        for name in ['x', 'weights', 'vector']:
+            name = '{}{}'.format(name, 'out')
+            tmp = getattr(new, name)
+            if tmp is not None:
+                tmp = [np.average([getattr(other, name)[ii] for other in others], weights=weights, axis=0) for ii in range(len(tmp))]
+            setattr(new, name, tmp)
         new.weight = sum(other.weight for other in others)
         return new
 

@@ -364,8 +364,10 @@ def test_window_convolution():
     kout = np.linspace(0., 0.3, 60)
     projsin = ells + PowerSpectrumOddWideAngleMatrix.propose_out(ells, wa_orders=1)
     wm = PowerSpectrumSmoothWindowMatrix(kout, projsin, projsout=ells, window=window, sep=sep, kin_lim=kin_lim)
-    wm2 = wm.copy().rebin_x(factorout=2)
-    assert [np.allclose(xx, 1.) for xx in xm2.vectorout]
+    wm2 = wm.copy()
+    wm2.rebin_x(factorout=2)
+    wm2 = wm2 + wm2
+    assert [np.allclose(xx, 1.) for xx in wm2.vectorout]
     kwargs = {'d': 1000., 'wa_orders': 1, 'los': 'firstpoint'}
     wa = PowerSpectrumOddWideAngleMatrix(wm.xin[0], ells, projsout=wm.projsin, **kwargs)
     matrix = BaseMatrix.join(wa, wm)
