@@ -130,8 +130,10 @@ class BaseMatrix(BaseClass):
     """
     weightsin = None
     weightsout = None
+    vectorin = None
+    vectorout = None
 
-    def __init__(self, value, xin, xout, projsin, projsout, weightsin=None, weightsout=None, weight=1., attrs=None):
+    def __init__(self, value, xin, xout, projsin, projsout, weightsin=None, weightsout=None, vectorout=None, weight=1., attrs=None):
         """
         Initialize :class:`BaseMatrix`.
 
@@ -168,11 +170,11 @@ class BaseMatrix(BaseClass):
         """
         self.value = np.asarray(value)
         if self.value.ndim != 2:
-            raise ValueError('Input matrix must be 2D, not {}D.'.format(self.value.ndim))
+            raise ValueError('Input matrix must be 2D, not {:d}D.'.format(self.value.ndim))
         self.projsin = [Projection(proj) for proj in projsin]
         self.projsout = [Projection(proj) for proj in projsout]
         self.xin, self.xout = ([np.arange(s)] for s in self.value.shape)
-        self._set_xw(shape=self.value.shape, xin=xin, xout=xout, weightsin=weightsin, weightsout=weightsout, weight=weight)
+        self._set_xw(shape=self.value.shape, xin=xin, xout=xout, weightsin=weightsin, weightsout=weightsout, weight=weight, vectorout=vectorout)
         if weightsin is None: self.weightsin = [np.ones(len(xin), dtype='f8') for xin in self.xin]
         if weightsout is None: self.weightsout = [np.ones(len(xout), dtype='f8') for xout in self.xout]
         self.attrs = attrs or {}
@@ -181,7 +183,7 @@ class BaseMatrix(BaseClass):
         for iaxis, axis in enumerate(['in', 'out']):
             projsname = 'projs{}'.format(axis)
             projs = getattr(self, projsname)
-            for name in ['x', 'weights']:
+            for name in ['x', 'weights', 'vector']:
                 name = '{}{}'.format(name, axis)
                 arrays = kwargs.get(name, None)
                 if arrays is not None:
@@ -198,7 +200,7 @@ class BaseMatrix(BaseClass):
     def __getstate__(self):
         """Return this class state dictionary."""
         state = {}
-        for key in ['value', 'xin', 'xout', 'weightsin', 'weightsout', 'weight', 'attrs']:
+        for key in ['value', 'xin', 'xout', 'weightsin', 'weightsout', 'vectorin', 'vectorout', 'weight', 'attrs']:
             if hasattr(self, key): state[key] = getattr(self, key)
         for key in ['projsin', 'projsout']:
             state[key] = [proj.__getstate__() for proj in getattr(self, key)]
@@ -209,6 +211,9 @@ class BaseMatrix(BaseClass):
         super(BaseMatrix, self).__setstate__(state)
         if not hasattr(self, 'weight'):
             self.weight = np.array(1.)  # backward-compatibility
+        for name in ['vectorin', 'vectorout']:
+            if not hasattr(self, name):  # backward-compatibility
+                setattr(self, name, None)
         for key in ['projsin', 'projsout']:
             setattr(self, key, [Projection.from_state(state) for state in getattr(self, key)])
 
@@ -312,7 +317,7 @@ class BaseMatrix(BaseClass):
                 projs = [Projection(proj) for proj in projs]
             setattr(self, name, projs)
 
-            for name in ['x', 'weights']:
+            for name in ['x', 'weights', 'vector']:
                 name = '{}{}'.format(name, axis)
                 old = getattr(self, name, None)
                 if old is not None:
@@ -406,7 +411,7 @@ class BaseMatrix(BaseClass):
                     stopii = 0
                 masks[axis].append(np.arange(start, stopii, 1))
 
-            for name in ['x', 'weights']:
+            for name in ['x', 'weights', 'vector']:
                 arrays = getattr(self, '{}{}'.format(name, axis))
                 if arrays is not None:
                     for ii, proj in enumerate(projs):
@@ -464,7 +469,7 @@ class BaseMatrix(BaseClass):
             xlim = locals()['x{}lim'.format(axis)]
             masks[axis] = self.index_x(axis=axis, xlim=xlim, projs=projs, concatenate=False)
 
-            for name in ['x', 'weights']:
+            for name in ['x', 'weights', 'vector']:
                 arrays = getattr(self, '{}{}'.format(name, axis))
                 if arrays is not None:
                     for ii, proj in enumerate(projs):
@@ -583,13 +588,15 @@ class BaseMatrix(BaseClass):
                         raise ValueError('Rebinning factor {} must divide size along axis {}'.format(factorname, axis))
                     arrays[selfii] = utils.rebin(arrays[selfii], len(arrays[selfii]) // factor, statistic=np.sum)
                     new_weights[axis].append(arrays[selfii])
-            arrays = getattr(self, 'x{}'.format(axis))
-            for ii, proj in enumerate(projs):
-                selfii = selfprojs.index(proj)
-                if old_weights:
-                    arrays[selfii] = utils.rebin(arrays[selfii] * old_weights[axis][ii], len(arrays[selfii]) // factor, statistic=np.sum) / new_weights[axis][ii]
-                else:
-                    arrays[selfii] = utils.rebin(arrays[selfii], len(arrays[selfii]) // factor, statistic=np.mean)
+            for name in ['x', 'vector']:
+                arrays = getattr(self, '{}{}'.format(name, axis))
+                if arrays is not None:
+                    for ii, proj in enumerate(projs):
+                        selfii = selfprojs.index(proj)
+                        if old_weights:
+                            arrays[selfii] = utils.rebin(arrays[selfii] * old_weights[axis][ii], len(arrays[selfii]) // factor, statistic=np.sum) / new_weights[axis][ii]
+                        else:
+                            arrays[selfii] = utils.rebin(arrays[selfii], len(arrays[selfii]) // factor, statistic=np.mean)
 
         for iin, projin in enumerate(inprojs['in']):
             selfiin = self.projsin.index(projin)
@@ -633,7 +640,7 @@ class BaseMatrix(BaseClass):
         iaxis = ['in', 'out'].index(axis)
         projsname = 'projs{}'.format(axis)
         xname = 'x{}'.format(axis)
-        arrays = {'{}{}'.format(name, axis): [] for name in ['projs', 'x', 'weights']}
+        arrays = {'{}{}'.format(name, axis): [] for name in ['projs', 'x', 'weights', 'vector']}
         arrays = {name: array for name, array in arrays.items() if getattr(others[0], name, None) is not None}
         value = []
         for other in others:
@@ -671,7 +678,7 @@ class BaseMatrix(BaseClass):
         new = others[0].copy()
         axis = axis.lower()
         iaxis = ['in', 'out'].index(axis)
-        for name in ['x', 'weights']:
+        for name in ['x', 'weights', 'vector']:
             name = '{}{}'.format(name, axis)
             if getattr(new, name) is not None:
                 arrays = []
@@ -703,7 +710,7 @@ class BaseMatrix(BaseClass):
             if first.shape[1] != second.shape[0]:
                 raise ValueError('Input matrices do not have same shape')
             new.value = first.value @ new.value
-            for name in ['projs', 'x', 'weights']:
+            for name in ['projs', 'x', 'weights', 'vector']:
                 name = '{}in'.format(name)
                 tmp = getattr(first, name)
                 if tmp is not None: tmp = tmp.copy()
@@ -714,7 +721,7 @@ class BaseMatrix(BaseClass):
         new = super(BaseMatrix, self).__copy__()
         new.attrs = self.attrs.copy()
         for axis in ['in', 'out']:
-            for name in ['projs', 'x', 'weights']:
+            for name in ['projs', 'x', 'weights', 'vector']:
                 name = '{}{}'.format(name, axis)
                 tmp = getattr(new, name)
                 if tmp is not None: tmp = tmp.copy()
@@ -777,7 +784,7 @@ class BaseMatrix(BaseClass):
             matrix.append(tmp)
         self.value = np.concatenate(matrix, axis=iaxis)
         setattr(self, projsname, projs)
-        for name in ['x', 'weights']:
+        for name in ['x', 'weights', 'vector']:
             name = '{}{}'.format(name, axes[0])
             tmp = getattr(self, name)
             if tmp is not None and len(tmp) != len(projs):

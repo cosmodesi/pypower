@@ -1212,7 +1212,8 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
         else:
             self.projsout = [Projection(proj, default_wa_order=None if self.sum_wa else 0) for proj in projsout]
 
-        self._set_xw(xin=self.k, xout=kout, weightsout=weightsout, weight=getattr(window, 'wnorm_ref', [wnorm_ref])[0])
+        # vectorout is the response to a shotnoise
+        self._set_xw(xin=self.k, xout=kout, weightsout=weightsout, weight=getattr(window, 'wnorm_ref', [wnorm_ref])[0], vectorout=np.ones_like(kout))
         self.run()
 
     def run(self):
@@ -1221,7 +1222,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
 
         .. math::
 
-            W_{\ell\ell^{\prime}}^{(n)}(k) = \frac{2}{\pi} i^{\ell} (-i)^{\ell^{\prime}} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s)
+            W_{\ell\ell^{\prime}}^{(n)}(k, k^{\prime}) = \frac{2}{\pi} i^{\ell} (-i)^{\ell^{\prime}} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s)
             \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}^{(n)}(s)
 
         with :math:`\ell` corresponding to ``projout.ell`` and :math:`\ell^{\prime}` to ``projin.ell``, :math:`k` to ``kout`` and :math:`k^{\prime}` to ``kin``.
@@ -1231,7 +1232,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
 
         .. math::
 
-            W_{\ell,\ell^{\prime}}^{(n)}(k) = dk^{\prime} k^{\prime 2} \frac{2}{\pi} (-1)^{\ell/2} (-1)^{\ell^{\prime}/2} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s)
+            W_{\ell,\ell^{\prime}}^{(n)}(k, k^{\prime}) = dk^{\prime} k^{\prime 2} \frac{2}{\pi} (-1)^{\ell/2} (-1)^{\ell^{\prime}/2} \int ds s^{2} j_{\ell}(ks) j_{\ell^{\prime}}(k^{\prime}s)
             \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}^{(n)}(s)
 
         Note that we do not include :math:`k^{-n}` as this factor is included in :class:`PowerSpectrumOddWideAngleMatrix`.
@@ -1257,7 +1258,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
                     slout = slice(islab * nout // nslabs, (islab + 1) * nout // nslabs)
                     xout = self.xout[iout][slout]
                     # tmp is j_{\ell}(ks) \sum_{L} C_{\ell \ell^{\prime} L} Q_{L}(s)
-                    tmp = special.spherical_jn(projout.ell, xout[:, None] * self.sep) * self.corrmatrix[iin, iout]  # matrix has dimensions (kout,s)
+                    tmp = special.spherical_jn(projout.ell, xout[:, None] * self.sep) * self.corrmatrix[iin, iout]  # matrix has dimensions (kout, s)
                     # from hankl import P2xi, xi2P
                     fftlog = CorrelationToPower(self.sep, ell=projin.ell, q=self.q, xy=self.xy, lowring=False, complex=False)
                     xin, tmp = fftlog(tmp)  # matrix has dimensions (kout, k)
