@@ -1213,7 +1213,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
             self.projsout = [Projection(proj, default_wa_order=None if self.sum_wa else 0) for proj in projsout]
 
         # vectorout is the response to a shotnoise
-        self._set_xw(xin=self.k, xout=kout, weightsout=weightsout, weight=getattr(window, 'wnorm_ref', [wnorm_ref])[0], vectorout=np.ones_like(kout))
+        self._set_xw(xin=self.k, xout=kout, weightsout=weightsout, weight=getattr(window, 'wnorm_ref', [wnorm_ref])[0], vectorout=[(proj.ell == 0) * np.ones_like(kout) for proj in self.projsout])
         self.run()
 
     def run(self):

@@ -367,7 +367,7 @@ def test_window_convolution():
     wm2 = wm.copy()
     wm2.rebin_x(factorout=2)
     wm2 = wm2 + wm2
-    assert [np.allclose(xx, 1.) for xx in wm2.vectorout]
+    assert [np.allclose(xx, ix == 0) for ix, xx in enumerate(wm2.vectorout)]
     kwargs = {'d': 1000., 'wa_orders': 1, 'los': 'firstpoint'}
     wa = PowerSpectrumOddWideAngleMatrix(wm.xin[0], ells, projsout=wm.projsin, **kwargs)
     matrix = BaseMatrix.join(wa, wm)
