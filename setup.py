@@ -17,5 +17,5 @@ setup(name=package_basename,
       license='BSD3',
       url='http://github.com/cosmodesi/pypower',
       install_requires=['numpy', 'scipy'],  # just to get the data types
-      extras_require={'extras': ['pmesh', 'sympy', 'numexpr']},
+      extras_require={'extras': ['pmesh @ git+https://github.com/adematti/pmesh', 'sympy', 'numexpr']},
       packages=[package_basename])
