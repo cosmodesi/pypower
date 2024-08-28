@@ -630,7 +630,7 @@ class CatalogSmoothWindow(MeshFFTPower):
                  los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype=None,
                  resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
                  direct_engine='corrfunc', direct_selection_attrs=None, direct_edges=None, direct_attrs=None,
-                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, mode_oversampling=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogSmoothWindow`, i.e. estimate power spectrum window.
 
@@ -678,7 +678,7 @@ class CatalogSmoothWindow(MeshFFTPower):
         power_ref : PowerSpectrumMultipoles, default=None
             "Reference" power spectrum estimation, e.g. of the actual data.
             It is used to set default values for ``projs``, ``los``, ``boxsize``, ``boxcenter``, ``nmesh``,
-            ``interlacing``, ``resampler`` and ``wnorm`` if those are ``None``.
+            ``interlacing``, ``resampler``, ``wnorm`` and ``mode_oversampling`` if those are ``None``.
 
         los : string, array, default=None
             If ``los`` is 'firstpoint' (resp. 'endpoint'), use local (varying) first point (resp. end point) line-of-sight.
@@ -787,6 +787,13 @@ class CatalogSmoothWindow(MeshFFTPower):
             Window function shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
             and in case of auto-correlation is obtained by dividing :func:`unnormalized_shotnoise` by window function normalization.
 
+        mode_oversampling : int, default=None
+            If > 0, artificially increase the resolution of the input mesh by a factor ``2 * mode_oversampling + 1``.
+            In practice, shift the coordinates of the coordinates of the input grid by ``np.arange(-mode_oversampling, mode_oversampling + 1)``
+            along each of x, y, z axes.
+            This reduces "discrete grid binning effects".
+            If ``None``, defaults to the value used in estimation of ``power_ref``.
+
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scatted across all ranks.
             Else the MPI rank where input positions and weights are gathered.
@@ -814,8 +821,10 @@ class CatalogSmoothWindow(MeshFFTPower):
                 projs = [(ell, 0) for ell in range(0, 2 * ellmax + 1, 2 - with_odd)]
                 if los is None or isinstance(los, str) and los in ['firstpoint', 'endpoint']:
                     projs += [(ell, 1) for ell in range(1 - with_odd, 2 * ellmax + 2, 2 - with_odd)]  # e.g. P_5^{(1)} contribution to P_4 => ell = 9
+            if mode_oversampling is None: mode_oversampling = power_ref.attrs.get('mode_oversampling', 0)
             if dtype is None: dtype = power_ref.attrs.get('dtype', 'f8')
 
+        if mode_oversampling is None: mode_oversampling = 0
         if dtype is None: dtype = 'f8'
         rdtype = _get_real_dtype(dtype)
         if projs is None:
@@ -911,7 +920,7 @@ class CatalogSmoothWindow(MeshFFTPower):
                     mesh2_wa = mesh2
             self.same_shotnoise = autocorr or same_shotnoise  # when providing 2 meshes, shot noise estimate is 0; correct this here
             # Now, run power spectrum estimation
-            super(CatalogSmoothWindow, self).__init__(mesh1=mesh1_wa, mesh2=mesh2_wa, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm)
+            super(CatalogSmoothWindow, self).__init__(mesh1=mesh1_wa, mesh2=mesh2_wa, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm, mode_oversampling=mode_oversampling)
 
             if direct_selection_attrs:
                 positions1, weights1 = mesh1_wa.data_positions, mesh1_wa.data_weights

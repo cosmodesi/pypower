@@ -975,7 +975,7 @@ class MeshFFTCorr(MeshFFTBase):
         Estimated correlation function wedges (if relevant).
     """
 
-    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None, shotnoise_nonorm=None):
+    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None, shotnoise_nonorm=None, mode_oversampling=0):
         r"""
         Initialize :class:`MeshFFTCorr`, i.e. estimate correlation function.
 
@@ -1034,6 +1034,12 @@ class MeshFFTCorr(MeshFFTBase):
             or both ``mesh1`` and ``mesh2`` are :class:`pmesh.pm.RealField`,
             and in case of auto-correlation is obtained by dividing :meth:`unnormalized_shotnoise`
             of ``mesh1`` by correlation function normalization.
+
+        mode_oversampling : int, default=0
+            If > 0, artificially increase the resolution of the input mesh by a factor ``2 * mode_oversampling + 1``.
+            In practice, shift the coordinates of the coordinates of the input grid by ``np.arange(-mode_oversampling, mode_oversampling + 1)``
+            along each of x, y, z axes.
+            This reduces "discrete grid binning effects".
         """
         t0 = time.time()
         self._set_compensations(compensations)
@@ -1043,6 +1049,7 @@ class MeshFFTCorr(MeshFFTBase):
         self._set_edges(edges)
         self._set_normalization(wnorm, mesh1=mesh1, mesh2=mesh2)
         self._set_shotnoise(shotnoise, shotnoise_nonorm=shotnoise_nonorm, mesh1=mesh1, mesh2=mesh2)
+        self.mode_oversampling = int(mode_oversampling)
         self.attrs.update(self._get_attrs())
         t1 = time.time()
         if self.mpicomm.rank == 0:
@@ -1132,9 +1139,9 @@ class MeshFFTCorr(MeshFFTBase):
 
         rfield = cfield1.c2r()
         del cfield1, cfield2
-        result, result_poles = project_to_basis(rfield, self.edges, ells=self.ells, los=self.los, exclude_zero=False)
+        result, result_poles = project_to_basis(rfield, self.edges, ells=self.ells, los=self.los, exclude_zero=False, mode_oversampling=self.mode_oversampling)
         rfield[...] = rfield.cmean()
-        result_zero, result_zero_poles = project_to_basis(rfield, self.edges, ells=self.ells, los=self.los, exclude_zero=False)
+        result_zero, result_zero_poles = project_to_basis(rfield, self.edges, ells=self.ells, los=self.los, exclude_zero=False, mode_oversampling=self.mode_oversampling)
 
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': self.shotnoise * self.wnorm * self.nmesh.prod(dtype='f8') / self.boxsize.prod(dtype='f8'),
                   'attrs': self.attrs, 'mpicomm': self.mpicomm}
@@ -1207,7 +1214,7 @@ class MeshFFTCorr(MeshFFTBase):
             # from nbodykit.algorithms.fftcorr import project_to_basis
             rfield = Aell.c2r()
             del Aell
-            proj_result = project_to_basis(rfield, self.edges, exclude_zero=False)[0]
+            proj_result = project_to_basis(rfield, self.edges, exclude_zero=False, mode_oversampling=self.mode_oversampling)[0]
             result.append(np.ravel(proj_result[2]))
             result_zero.append(np.ones_like(result[-1]) * rfield.cmean())
             s, nmodes = proj_result[0], proj_result[3]
@@ -1304,9 +1311,9 @@ class MeshFFTCorr(MeshFFTBase):
                 self.log_info('ell = {:d} done; {:d} r2c completed'.format(ell, len(Ylms[ill])))
 
             # Project on to 1d s-basis (averaging over mu=[-1, 1])
-            proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
+            proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False, mode_oversampling=self.mode_oversampling)[0]
             result.append(4 * np.pi * np.ravel(proj_result[2]))
-            proj_result = project_to_basis(Aell_zero, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
+            proj_result = project_to_basis(Aell_zero, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False, mode_oversampling=self.mode_oversampling)[0]
             result_zero.append(4 * np.pi * np.ravel(proj_result[2]))
             s, nmodes = proj_result[0], proj_result[3]
 
@@ -1331,7 +1338,7 @@ class CatalogFFTCorr(MeshFFTCorr):
                  edges=None, ells=(0, 2, 4), los=None,
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
                  resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
-                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, mode_oversampling=0, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTCorr`, i.e. estimate correlation function.
 
@@ -1485,6 +1492,12 @@ class CatalogFFTCorr(MeshFFTCorr):
             Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
             and in case of auto-correlation is obtained by dividing :meth:`unnormalized_shotnoise` by correlation function normalization.
 
+        mode_oversampling : int, default=0
+            If > 0, artificially increase the resolution of the input mesh by a factor ``2 * mode_oversampling + 1``.
+            In practice, shift the coordinates of the coordinates of the input grid by ``np.arange(-mode_oversampling, mode_oversampling + 1)``
+            along each of x, y, z axes.
+            This reduces "discrete grid binning effects".
+
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scattered across all ranks.
             Else the MPI rank where input positions and weights are gathered.
@@ -1544,4 +1557,4 @@ class CatalogFFTCorr(MeshFFTCorr):
                              shifted_positions=positions['S2'], shifted_weights=weights['S2'], resampler=resampler[1], interlacing=interlacing[1], wrap=wrap)
 
         # Now, run correlation function estimation
-        super(CatalogFFTCorr, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm)
+        super(CatalogFFTCorr, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm, mode_oversampling=mode_oversampling)

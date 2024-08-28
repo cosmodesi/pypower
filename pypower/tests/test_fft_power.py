@@ -958,7 +958,36 @@ def test_interlacing():
     for interlacing, linestyle in zip([False, 2, 3, 4], ['-', '--', ':', '-.']):
         power = run(interlacing=interlacing)
         for ill, ell in enumerate(power.ells):
-            plt.plot(power.k, power.k * power(ell=ell).real, color='C{:d}'.format(ill), linestyle=linestyle, label='interlacing = {}'.format(interlacing))
+            plt.plot(power.k, power.k * power(ell=ell, complex=False), color='C{:d}'.format(ill), linestyle=linestyle, label='interlacing = {}'.format(interlacing) if ill == 0 else None)
+    plt.legend()
+    plt.show()
+
+
+def test_mode_oversampling():
+    from matplotlib import pyplot as plt
+    boxsize = 1000.
+    nmesh = 128
+    kedges = {'min': 0., 'step': 0.005}
+    ells = (0, 2)
+    resampler = 'ngp'
+    boxcenter = np.array([3000., 0., 0.])[None, :]
+
+    data = Catalog.read(data_fn)
+    randoms = Catalog.read(randoms_fn)
+    for catalog in [data, randoms]:
+        catalog['Position'] += boxcenter
+        catalog['Weight'] = catalog.ones()
+
+    def run(mode_oversampling=0):
+        return CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
+                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=3, ells=ells, los='firstpoint', edges=kedges, mode_oversampling=mode_oversampling,
+                               position_type='pos').poles
+
+    for oversampling, linestyle in zip([0, 1], ['-', '--', ':', '-.']):
+        power = run(mode_oversampling=oversampling)
+        assert power.attrs.get('mode_oversampling', None) is not None
+        for ill, ell in enumerate(power.ells):
+            plt.plot(power.k, power.k * power(ell=ell, complex=False), color='C{:d}'.format(ill), linestyle=linestyle, label='mode oversampling = {}'.format(oversampling) if ill == 0 else None)
     plt.legend()
     plt.show()
 
@@ -982,3 +1011,5 @@ if __name__ == '__main__':
     test_normalization()
     test_mpi()
     test_plot()
+    test_mode_oversampling()
+    test_interlacing()

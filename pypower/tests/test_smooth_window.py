@@ -380,7 +380,7 @@ def test_window_convolution():
 
     kin = matrix.xin[0]
     kout = matrix.xout[0]
-    pklin = Cosmology().get_fourier('eisenstein_hu').pk_interpolator().to_1d()(kin)
+    pklin = Cosmology().get_fourier('eisenstein_hu').pk_interpolator().to_1d(z=0.)(kin)
 
     def kaiser(f=0.8, bias=1.4):
         beta = f / bias

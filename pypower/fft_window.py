@@ -260,7 +260,7 @@ class MeshFFTWindow(MeshFFTPower):
         Window matrix.
     """
     def __init__(self, mesh1=None, mesh2=None, edgesin=None, projsin=None, power_ref=None, edges=None, ells=None, los=None, periodic=False, boxcenter=None,
-                 compensations=None, wnorm=None, shotnoise=None, shotnoise_nonorm=None, edgesin_type='smooth', **kwargs):
+                 compensations=None, wnorm=None, shotnoise=None, shotnoise_nonorm=None, edgesin_type='smooth', mode_oversampling=None, **kwargs):
         r"""
         Initialize :class:`MeshFFTWindow`.
 
@@ -347,6 +347,13 @@ class MeshFFTWindow(MeshFFTPower):
             'smooth' uses :func:`get_correlation_function_tophat_derivative`;
             'fourier-grid' paints ``edgesin`` on the Fourier mesh (akin to the periodic case), then takes the FFT.
 
+        mode_oversampling : int, default=None
+            If > 0, artificially increase the resolution of the input mesh by a factor ``2 * mode_oversampling + 1``.
+            In practice, shift the coordinates of the coordinates of the input grid by ``np.arange(-mode_oversampling, mode_oversampling + 1)``
+            along each of x, y, z axes.
+            This reduces "discrete grid binning effects".
+            If ``None``, defaults to the value used in estimation of ``power_ref``.
+
         kwargs : dict
             Arguments for :class:`ParticleMesh` in case ``mesh1`` is not provided (as may be the case if ``periodic`` is ``True``),
             typically ``boxsize``, ``nmesh``, ``mpicomm``.
@@ -363,10 +370,12 @@ class MeshFFTWindow(MeshFFTPower):
             if boxcenter is None: boxcenter = attrs_ref['boxcenter']
             if compensations is None: compensations = attrs_ref['compensations']
             if ells is None: ells = _get_attr_in_inst(power_ref, 'ells', insts=(None, 'poles'))
+            if mode_oversampling is None: mode_oversampling = attrs_ref.get('mode_oversampling', 0)
 
         self._set_los(los)
         self._set_ells(ells)
         self._set_periodic(periodic)
+        if mode_oversampling is None: mode_oversampling = 0
         if mesh1 is None:
             if not self.periodic:
                 raise ValueError('mesh1 can be "None" only if periodic = True')
@@ -398,6 +407,7 @@ class MeshFFTWindow(MeshFFTPower):
                 else:
                     self._set_normalization(self.wnorm, mesh1, mesh2)
         self._set_shotnoise(shotnoise, shotnoise_nonorm=shotnoise_nonorm, mesh1=mesh1, mesh2=mesh2)
+        self.mode_oversampling = int(mode_oversampling)
         self.attrs.update(self._get_attrs())
         t1 = time.time()
         if self.mpicomm.rank == 0:
@@ -520,7 +530,7 @@ class MeshFFTWindow(MeshFFTPower):
                 tmp *= legendre(mu)
             slab[:] = tmp
 
-        result, result_poles = project_to_basis(self.qfield, self.edges, ells=self.ells, los=self.los)
+        result, result_poles = project_to_basis(self.qfield, self.edges, ells=self.ells, los=self.los, mode_oversampling=self.mode_oversampling)
         # Format the power results into :class:`PowerSpectrumWedges` instance
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': 0., 'attrs': self.attrs}
         k, mu, power, nmodes, power_zero = result
@@ -570,7 +580,7 @@ class MeshFFTWindow(MeshFFTPower):
 
         wfield = qfield.r2c()
 
-        result, result_poles = project_to_basis(wfield, self.edges, ells=self.ells, los=self.los)
+        result, result_poles = project_to_basis(wfield, self.edges, ells=self.ells, los=self.los, mode_oversampling=self.mode_oversampling)
         # Format the power results into :class:`PowerSpectrumWedges` instance
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': 0., 'attrs': self.attrs}
         k, mu, power, nmodes, power_zero = result
@@ -615,7 +625,7 @@ class MeshFFTWindow(MeshFFTPower):
                     slab[:] *= 4 * np.pi * Ylm(self.khat[0][islab], self.khat[1][islab], self.khat[2][islab])
                 wfield[:] += cfield[:]
 
-            proj_result = project_to_basis(wfield, self.edges, antisymmetric=bool(ellout % 2))[0]
+            proj_result = project_to_basis(wfield, self.edges, antisymmetric=bool(ellout % 2), mode_oversampling=self.mode_oversampling)[0]
             result.append(tuple(np.ravel(proj_result[ii]) for ii in [2, -1]))
             k, nmodes = proj_result[0], proj_result[3]
 
@@ -782,7 +792,7 @@ class CatalogFFTWindow(MeshFFTWindow):
                  edgesin=None, projsin=None, edges=None, ells=None, power_ref=None,
                  los=None, nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype=None,
                  resampler=None, interlacing=None, position_type='xyz', weight_type='auto', weight_attrs=None,
-                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, edgesin_type='smooth', mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, edgesin_type='smooth', mode_oversampling=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTWindow`, i.e. estimate power spectrum window matrix.
 
@@ -820,7 +830,7 @@ class CatalogFFTWindow(MeshFFTWindow):
         power_ref : PowerSpectrumMultipoles, default=None
             "Reference" power spectrum estimation, e.g. of the actual data.
             It is used to set default values for ``edges``, ``ells``, ``los``, ``boxsize``, ``boxcenter``, ``nmesh``,
-            ``interlacing``, ``resampler`` and ``wnorm`` if those are ``None``.
+            ``interlacing``, ``resampler``, ``wnorm`` and ``mode_oversampling`` if those are ``None``.
 
         edges : tuple, array, default=None
             If ``los`` is local (``None``), :math:`k`-edges for :attr:`poles`.
@@ -927,6 +937,13 @@ class CatalogFFTWindow(MeshFFTWindow):
             'smooth' uses :func:`get_correlation_function_tophat_derivative`;
             'fourier-grid' paints ``edgesin`` on the Fourier mesh, then takes the FFT.
 
+        mode_oversampling : int, default=None
+            If > 0, artificially increase the resolution of the input mesh by a factor ``2 * mode_oversampling + 1``.
+            In practice, shift the coordinates of the coordinates of the input grid by ``np.arange(-mode_oversampling, mode_oversampling + 1)``
+            along each of x, y, z axes.
+            This reduces "discrete grid binning effects".
+            If ``None``, defaults to the value used in estimation of ``power_ref``.
+
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scatted across all ranks.
             Else the MPI rank where input positions and weights are gathered.
@@ -1007,4 +1024,4 @@ class CatalogFFTWindow(MeshFFTWindow):
             mesh2 = get_mesh(positions['R2'], data_weights=weights['R2'], resampler=resampler[1], interlacing=interlacing[1])
 
         # Now, run window function estimation
-        super(CatalogFFTWindow, self).__init__(mesh1=mesh1, mesh2=mesh2, edgesin=edgesin, projsin=projsin, power_ref=power_ref, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm, edgesin_type=edgesin_type)
+        super(CatalogFFTWindow, self).__init__(mesh1=mesh1, mesh2=mesh2, edgesin=edgesin, projsin=projsin, power_ref=power_ref, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm, edgesin_type=edgesin_type, mode_oversampling=mode_oversampling)

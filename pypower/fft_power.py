@@ -139,7 +139,7 @@ def get_real_Ylm(ell, m, modules=None):
     return Ylm
 
 
-def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, exclude_zero=False):
+def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, exclude_zero=False, mode_oversampling=0):
     r"""
     Project a 3D statistic on to the specified basis. The basis will be one of:
 
@@ -197,6 +197,12 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
     exclude_zero : bool, default=0
         Whether to exclude zero mode from the sum.
 
+    mode_oversampling : int, default=0
+        If > 0, artificially increase the resolution of the input mesh by a factor ``2 * mode_oversampling + 1``.
+        In practice, shift the coordinates of the coordinates of the input grid by ``np.arange(-mode_oversampling, mode_oversampling + 1)``
+        along each of x, y, z axes.
+        This reduces "discrete grid binning effects".
+
     Returns
     -------
     result : tuple
@@ -250,80 +256,88 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
         raise ValueError('Multipole numbers must be non-negative integers')
 
     # Initialize the binning arrays
-    musum = np.zeros((nx + 3, nmu + 3))
-    xsum = np.zeros((nx + 3, nmu + 3))
+    musum = np.zeros((nx + 3, nmu + 3), dtype='f8')
+    xsum = np.zeros((nx + 3, nmu + 3), dtype='f8')
     ysum = np.zeros((nell, nx + 3, nmu + 3), dtype=y3d.dtype)  # extra dimension for multipoles
-    nsum = np.zeros((nx + 3, nmu + 3), dtype='i8')
+    nsum = np.zeros((nx + 3, nmu + 3), dtype='f8' if mode_oversampling else 'i8')
     # If input array is Hermitian symmetric, only half of the last axis is stored in `y3d`
 
     from pmesh.pm import RealField
     cellsize = y3d.BoxSize / y3d.Nmesh if isinstance(y3d, RealField) else 2. * np.pi / y3d.BoxSize
     mincell = np.min(cellsize)
 
-    # Iterate over y-z planes of the coordinate mesh
-    for islab in range(x3d[0].shape[0]):
-        # The square of coordinate mesh norm
-        # (either Fourier space k or configuraton space x)
-        xvec = (x3d[0][islab].real.astype(xdtype),) + tuple(x3d[i].real.astype(xdtype) for i in range(1, 3))
-        xnorm = sum(xx**2 for xx in xvec)**0.5
+    import itertools
+    shifts = [np.arange(-mode_oversampling, mode_oversampling + 1)] * len(cellsize)
+    shifts = list(itertools.product(*shifts))
 
-        # If empty, do nothing
-        if len(xnorm.flat) == 0: continue
+    for shift in shifts:
+        if mode_oversampling: shift = cellsize * shift / (2 * mode_oversampling)
 
-        # Get the bin indices for x on the slab
-        dig_x = np.digitize(xnorm.flat, xedges, right=False)
-        mask_zero = xnorm < mincell / 2.
-        # y3d[islab, mask_zero[0]] = 0.
-        dig_x[mask_zero.flat] = nx + 2
+        # Iterate over y-z planes of the coordinate mesh
+        for islab in range(x3d[0].shape[0]):
+            # The square of coordinate mesh norm
+            # (either Fourier space k or configuraton space x)
+            xvec = (x3d[0][islab].real.astype(xdtype),) + tuple(x3d[i].real.astype(xdtype) for i in range(1, 3))
+            xvec = tuple(xx + ss for xx, ss in zip(xvec, shift))
+            xnorm = sum(xx**2 for xx in xvec)**0.5
 
-        # Get the bin indices for mu on the slab
-        mu = sum(xx * ll for xx, ll in zip(xvec, los))
-        mu[~mask_zero] /= xnorm[~mask_zero]
+            # If empty, do nothing
+            if len(xnorm.flat) == 0: continue
 
-        if hermitian_symmetric == 0:
-            mus = [mu]
-        else:
-            nonsingular = np.ones(xnorm.shape, dtype='?')
-            # Get the indices that have positive freq along symmetry axis = -1
-            nonsingular[...] = x3d[-1][0] > 0.
-            mus = [mu, -mu]
+            # Get the bin indices for x on the slab
+            dig_x = np.digitize(xnorm.flat, xedges, right=False)
+            mask_zero = xnorm < mincell / 2.
+            # y3d[islab, mask_zero[0]] = 0.
+            dig_x[mask_zero.flat] = nx + 2
 
-        # Accounting for negative frequencies
-        for imu, mu in enumerate(mus):
-            # Make the multi-index
-            dig_mu = np.digitize(mu.flat, muedges, right=False)  # this is bins[i-1] <= x < bins[i]
-            dig_mu[mu.real.flat == muedges[-1]] = nmu  # last mu inclusive
-            dig_mu[mask_zero.flat] = nmu + 2
+            # Get the bin indices for mu on the slab
+            mu = sum(xx * ll for xx, ll in zip(xvec, los))
+            mu[~mask_zero] /= xnorm[~mask_zero]
 
-            multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx + 3, nmu + 3))
+            if hermitian_symmetric == 0:
+                mus = [mu]
+            else:
+                nonsingular = np.ones(xnorm.shape, dtype='?')
+                # Get the indices that have positive freq along symmetry axis = -1
+                nonsingular[...] = x3d[-1][0] > 0.
+                mus = [mu, -mu]
 
-            if hermitian_symmetric and imu:
-                multi_index = multi_index[nonsingular.flat]
-                xnorm = xnorm[nonsingular]  # it will be recomputed
-                mu = mu[nonsingular]
+            # Accounting for negative frequencies
+            for imu, mu in enumerate(mus):
+                # Make the multi-index
+                dig_mu = np.digitize(mu.flat, muedges, right=False)  # this is bins[i-1] <= x < bins[i]
+                dig_mu[mu.real.flat == muedges[-1]] = nmu  # last mu inclusive
+                dig_mu[mask_zero.flat] = nmu + 2
 
-            # Count number of modes in each bin
-            nsum.flat += np.bincount(multi_index, minlength=nsum.size)
-            # Sum up x in each bin
-            xsum.flat += np.bincount(multi_index, weights=xnorm.flat, minlength=nsum.size)
-            # Sum up mu in each bin
-            musum.flat += np.bincount(multi_index, weights=mu.flat, minlength=nsum.size)
-
-            # Compute multipoles by weighting by Legendre(ell, mu)
-            for ill, ell in enumerate(unique_ells):
-
-                weightedy3d = (2. * ell + 1.) * legpoly[ill](mu)
+                multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx + 3, nmu + 3))
 
                 if hermitian_symmetric and imu:
-                    # Weight the input 3D array by the appropriate Legendre polynomial
-                    weightedy3d = hermitian_symmetric * weightedy3d * y3d[islab][nonsingular[0]].conj()  # hermitian_symmetric is 1 or -1
-                else:
-                    weightedy3d = weightedy3d * y3d[islab, ...]
+                    multi_index = multi_index[nonsingular.flat]
+                    xnorm = xnorm[nonsingular]  # it will be recomputed
+                    mu = mu[nonsingular]
 
-                # Sum up the weighted y in each bin
-                ysum[ill, ...].real.flat += np.bincount(multi_index, weights=weightedy3d.real.flat, minlength=nsum.size)
-                if np.iscomplexobj(ysum):
-                    ysum[ill, ...].imag.flat += np.bincount(multi_index, weights=weightedy3d.imag.flat, minlength=nsum.size)
+                # Count number of modes in each bin
+                nsum.flat += np.bincount(multi_index, minlength=nsum.size)
+                # Sum up x in each bin
+                xsum.flat += np.bincount(multi_index, weights=xnorm.flat, minlength=nsum.size)
+                # Sum up mu in each bin
+                musum.flat += np.bincount(multi_index, weights=mu.flat, minlength=nsum.size)
+
+                # Compute multipoles by weighting by Legendre(ell, mu)
+                for ill, ell in enumerate(unique_ells):
+
+                    weightedy3d = (2. * ell + 1.) * legpoly[ill](mu)
+
+                    if hermitian_symmetric and imu:
+                        # Weight the input 3D array by the appropriate Legendre polynomial
+                        weightedy3d = hermitian_symmetric * weightedy3d * y3d[islab][nonsingular[0]].conj()  # hermitian_symmetric is 1 or -1
+                    else:
+                        weightedy3d = weightedy3d * y3d[islab, ...]
+
+                    # Sum up the weighted y in each bin
+                    ysum[ill, ...].real.flat += np.bincount(multi_index, weights=weightedy3d.real.flat, minlength=nsum.size)
+                    if np.iscomplexobj(ysum):
+                        ysum[ill, ...].imag.flat += np.bincount(multi_index, weights=weightedy3d.imag.flat, minlength=nsum.size)
 
     # Sum binning arrays across all ranks
     xsum = comm.allreduce(xsum)
@@ -360,6 +374,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
         mumean2d = (musum / nsum)[sl, sl]
         n2d = nsum[sl, sl]
         zero2d = ysum[0, nx + 2, nmu + 2]
+        if mode_oversampling: n2d /= len(shifts)
 
         # 1D multipole results (summing over mu (last) axis)
         if return_poles:
@@ -368,6 +383,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
             poles = ysum[:, sl, sl].sum(axis=-1) / n1d
             poles_zero = ysum[:, nx + 2, nmu + 2]
             poles, poles_zero = (tmp[[unique_ells.index(ell) for ell in ells], ...] for tmp in (poles, poles_zero))
+            if mode_oversampling: n1d /= len(shifts)
 
     # Return y(x,mu) + (possibly empty) multipoles
     toret = [(xmean2d, mumean2d, y2d, n2d, zero2d)]
@@ -1818,8 +1834,8 @@ class MeshFFTBase(BaseClass):
     def _get_attrs(self):
         # Return some attributes, to be saved in :attr:`poles` and :attr:`wedges`
         state = {}
-        for name in ['autocorr', 'nmesh', 'boxsize', 'boxcenter', 'dtype', 'los', 'los_type', 'compensations']:
-            state[name] = getattr(self, name)
+        for name in ['autocorr', 'nmesh', 'boxsize', 'boxcenter', 'dtype', 'los', 'los_type', 'compensations', 'mode_oversampling']:
+            state[name] = getattr(self, name, None)
         return state
 
     def __copy__(self):
@@ -1859,7 +1875,7 @@ class MeshFFTPower(MeshFFTBase):
         Estimated power spectrum wedges (if relevant).
     """
 
-    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None, shotnoise_nonorm=None):
+    def __init__(self, mesh1, mesh2=None, edges=None, ells=(0, 2, 4), los=None, boxcenter=None, compensations=None, wnorm=None, shotnoise=None, shotnoise_nonorm=None, mode_oversampling=0):
         r"""
         Initialize :class:`MeshFFTPower`, i.e. estimate power spectrum.
 
@@ -1918,6 +1934,12 @@ class MeshFFTPower(MeshFFTBase):
             or both ``mesh1`` and ``mesh2`` are :class:`pmesh.pm.RealField`,
             and in case of auto-correlation is obtained by dividing :func:`unnormalized_shotnoise`
             of ``mesh1`` by power spectrum normalization.
+
+        mode_oversampling : int, default=0
+            If > 0, artificially increase the resolution of the input mesh by a factor ``2 * mode_oversampling + 1``.
+            In practice, shift the coordinates of the coordinates of the input grid by ``np.arange(-mode_oversampling, mode_oversampling + 1)``
+            along each of x, y, z axes.
+            This reduces "discrete grid binning effects".
         """
         t0 = time.time()
         self._set_compensations(compensations)
@@ -1927,6 +1949,7 @@ class MeshFFTPower(MeshFFTBase):
         self._set_edges(edges)
         self._set_normalization(wnorm, mesh1=mesh1, mesh2=mesh2)
         self._set_shotnoise(shotnoise, shotnoise_nonorm=shotnoise_nonorm, mesh1=mesh1, mesh2=mesh2)
+        self.mode_oversampling = int(mode_oversampling)
         self.attrs.update(self._get_attrs())
         t1 = time.time()
         if self.mpicomm.rank == 0:
@@ -2014,7 +2037,7 @@ class MeshFFTPower(MeshFFTBase):
 
         # from nbodykit.algorithms.fftpower import project_to_basis
         # result, result_poles = project_to_basis(cfield1, self.edges, poles=self.ells or [], los=self.los)
-        result, result_poles = project_to_basis(cfield1, self.edges, ells=self.ells, los=self.los, exclude_zero=False)
+        result, result_poles = project_to_basis(cfield1, self.edges, ells=self.ells, los=self.los, exclude_zero=False, mode_oversampling=self.mode_oversampling)
 
         kwargs = {'wnorm': self.wnorm, 'shotnoise_nonorm': self.shotnoise * self.wnorm, 'attrs': self.attrs, 'mpicomm': self.mpicomm}
         k, mu, power, nmodes, power_zero = result
@@ -2082,7 +2105,7 @@ class MeshFFTPower(MeshFFTBase):
 
             # the 1D monopole
             # from nbodykit.algorithms.fftpower import project_to_basis
-            proj_result = project_to_basis(Aell, self.edges, exclude_zero=False)[0]
+            proj_result = project_to_basis(Aell, self.edges, exclude_zero=False, mode_oversampling=self.mode_oversampling)[0]
             result.append(tuple(np.ravel(proj_result[ii]) for ii in [2, -1]))
             k, nmodes = proj_result[0], proj_result[3]
 
@@ -2162,7 +2185,7 @@ class MeshFFTPower(MeshFFTBase):
                 Aell[islab, ...] = Aell[islab].conj() * A0[islab]
 
             # Project on to 1d k-basis (averaging over mu=[-1,1])
-            proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False)[0]
+            proj_result = project_to_basis(Aell, self.edges, antisymmetric=bool(ell % 2), exclude_zero=False, mode_oversampling=self.mode_oversampling)[0]
             result.append(tuple(4 * np.pi * np.ravel(proj_result[ii]) for ii in [2, -1]))
             k, nmodes = proj_result[0], proj_result[3]
 
@@ -2218,7 +2241,7 @@ class CatalogFFTPower(MeshFFTPower):
                  nmesh=None, boxsize=None, boxcenter=None, cellsize=None, boxpad=2., wrap=False, dtype='f8',
                  resampler='tsc', interlacing=2, position_type='xyz', weight_type='auto', weight_attrs=None,
                  direct_engine='corrfunc', direct_selection_attrs=None, direct_edges=None, direct_attrs=None,
-                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, mpiroot=None, mpicomm=mpi.COMM_WORLD):
+                 wnorm=None, shotnoise=None, shotnoise_nonorm=None, mode_oversampling=0, mpiroot=None, mpicomm=mpi.COMM_WORLD):
         r"""
         Initialize :class:`CatalogFFTPower`, i.e. estimate power spectrum.
 
@@ -2416,6 +2439,12 @@ class CatalogFFTPower(MeshFFTPower):
             Power spectrum shot noise, to use instead of internal estimate, which is 0 in case of cross-correlation
             and in case of auto-correlation is obtained by dividing :func:`unnormalized_shotnoise` by power spectrum normalization.
 
+        mode_oversampling : int, default=0
+            If > 0, artificially increase the resolution of the input mesh by a factor ``2 * mode_oversampling + 1``.
+            In practice, shift the coordinates of the coordinates of the input grid by ``np.arange(-mode_oversampling, mode_oversampling + 1)``
+            along each of x, y, z axes.
+            This reduces "discrete grid binning effects".
+
         mpiroot : int, default=None
             If ``None``, input positions and weights are assumed to be scattered across all ranks.
             Else the MPI rank where input positions and weights are gathered.
@@ -2479,7 +2508,7 @@ class CatalogFFTPower(MeshFFTPower):
                              shifted_positions=positions['S2'], shifted_weights=weights['S2'], resampler=resampler[1], interlacing=interlacing[1], wrap=wrap)
 
         # Now, run power spectrum estimation
-        super(CatalogFFTPower, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm)
+        super(CatalogFFTPower, self).__init__(mesh1=mesh1, mesh2=mesh2, edges=edges, ells=ells, los=los, wnorm=wnorm, shotnoise=shotnoise, shotnoise_nonorm=shotnoise_nonorm, mode_oversampling=mode_oversampling)
 
         if self.ells:
 
