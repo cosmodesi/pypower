@@ -348,9 +348,10 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
     # It is not clear how to proceed with beyond Nyquist frequencies
     # At Nyquist, kN = - pi * N / L (appears once in y3d.x) is the same as pi * N / L, so corresponds to mu and -mu
     # Our treatment of hermitian symmetric field would sum this frequency twice (mu and -mu)
-    # But this would appear only once in uncompressed field
-    # As a default, set frequencies beyond to NaN
-    xmax = y3d.Nmesh // 2 * cellsize
+    # But this would appear only once in the uncompressed field
+    # As a default, set frequencies beyond Nyquist to NaN
+    # Margin for oversampling factor
+    xmax = (y3d.Nmesh // 2 - mode_oversampling) * cellsize
     mask_beyond_nyq = np.flatnonzero(xedges >= np.min(xmax))
     xsum[mask_beyond_nyq] = np.nan
     musum[mask_beyond_nyq] = np.nan

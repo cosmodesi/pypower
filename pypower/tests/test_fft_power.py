@@ -967,9 +967,9 @@ def test_mode_oversampling():
     from matplotlib import pyplot as plt
     boxsize = 1000.
     nmesh = 128
-    kedges = {'min': 0., 'step': 0.005}
+    kedges = {'min': 0., 'step': 0.001}
     ells = (0, 2)
-    resampler = 'ngp'
+    resampler = 'tsc'
     boxcenter = np.array([3000., 0., 0.])[None, :]
 
     data = Catalog.read(data_fn)
@@ -978,23 +978,29 @@ def test_mode_oversampling():
         catalog['Position'] += boxcenter
         catalog['Weight'] = catalog.ones()
 
-    def run(mode_oversampling=0):
+    def run(mode_oversampling=0, dtype='f8'):
         return CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=3, ells=ells, los='firstpoint', edges=kedges, mode_oversampling=mode_oversampling,
-                               position_type='pos').poles
+                               position_type='pos', dtype=dtype).poles
 
     for oversampling, linestyle in zip([0, 1], ['-', '--', ':', '-.']):
-        power = run(mode_oversampling=oversampling)
+        power = run(mode_oversampling=oversampling, dtype='f8')
+        c_power = run(mode_oversampling=oversampling, dtype='c16')
+        power = power.select((0., 0.5, 0.005))
+        c_power = c_power.select((0., 0.5, 0.005))
+        assert str(power.nmodes.dtype) == ('float64' if oversampling else 'int64')
         assert power.attrs.get('mode_oversampling', None) is not None
         for ill, ell in enumerate(power.ells):
-            plt.plot(power.k, power.k * power(ell=ell, complex=False), color='C{:d}'.format(ill), linestyle=linestyle, label='mode oversampling = {}'.format(oversampling) if ill == 0 else None)
-    plt.legend()
+            plt.plot(power.k, power.k * power(ell=ell, complex=False), color='C{:d}'.format(ill), linestyle=linestyle)
+            plt.plot(c_power.k, 1e3 * (power(ell=ell, complex=False) - c_power(ell=ell, complex=False)), color='C{:d}'.format(ill), linestyle=linestyle)
+    plt.grid()
     plt.show()
 
 
 if __name__ == '__main__':
 
     setup_logging('info')
+    #test_catalog_power()
     # save_lognormal()
     # test_mesh_power()
     # test_interlacing()
@@ -1011,5 +1017,5 @@ if __name__ == '__main__':
     test_normalization()
     test_mpi()
     test_plot()
-    test_mode_oversampling()
     test_interlacing()
+    test_mode_oversampling()
