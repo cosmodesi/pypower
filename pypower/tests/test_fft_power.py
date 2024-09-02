@@ -983,11 +983,12 @@ def test_mode_oversampling():
                                boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=3, ells=ells, los='firstpoint', edges=kedges, mode_oversampling=mode_oversampling,
                                position_type='pos', dtype=dtype).poles
 
-    for oversampling, linestyle in zip([0, 1], ['-', '--', ':', '-.']):
+    for oversampling, linestyle in zip([0, 1, 2], ['-', '--', ':', '-.']):
         power = run(mode_oversampling=oversampling, dtype='f8')
         c_power = run(mode_oversampling=oversampling, dtype='c16')
-        power = power.select((0., 0.5, 0.005))
-        c_power = c_power.select((0., 0.5, 0.005))
+        klim = (0., 0.5, 0.002)
+        power = power.select(klim)
+        c_power = c_power.select(klim)
         assert str(power.nmodes.dtype) == ('float64' if oversampling else 'int64')
         assert power.attrs.get('mode_oversampling', None) is not None
         for ill, ell in enumerate(power.ells):
@@ -1000,7 +1001,6 @@ def test_mode_oversampling():
 if __name__ == '__main__':
 
     setup_logging('info')
-    #test_catalog_power()
     # save_lognormal()
     # test_mesh_power()
     # test_interlacing()

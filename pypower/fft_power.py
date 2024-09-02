@@ -271,7 +271,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
     shifts = list(itertools.product(*shifts))
 
     for shift in shifts:
-        if mode_oversampling: shift = cellsize * shift / (2 * mode_oversampling)
+        shift = cellsize * shift / (2 * mode_oversampling + 1)
 
         # Iterate over y-z planes of the coordinate mesh
         for islab in range(x3d[0].shape[0]):
