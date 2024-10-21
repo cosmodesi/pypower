@@ -965,10 +965,8 @@ def test_interlacing():
 
 def test_mode_oversampling():
     from matplotlib import pyplot as plt
-    boxsize = 1000.
     nmesh = 128
     kedges = {'min': 0., 'step': 0.001}
-    ells = (0, 2)
     resampler = 'tsc'
     boxcenter = np.array([3000., 0., 0.])[None, :]
 
@@ -979,8 +977,29 @@ def test_mode_oversampling():
         catalog['Weight'] = catalog.ones()
 
     def run(mode_oversampling=0, dtype='f8'):
+        return CatalogFFTPower(data_positions1=data['Position'],
+                               boxsize=600., nmesh=nmesh, resampler=resampler, interlacing=3, ells=(0,), los='x', edges=kedges, mode_oversampling=mode_oversampling,
+                               position_type='pos', dtype=dtype, wrap=True).poles
+
+    for oversampling, linestyle in zip([0, 1, 2], ['-', '--', ':', '-.']):
+        power = run(mode_oversampling=oversampling, dtype='f8')
+        c_power = run(mode_oversampling=oversampling, dtype='c16')
+        klim = (0., 0.5, 0.002)
+        power = power.select(klim)
+        c_power = c_power.select(klim)
+        assert str(power.nmodes.dtype) == ('float64' if oversampling else 'int64')
+        assert power.attrs.get('mode_oversampling', None) is not None
+        for ill, ell in enumerate(power.ells):
+            print(power(ell=ell, complex=False))
+            plt.plot(power.k, power.k * power(ell=ell, complex=False), color='C{:d}'.format(ill), linestyle=linestyle)
+            plt.plot(c_power.k, 1e3 * (power(ell=ell, complex=False) - c_power(ell=ell, complex=False)), color='C{:d}'.format(ill), linestyle=linestyle)
+    plt.grid()
+    plt.show()
+    plt.close(plt.gcf())
+
+    def run(mode_oversampling=0, dtype='f8'):
         return CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], randoms_positions1=randoms['Position'], randoms_weights1=randoms['Weight'],
-                               boxsize=boxsize, nmesh=nmesh, resampler=resampler, interlacing=3, ells=ells, los='firstpoint', edges=kedges, mode_oversampling=mode_oversampling,
+                               boxsize=1000., nmesh=nmesh, resampler=resampler, interlacing=3, ells=(0, 2), los='firstpoint', edges=kedges, mode_oversampling=mode_oversampling,
                                position_type='pos', dtype=dtype).poles
 
     for oversampling, linestyle in zip([0, 1, 2], ['-', '--', ':', '-.']):
@@ -1001,6 +1020,7 @@ def test_mode_oversampling():
 if __name__ == '__main__':
 
     setup_logging('info')
+
     # save_lognormal()
     # test_mesh_power()
     # test_interlacing()

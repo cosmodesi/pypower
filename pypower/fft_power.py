@@ -278,6 +278,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
             # The square of coordinate mesh norm
             # (either Fourier space k or configuraton space x)
             xvec = (x3d[0][islab].real.astype(xdtype),) + tuple(x3d[i].real.astype(xdtype) for i in range(1, 3))
+            mask_zero_noshift = sum(xx**2 for xx in xvec) < (mincell / 2.)**2  # mask_zero defined *before* shift
             xvec = tuple(xx + ss for xx, ss in zip(xvec, shift))
             xnorm = sum(xx**2 for xx in xvec)**0.5
 
@@ -286,12 +287,12 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
 
             # Get the bin indices for x on the slab
             dig_x = np.digitize(xnorm.flat, xedges, right=False)
-            mask_zero = xnorm < mincell / 2.
             # y3d[islab, mask_zero[0]] = 0.
-            dig_x[mask_zero.flat] = nx + 2
+            dig_x[mask_zero_noshift.flat] = nx + 2
 
             # Get the bin indices for mu on the slab
             mu = sum(xx * ll for xx, ll in zip(xvec, los))
+            mask_zero = xnorm < (mincell / (2 * mode_oversampling + 1) / 2.)
             mu[~mask_zero] /= xnorm[~mask_zero]
 
             if hermitian_symmetric == 0:
@@ -307,7 +308,7 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
                 # Make the multi-index
                 dig_mu = np.digitize(mu.flat, muedges, right=False)  # this is bins[i-1] <= x < bins[i]
                 dig_mu[mu.real.flat == muedges[-1]] = nmu  # last mu inclusive
-                dig_mu[mask_zero.flat] = nmu + 2
+                dig_mu[mask_zero_noshift.flat] = nmu + 2
 
                 multi_index = np.ravel_multi_index([dig_x, dig_mu], (nx + 3, nmu + 3))
 
@@ -374,17 +375,17 @@ def project_to_basis(y3d, edges, los=(0, 0, 1), ells=None, antisymmetric=False, 
         xmean2d = (xsum / nsum)[sl, sl]
         mumean2d = (musum / nsum)[sl, sl]
         n2d = nsum[sl, sl]
-        zero2d = ysum[0, nx + 2, nmu + 2]
-        if mode_oversampling: n2d /= len(shifts)
+        zero2d = ysum[0, nx + 2, nmu + 2] / nsum[nx + 2, nmu + 2]
+        if mode_oversampling: n2d = n2d / len(shifts)  # int => float
 
         # 1D multipole results (summing over mu (last) axis)
         if return_poles:
             n1d = nsum[sl, sl].sum(axis=-1)
             xmean1d = xsum[sl, sl].sum(axis=-1) / n1d
             poles = ysum[:, sl, sl].sum(axis=-1) / n1d
-            poles_zero = ysum[:, nx + 2, nmu + 2]
+            poles_zero = ysum[:, nx + 2, nmu + 2] / nsum[nx + 2, nmu + 2]
             poles, poles_zero = (tmp[[unique_ells.index(ell) for ell in ells], ...] for tmp in (poles, poles_zero))
-            if mode_oversampling: n1d /= len(shifts)
+            if mode_oversampling: n1d = n1d / len(shifts)  # int => float
 
     # Return y(x,mu) + (possibly empty) multipoles
     toret = [(xmean2d, mumean2d, y2d, n2d, zero2d)]
