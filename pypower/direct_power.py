@@ -500,11 +500,12 @@ class BaseDirectPowerEngine(BaseClass, metaclass=RegisteredDirectPowerEngine):
             raise ValueError('normalization should be one of {}'.format(allowed_normalizations))
 
         if self.n_bitwise_weights and normalization == 'counter' and self.weight_attrs['correction'] is None:
-            nrealizations, nalways = self.weight_attrs['nrealizations'], self.weight_attrs['nalways']
-            joint = utils.joint_occurences(nrealizations, noffset=self.weight_attrs['noffset'] + nalways, default_value=self.weight_attrs['default_value'])
-            correction = np.zeros((nrealizations,) * 2, dtype=self.dtype)
-            for c1 in range(correction.shape[0]):
-                for c2 in range(correction.shape[1]):
+            nrealizations, noffset, nalways = self.weight_attrs['nrealizations'], self.weight_attrs['noffset'], self.weight_attrs['nalways']
+            joint = utils.joint_occurences(nrealizations, noffset=noffset + nalways, default_value=self.weight_attrs['default_value'])
+            correction = np.ones((1 + self.n_bitwise_weights * 8,) * 2, dtype=self.dtype)
+            cmin, cmax = nalways, min(nrealizations - noffset, self.n_bitwise_weights * 8)
+            for c1 in range(cmin, 1 + cmax):
+                for c2 in range(cmin, 1 + cmax):
                     correction[c1][c2] = joint[c1 - nalways][c2 - nalways] if c2 <= c1 else joint[c2 - nalways][c1 - nalways]
                     correction[c1][c2] /= (nrealizations / (noffset + c1) * nrealizations / (noffset + c2))
             self.weight_attrs['correction'] = correction
