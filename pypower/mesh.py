@@ -58,7 +58,7 @@ def _get_compensation_window(resampler='cic', shotnoise=False):
     Returns
     -------
     window : callable
-        Window function, taking as input :math:`\pi k_{i} / k_{N} = k / c`
+        Window function, taking as input :math:`\pi k_{i} / k_{N} = k_{i} c`
         where :math:`k_{N}` is the Nyquist wavenumber and :math:`c` is the cell size,
         for each :math:`x`, :math:`y`, :math:`z`, axis.
     """

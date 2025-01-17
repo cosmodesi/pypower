@@ -98,7 +98,7 @@ def get_real_Ylm(ell, m, modules=None):
             if m < 0:
                 toret *= np.sin(abs(m) * phi)
             else:
-                toret *= np.cos(abs(m) * phi)
+                toret *= np.cos(m * phi)
             return toret
 
         # Attach some meta-data
