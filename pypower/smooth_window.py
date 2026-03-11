@@ -1081,7 +1081,7 @@ class CorrelationFunctionSmoothWindowMatrix(BaseMatrix):
     @property
     def value(self):
         if getattr(self, '_value', None) is None:
-            self._value = np.bmat([[np.diag(block) for block in line] for line in self.projvalue]).A
+            self._value = np.block([[np.diag(block) for block in line] for line in self.projvalue])
         return self._value
 
     @value.setter
@@ -1282,7 +1282,7 @@ class PowerSpectrumSmoothWindowMatrix(BaseMatrix):
                     block[:, slout] = utils.rebin(tmp.T, (len(krebin), len(xout)), statistic=np.sum)[maskin, :]  # matrix has dimensions (k, kout)
                 line.append(block)
             self.value.append(line)
-        self.value = np.bmat(self.value).A  # (in, out)
+        self.value = np.block(self.value)  # (in, out)
 
     propose_out = CorrelationFunctionSmoothWindowMatrix.propose_out
 

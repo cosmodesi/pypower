@@ -253,7 +253,7 @@ class BaseMatrix(BaseClass):
         is obtained through ``matrix[self.projsout.index(projout)][self.projsin.index(projin)]``.
         See :meth:`unpacked`.
         """
-        self.value = np.bmat(matrix).A
+        self.value = np.block(matrix)
 
     def unpacked(self, axis=None):
         """
@@ -347,7 +347,7 @@ class BaseMatrix(BaseClass):
                         tmp = np.zeros(shape, dtype=self.dtype)
                 line.append(tmp)
             value.append(line)
-        self.value = np.bmat(value).A
+        self.value = np.block(value)
         return self
 
     def __getitem__(self, slices):
@@ -424,7 +424,7 @@ class BaseMatrix(BaseClass):
                 selfiout = self.projsout.index(projout)
                 value[selfiin][selfiout] = value[selfiin][selfiout][np.ix_(masks['in'][iin], masks['out'][iout])]
 
-        self.value = np.bmat(value).A
+        self.value = np.block(value)
         if not all(f == 1 for f in factors.values()):
             self.rebin_x(factorin=factors['in'], factorout=factors['out'], projsin=inprojs['in'], projsout=inprojs['out'])
         return self
@@ -482,7 +482,7 @@ class BaseMatrix(BaseClass):
                 selfiout = self.projsout.index(projout)
                 value[selfiin][selfiout] = value[selfiin][selfiout][np.ix_(masks['in'][iin], masks['out'][iout])]
 
-        self.value = np.bmat(value).A
+        self.value = np.block(value)
         return self
 
     def index_x(self, axis='out', xlim=None, projs=None, concatenate=True):
@@ -611,7 +611,7 @@ class BaseMatrix(BaseClass):
                         old_2dweights = old_2dweights * np.expand_dims(oweights, axis=1 - iaxis)
                         new_2dweights = new_2dweights * np.expand_dims(utils.rebin(oweights, len(nweights), statistic=statistic), axis=1 - iaxis)
                 value[selfiin][selfiout] = utils.rebin(value[selfiin][selfiout] * old_2dweights, new_shape, statistic=statistic) / new_2dweights
-        self.value = np.bmat(value).A
+        self.value = np.block(value)
         return self
 
     @classmethod
@@ -692,7 +692,7 @@ class BaseMatrix(BaseClass):
             for iout, projout in enumerate(new.projsout):
                 line.append(np.concatenate([m[iin][iout] for m in others], axis=iaxis))
             new.value.append(line)
-        new.value = np.bmat(new.value).A
+        new.value = np.block(new.value)
         return new
 
     @staticmethod
@@ -999,12 +999,46 @@ class CorrelationFunctionOddWideAngleMatrix(BaseMatrix):
     @property
     def value(self):
         if getattr(self, '_value', None) is None:
-            self._value = np.bmat([[np.diag(tmp) for tmp in line] for line in self.projvalue]).A
+            self._value = np.block([[np.diag(tmp) for tmp in line] for line in self.projvalue])
         return self._value
 
     @value.setter
     def value(self, value):
         self._value = value
+
+
+def derivative_matrix_nonuniform(x):
+    r"""
+    Second-order finite-difference matrix for d/dx on an arbitrary 1D grid.
+
+    :math:`f'(x_i) \approx -\frac{h_{i+1}}{h_i (h_i + h_{i+1})} f(x_{i-1}) + \frac{h_{i+1} - h_i}{h_i h_{i+1}} f(x_i) + \frac{h_i}{h_{i+1} (h_i + h_{i+1})} f(x_{i+1})`
+    with :math:`h_i = x_i - x_{i-1}` and :math:`h_{i+1} = x_{i+1} - x_i`.
+    """
+    x = np.asarray(x)
+    n = len(x)
+    D = np.zeros((n, n), dtype=x.dtype)
+
+    # interior: 3-point stencil on nonuniform grid
+    for i in range(1, n - 1):
+        h0 = x[i] - x[i - 1]
+        h1 = x[i + 1] - x[i]
+
+        D[i, i - 1] = -h1 / (h0 * (h0 + h1))
+        D[i, i]     = (h1 - h0) / (h0 * h1)
+        D[i, i + 1] =  h0 / (h1 * (h0 + h1))
+
+    # left boundary: quadratic one-sided stencil
+    x0, x1, x2 = x[0], x[1], x[2]
+    D[0, 0] = (2*x0 - x1 - x2) / ((x0 - x1) * (x0 - x2))
+    D[0, 1] = (x0 - x2) / ((x1 - x0) * (x1 - x2))
+    D[0, 2] = (x0 - x1) / ((x2 - x0) * (x2 - x1))
+
+    # right boundary: quadratic one-sided stencil
+    xm2, xm1, xm0 = x[-3], x[-2], x[-1]
+    D[-1, -3] = (xm0 - xm1) / ((xm2 - xm0) * (xm2 - xm1))
+    D[-1, -2] = (xm0 - xm2) / ((xm1 - xm0) * (xm1 - xm2))
+    D[-1, -1] = (2*xm0 - xm2 - xm1) / ((xm0 - xm2) * (xm0 - xm1))
+    return D
 
 
 class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
@@ -1098,18 +1132,10 @@ class PowerSpectrumOddWideAngleMatrix(BaseMatrix):
                             # tmp is - \frac{\ell \left(\ell - 1\right)}{2 \ell \left(2 \ell - 1\right) d} \frac{\ell - 1}{k} (if projin.ell == projout.ell - 1)
                             # or - \frac{\left(\ell + 1\right) \left(\ell + 2\right)}{2 \ell \left(2 \ell + 3\right) d} \frac{\ell + 2}{k} (if projin.ell == projout.ell + 1)
                             tmp = np.diag(coeff_spherical_bessel * coeff / k)
-                            deltak = 2. * np.diff(k)
-                            # derivative - :math:`\partial_{k}`
-                            tmp += np.diag(coeff / deltak, k=-1) - np.diag(coeff / deltak, k=1)
-
-                            # taking care of corners
-                            tmp[0, 0] += 2. * coeff / deltak[0]
-                            tmp[0, 1] = -2. * coeff / deltak[0]
-                            tmp[-1, -1] -= 2. * coeff / deltak[-1]
-                            tmp[-1, -2] = 2. * coeff / deltak[-1]
+                            tmp += - coeff * derivative_matrix_nonuniform(k)
                             block += tmp.T  # (in, out)
                 line.append(block)
             value.append(line)
-        self.value = np.bmat(value).A  # (in, out)
+        self.value = np.block(value)  # (in, out)
 
     propose_out = CorrelationFunctionOddWideAngleMatrix.propose_out
