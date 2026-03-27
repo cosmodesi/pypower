@@ -47,7 +47,7 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             Mean "wavenumber" (:math:`k`) in each bin.
 
         power_nonorm : array
-            Power spectrum in each bin, *without* normalization.
+            Power spectrum of randoms in each bin, *without* normalization.
 
         nmodes : array
             Number of modes in each bin.
@@ -68,7 +68,9 @@ class PowerSpectrumSmoothWindow(BasePowerSpectrumStatistics):
             self.shotnoise_nonorm = _make_array(0., len(self.power_nonorm), dtype=self.power_nonorm.dtype)
             for iproj, proj in enumerate(self.projs):
                 if proj.ell == 0: self.shotnoise_nonorm[iproj] = shotnoise_nonorm
+        # wnorm is the normalization of the power spectrum of randoms
         self.wnorm = _make_array(self.wnorm, len(self.power_nonorm), dtype=self.power_nonorm.real.dtype)
+        # wnorm_ref is the normalization of the data power spectrum
         if wnorm_ref is None:
             self.wnorm_ref = self.wnorm.copy()
         else:
