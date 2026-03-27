@@ -1,0 +1,21 @@
+[build-system]
+requires = [
+    "setuptools>=61",
+    "wheel",
+    "setuptools_scm>=6.2",
+    "pip>=21.2",
+]
+
+[project]
+name = "pypower"
+authors = [{name = "cosmodesi"}]
+description = "Estimation of power spectrum and window function"
+version = "1.0.0"
+dependencies = ["numpy", "scipy", "pmesh @ git+https://github.com/MP-Gadget/pmesh", "sympy", "numexpr"]
+readme = "README.md"
+requires-python = ">=3.10"
+urls = {Repository = "https://github.com/cosmodesi/pypower"}
+classifiers = ["Programming Language :: Python :: 3"]
+
+[tool.setuptools]
+packages = ["pypower"]

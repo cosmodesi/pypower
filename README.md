@@ -52,11 +52,11 @@ git clone https://github.com/cosmodesi/pypower.git
 ```
 To install the code:
 ```
-python setup.py install --user
+pip install --user .
 ```
 Or in development mode (any change to Python code will take place immediately):
 ```
-python setup.py develop --user
+pip install --user  --editable .
 ```
 
 ## License
@@ -69,6 +69,7 @@ python setup.py develop --user
 - Patrick McDonald for [recipe](https://github.com/cosmodesi/GC_derivations) for window function matrix estimation.
 - Juan Mena Fernandez for issue reports.
 - Davide Bianchi for cross-checks of PIP correction.
+- Jade Piat for finding issue in wide-angle matrix with log-binning.
 
 # Citations
 
