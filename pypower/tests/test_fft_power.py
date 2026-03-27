@@ -205,7 +205,7 @@ def test_power_statistic():
         test = np.loadtxt(fn, unpack=True)
         assert np.allclose(test, [power.nmodes, power.modeavg(method='mid'), power.k] + list(power.power.real), equal_nan=True)
         power.save_txt(fn, complex=True)
-        test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
+        test = np.loadtxt(fn, unpack=True, dtype=np.complex128)
         assert np.allclose(test, [power.nmodes, power.modeavg(method='mid'), power.k] + list(power.power), equal_nan=True)
 
     for complex in [False, True]:
@@ -267,7 +267,7 @@ def test_power_statistic():
         mids = np.meshgrid(*(power.modeavg(axis=axis, method='mid') for axis in range(power.ndim)), indexing='ij')
         assert np.allclose([tt.reshape(power.shape) for tt in test], [power.nmodes, mids[0], power.modes[0], mids[1], power.modes[1], power.power.real], equal_nan=True)
         power.save_txt(fn, complex=True)
-        test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
+        test = np.loadtxt(fn, unpack=True, dtype=np.complex128)
         assert np.allclose([tt.reshape(power.shape) for tt in test], [power.nmodes, mids[0], power.modes[0], mids[1], power.modes[1], power.power], equal_nan=True)
 
     for muedges in [np.linspace(-1., 1., 21), np.linspace(-1., 1., 2)]:

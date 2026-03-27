@@ -635,12 +635,12 @@ def test_pip_counts_correction():
         #ax.plot([], [], color='k', linestyle=':', label='Arnaud, no correction')
         for ill, ell in enumerate(result.ells):
             color = 'C{:d}'.format(ill)
-            ax.plot(kavg, kavg * result.power_nonorm[ill].real, color=color, linestyle='-', label='$\ell = {:d}$'.format(ell))
+            ax.plot(kavg, kavg * result.power_nonorm[ill].real, color=color, linestyle='-', label=r'$\ell = {:d}$'.format(ell))
             ax.plot(kavg, kavg * ref[ill], color=color, linestyle='--')
             #ax.plot(kavg, kavg * result2.power_nonorm[ill].real, color=color, linestyle=':')
         ax.legend()
-        ax.set_xlabel('$k$ [$h/\mathrm{Mpc}$]')
-        ax.set_ylabel('$kP(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        ax.set_ylabel(r'$kP(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         utils.savefig('_tests/tmp.png')
         plt.show()
 

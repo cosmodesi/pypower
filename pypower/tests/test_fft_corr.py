@@ -102,7 +102,7 @@ def test_corr_statistic():
         test = np.loadtxt(fn, unpack=True)
         assert np.allclose(test, [corr.nmodes, corr.modeavg(method='mid'), corr.s] + list(corr.corr.real), equal_nan=True)
         corr.save_txt(fn, complex=True)
-        test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
+        test = np.loadtxt(fn, unpack=True, dtype=np.complex128)
         assert np.allclose(test, [corr.nmodes, corr.modeavg(method='mid'), corr.s] + list(corr.corr), equal_nan=True)
 
     for complex in [False, True]:
@@ -164,7 +164,7 @@ def test_corr_statistic():
         mids = np.meshgrid(*(corr.modeavg(axis=axis, method='mid') for axis in range(corr.ndim)), indexing='ij')
         assert np.allclose([tt.reshape(corr.shape) for tt in test], [corr.nmodes, mids[0], corr.modes[0], mids[1], corr.modes[1], corr.corr.real], equal_nan=True)
         corr.save_txt(fn, complex=True)
-        test = np.loadtxt(fn, unpack=True, dtype=np.complex_)
+        test = np.loadtxt(fn, unpack=True, dtype=np.complex128)
         assert np.allclose([tt.reshape(corr.shape) for tt in test], [corr.nmodes, mids[0], corr.modes[0], mids[1], corr.modes[1], corr.corr], equal_nan=True)
 
     for muedges in [np.linspace(-1., 1., 21), np.linspace(-1., 1., 2)]:
